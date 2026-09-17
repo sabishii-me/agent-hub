@@ -208,8 +208,8 @@ node scripts/emit-openapi.mjs                        # after editing contract/v1
 
 The hub itself: `PRTS_DATA_DIR=<dir> node server.mjs` — it prints the loopback
 port and writes `<dir>/endpoint.json` (port + token). There is no build step; the
-harness runtimes are materialised by `scripts/prepare-runtimes.mjs` from each
-plugin's manifest and are not committed.
+harness runtimes are materialised by the plugin's own `runtime/prepare` method,
+from the pin in that plugin's manifest, and are not committed.
 
 ## Boundaries
 

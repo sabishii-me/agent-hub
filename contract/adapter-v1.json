@@ -26,7 +26,7 @@
       "id": "must equal the plugin directory name; a manifest that claims another id is refused",
       "protocol": "the adapter protocol this plugin speaks; must equal this file's version, or the hub refuses to start the adapter (harness_invalid)",
       "command": "argv that starts the adapter; relative paths resolve against the plugin directory",
-      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives — there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. scripts/prepare-runtimes.mjs materialises the package at that version; the hub hands `command` (absolute) to the adapter as PRTS_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
+      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives — there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. The PLUGIN materialises the package at that version, through the `runtime` capability's `runtime/prepare` method; the hub asks for that and verifies the result, and hands `command` (absolute) to the adapter as PRTS_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
       "extensions": "harness-side extensions this plugin ships (registry defaults)",
       "capabilities": "what the hub may ask this plugin for; every value has an entry in capabilitySurface, and declaring one binds the plugin to its methods",
       "name": "display name for the harness; falls back to the id",
@@ -36,7 +36,7 @@
       "planMode": "how the harness carries plan mode; reported, never guessed",
       "repair": "whether the harness can repair an orphaned tail; reported, never guessed"
     },
-    "rule": "a field set that does not match this list is a contract test failure (tests/adapter-contract.mjs), not a warning",
+    "rule": "a field set that does not match this list stops the hub at startup (boot self-check), it is not a warning",
     "capabilityValues": [
       "models",
       "presets",
@@ -51,7 +51,8 @@
       "fork",
       "stats",
       "compact",
-      "rename"
+      "rename",
+      "runtime"
     ]
   },
   "coreCompliance": {
@@ -149,6 +150,12 @@
         ],
         "result": "{ skills: [{ name, description?, modelInvocable?, whenToUse? }] }",
         "note": "What THIS harness actually has, read from the harness itself — pi/jouzu from get_commands (skill:<name> entries), dsh from its skill.list RPC. It is a READ-BACK, not an echo: dsh SILENTLY drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level bundle, and only the harness knows it did. A caller must be able to see 'installed: 4, the harness sees: 3'. The call can be slow the FIRST time on a harness that finishes its own startup lazily (jouzu measured 9s and 70s, then 24ms); the hub bounds it and reports known:false rather than an empty catalogue when it does not arrive."
+      },
+      {
+        "method": "runtime/prepare",
+        "params": [],
+        "result": "{ ready, package?, version?, target?, detail? }",
+        "note": "Materialise the runtime this plugin's manifest pins (runtime.package + runtime.version) into <plugin>/runtime, the directory the manifest's command is relative to, and answer with what happened. Idempotent: a runtime already on disk answers ready:true and detail 'already present'. It belongs to the adapter because HOW a harness is fetched is knowledge about that harness — the hub asks, waits, and then VERIFIES the declared command exists (it installs no harness and knows no package names). Declared only by a plugin that declares the `runtime` capability; the hub calls it before session/start when the target is missing, and from POST /v1/hub/plugins/{id}/prepare."
       }
     ],
     "events": [
@@ -440,8 +447,16 @@
       ],
       "hub": "PATCH /v1/sessions/{id}",
       "note": "pi/jouzu: set_session_name (the accepted name is read back from get_state, since the command itself answers only success). dsh: session.rename, which answers with the normalized title and the seq of the session/title event it appended. Refused (409 session_busy) while a turn is running, like every other PATCH knob."
+    },
+    "runtime": {
+      "methods": [
+        "runtime/prepare"
+      ],
+      "hub": "POST /v1/hub/plugins/{id}/prepare",
+      "rule": "the plugin materialises the runtime its manifest pins (`runtime.package` + `runtime.version`) into `<plugin>/runtime`, the directory the manifest's command is relative to, and answers with what it did. The hub never installs a harness itself and knows nothing about packages: it asks, waits, and verifies the declared command now exists. A plugin that brings its own runtime does not declare this capability.",
+      "calledAutomatically": "before startAdapter() when the runtime the manifest declares is not on disk yet, and again (idempotently) by POST /v1/hub/plugins/{id}/prepare"
     }
   },
-  "checkedBy": "tests/adapter-contract.mjs compares this file with what the hub sends, what each plugin answers, and what the manifests declare",
+  "checkedBy": "the hub's boot self-check compares this file with the adapter requests it sends, the capabilities each manifest declares and the methods each adapter handles; a disagreement stops the hub before it serves anything",
   "note": "What an adapter says to its harness is its own dialect and deliberately NOT here: this file is only what the hub and an adapter say to each other. (deepseek listening to turn/start, assistant/chunk, tool/call, tool/result, turn/end, plan/mode is exactly that — its harness speaking, translated by the adapter into the events below.) A method or event the HUB sends or handles, or an adapter emits toward the hub, must be declared here."
 }

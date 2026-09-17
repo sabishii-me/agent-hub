@@ -32,22 +32,32 @@ covered.
 ## Fresh checkout (a new machine)
 
 ```
-node -v                                                # node 22+ (developed on 24); nothing else is required
-export PRTS_PLUGINS_DIR=<the directory holding your harness plugins>
-node scripts/prepare-runtimes.mjs                      # materialises each plugin's pinned harness release (network)
-node server.mjs                                        # prints: agent-hub listening 127.0.0.1:<port>
-```
-```
-node server.mjs                                        # ...or with no plugins at all: contract only
+node -v                       # node 22+ (developed on 24); nothing else is required
+node server.mjs               # prints: agent-hub listening 127.0.0.1:<port>
+                              # ...and says it has no harness, because the hub ships none
 ```
 
-A **plugin** is a directory under that root carrying a `manifest.json`; the harnesses
-live in their own repositories, and this repository contains none. A harness runtime is
-**not committed** anywhere (it is an official release, a build product): the script
-installs exactly the version each plugin's manifest pins under `<plugin>/runtime/`,
-which the manifest's command is relative to, and `--plugins <dir>` prepares a directory
-other than `PRTS_PLUGINS_DIR`. A fresh machine therefore needs network once per plugin;
-after that the hub has no network dependency of its own.
+Then install a harness, or point the hub at checkouts you already have:
+
+```
+# 1. the hub installs a plugin with git, into its own root (<PRTS_DATA_DIR>/plugins)
+curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"source":{"url":"<a plugin repository>","ref":"develop"}}' \
+  http://127.0.0.1:<port>/v1/hub/plugins
+
+# 2. ...or read plugins you already have on disk (nobody's tree is written to)
+PRTS_PLUGINS_DIR=<a directory of plugin directories> node server.mjs
+```
+
+A **plugin** is a directory carrying a `manifest.json`; every harness lives in its own
+repository and this repository contains none. A harness runtime (an official release, a
+build product) is **not committed** anywhere and is **not installed by the hub either**:
+the plugin's own `runtime/prepare` method materialises exactly the version its manifest
+pins under `<plugin>/runtime/`, and the hub asks for that, waits, and verifies the
+declared command exists. A fresh machine therefore needs network once per plugin, at
+install time or at the first session — after that the hub has no network dependency of
+its own.
 
 State (sessions, providers, secrets, per-harness homes) lives in `PRTS_DATA_DIR`
 (default `~/.prts-core`) and is **not** in the repo. Provider tokens live in the OS
@@ -69,10 +79,34 @@ Every route needs `Authorization: Bearer <token>` except `GET /v1/harnesses`.
 | Env | Meaning |
 |---|---|
 | `PRTS_DATA_DIR` | state dir (default `~/.prts-core`): endpoint file, sessions, secrets, per-harness homes |
-| `PRTS_PLUGINS_DIR` | the directory holding harness plugins (default `<this directory>/plugins`, which ships empty — the hub contains no harness) |
+| `PRTS_PLUGINS_DIR` | a directory of harness plugins the hub may READ (default `<this directory>/plugins`, which ships empty). The hub's own root, where `POST /v1/hub/plugins` installs, is always `<PRTS_DATA_DIR>/plugins` |
 | `PRTS_APPROVAL_TIMEOUT_MS` | approval deadline (default 120000) |
 | `PRTS_CANCEL_TIMEOUT_MS` | cancel deadline (default 15000) |
 | `PRTS_TURN_TIMEOUT_MS` | turn deadline (default 0 = unbounded) |
+
+## Installing a harness
+
+A hub with no harnesses is a working hub: it serves the contract, and `GET /v1/harnesses`
+is an empty list that is TRUE (it means "none are installed", because the hub is the one
+that knows what is installed).
+
+```
+GET    /v1/hub/plugins                # what the hub can see, from which root, runtime on disk?
+POST   /v1/hub/plugins                # {source:{url, ref?}} -> git clone into <DATA_DIR>/plugins/<id>
+POST   /v1/hub/plugins/{id}/prepare   # ask the plugin to materialise its runtime
+```
+
+Installing is git and nothing else: the hub clones the repository, reads the id out of
+its manifest, refuses an id that would step outside its own root, and records where the
+plugin came from. The runtime is then the plugin's business — the hub calls the
+adapter's `runtime/prepare` method, which installs exactly the version the manifest pins,
+and the hub verifies the declared command exists afterwards. A plugin that brings its own
+runtime declares no `runtime` capability and answers `501 unsupported`, which is the
+truth about it rather than a guess.
+
+The hub never writes into a plugins directory it was handed (`PRTS_PLUGINS_DIR`): that
+is somebody's checkout. Its own root is `<PRTS_DATA_DIR>/plugins`, and the same harness
+id in both roots is refused at startup rather than silently preferred.
 
 ## Surface
 
@@ -209,9 +243,9 @@ the option exists.
   `package`, `version`, `command`), the **extensions it installs**
   (`manifest.json#extensions`, resolving to the directories in that plugin's own
   `extensions/`) and the **presets it lists** (`<plugin>/presets/`, when it has any).
-  The runtime is an official release installed into `<plugin>/runtime/` by
-  `scripts/prepare-runtimes.mjs` (gitignored — it is a build product, not source); the
-  hub resolves the command against the plugin directory and hands the argv to the
+  The runtime is an official release that the plugin's own `runtime/prepare` method
+  installs into `<plugin>/runtime/` (gitignored — it is a build product, not source);
+  the hub resolves the command against the plugin directory and hands the argv to the
   adapter, which looks nothing up.
 
 ### The hub manages harnesses; the hub installs

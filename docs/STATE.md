@@ -8,9 +8,11 @@ what it does not, [CLIENT.md](CLIENT.md) is how a client connects.
 
 ```
 node -v                                 # 22+ (developed on 24)
-export PRTS_PLUGINS_DIR=<dir of harness plugin checkouts>   # the hub ships no harness
-node scripts/prepare-runtimes.mjs       # installs what each plugin's manifest pins (network, once)
-node server.mjs                         # prints "agent-hub listening 127.0.0.1:<port>"
+node server.mjs                         # prints "agent-hub listening 127.0.0.1:<port>", and that it has no harness
+# a harness arrives by install (the hub clones it into <DATA_DIR>/plugins) or by
+# PRTS_PLUGINS_DIR pointing at checkouts; its runtime is prepared by the plugin itself:
+#   POST /v1/hub/plugins {source:{url, ref?}}
+#   POST /v1/hub/plugins/{id}/prepare        (also happens by itself before a session)
 
 # the hub prints its port; hub-connect turns it into shell variables
 eval "$(node scripts/hub-connect.mjs)"   # exports PRTS_URL and PRTS_TOKEN

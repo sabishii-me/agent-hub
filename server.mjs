@@ -15,22 +15,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getBuildId } from './build-id.mjs';
 import { storeSecret, getSecret, deleteSecret, listSecretNames } from './secret-store.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
-const PLUGINS_DIR =
-  process.env.PRTS_PLUGINS_DIR || path.resolve(HERE, 'plugins');
-// Everything harness-specific lives under that one root, inside the plugin that owns
-// it: `<plugin>/extensions/<id>/` is an extension the plugin's manifest declares, and
-// `<plugin>/presets/` is the preset definitions that plugin lists. The hub is given
-// the root and reads what a manifest declares; it knows no harness by name.
-const pluginDir = (id) => path.join(PLUGINS_DIR, id);
+const GIVEN_PLUGINS_DIR = process.env.PRTS_PLUGINS_DIR || null;
+const PLUGINS_DIR = GIVEN_PLUGINS_DIR || path.resolve(HERE, 'plugins');
+// The hub's OWN plugins root, inside its data dir. `POST /v1/hub/plugins` installs
+// here and nowhere else: a directory a deployment handed the hub is somebody else's
+// tree and the hub only reads it. Both roots are scanned, and the same harness id in
+// both is a conflict the hub refuses to start with, not a silent preference.
+const HUB_PLUGINS_DIR = path.join(DATA_DIR, 'plugins');
+const PLUGINS_FILE = path.join(HUB_PLUGINS_DIR, 'installed.json');
+const pluginRoots = () => [...new Set([PLUGINS_DIR, HUB_PLUGINS_DIR])];
+// Everything harness-specific lives under that root, inside the plugin that owns it:
+// `<plugin>/extensions/<id>/` is an extension the plugin's manifest declares, and
+// `<plugin>/presets/` is the preset definitions that plugin lists. The hub reads what
+// a manifest declares and knows no harness by name.
+function pluginDir(id) {
+  for (const root of pluginRoots()) {
+    if (fs.existsSync(path.join(root, id, 'manifest.json'))) return path.join(root, id);
+  }
+  return path.join(PLUGINS_DIR, id);
+}
 const pluginExtensionsDir = (id) => path.join(pluginDir(id), 'extensions');
 const pluginPresetsDir = (id) => path.join(pluginDir(id), 'presets');
+const pluginOrigin = (id) => (pluginDir(id).startsWith(HUB_PLUGINS_DIR + path.sep) ? 'hub' : 'deployment');
 // One hub per data dir: the endpoint file is a single slot, and the hub OWNS it.
 // A file left behind by a hub that was killed is stale by definition (its token is
 // dead), so it is removed BEFORE the port is bound: from then on, the file's
@@ -157,12 +170,31 @@ function presetsArgv(id) {
 // The plugins present on disk: a directory under the plugins root that carries a
 // manifest. Nothing here knows a harness by name.
 function installedPlugins() {
-  if (!fs.existsSync(PLUGINS_DIR)) return [];
-  return fs.readdirSync(PLUGINS_DIR).filter((d) => manifestOf(d)).sort();
+  const ids = new Set();
+  for (const root of pluginRoots()) {
+    if (!fs.existsSync(root)) continue;
+    for (const d of fs.readdirSync(root)) if (manifestOf(d)) ids.add(d);
+  }
+  return [...ids].sort();
+}
+
+// Where the runtime the manifest pins should land: the manifest's command, resolved
+// the same way the hub resolves it for the adapter, minus the program itself. The hub
+// only ever CHECKS this path — materialising it is the plugin's own job.
+function runtimeTarget(id) {
+  const m = manifestOf(id) || {};
+  const rt = m.runtime;
+  if (!rt || !Array.isArray(rt.command) || !rt.command.length) return null;
+  const rel = rt.command.slice(1).find((p) => !String(p).startsWith('-'));
+  return rel ? path.resolve(pluginDir(id), rel) : null;
+}
+function runtimeReady(id) {
+  const target = runtimeTarget(id);
+  return target ? fs.existsSync(target) : true;   // no declared runtime = nothing to prepare
 }
 
 function manifestOf(id) {
-  const mf = path.join(PLUGINS_DIR, id, 'manifest.json');
+  const mf = path.join(pluginDir(id), 'manifest.json');
   return fs.existsSync(mf) ? readJson(mf, null) : null;
 }
 
@@ -405,7 +437,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
   if (fault) {
     throw Object.assign(new Error(`harness '${harnessId}' cannot be used: ${fault}`), { code: 'harness_invalid' });
   }
-  const dir = path.join(PLUGINS_DIR, harnessId);
+  const dir = pluginDir(harnessId);
   const [cmd, ...args] = m.command;
   // The runtime an adapter drives is declared by its manifest, not discovered by
   // the adapter: there is no "system install" to fall back to, and an adapter
@@ -465,6 +497,11 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
       if (conn.tail.length > 6) conn.tail.shift();
     }
   });
+  proc.on('error', (e) => {
+    for (const [, p] of conn.pending) { clearTimeout(p.timer); p.reject(new Error(`adapter could not be started: ${e.message}`)); }
+    conn.pending.clear();
+    if (adapters.get(connKey) === conn) adapters.delete(connKey);
+  });
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', (d) => {
     conn.buf += d;
@@ -512,6 +549,7 @@ const ADAPTER_REQUESTS = [
   'session/compact',
   'session/rename',
   'skills/list',
+  'runtime/prepare',
 ];
 const ADAPTER_REQUEST_SET = new Set(ADAPTER_REQUESTS);
 
@@ -879,6 +917,24 @@ const ROUTES = [
       // different directories, and only the harness's own list says which one is meant.
       availableExtensions: [...new Set(reconcileHarnesses().filter((r) => !r.missing).flatMap((r) => availableExtensions(r.id)))].sort(),
     }) },
+  // ---- plugins: what the hub can see, what it installed, and preparing ---------
+  // A plugin is a directory with a manifest. Two roots: the one a deployment gave
+  // this hub (read-only to the hub) and the hub's own inside its data dir. The route
+  // says which is which, because a client that installs has to know where it landed.
+  { method: 'GET', path: '/v1/hub/plugins', handler: ({ res }) =>
+    json(res, 200, { plugins: installedPlugins().map(pluginValue), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR } }) },
+  { method: 'POST', path: '/v1/hub/plugins', handler: ({ res, body }) =>
+    body().then((b) => installPlugin(b, res)).catch((e) => failError(res, e)) },
+  { method: 'POST', path: '/v1/hub/plugins/{id}/prepare', handler: ({ res, params }) => {
+    if (!manifestOf(params.id)) return fail(res, 404, 'harness_not_found', `no plugin '${params.id}'`);
+    const caps = (manifestOf(params.id) || {}).capabilities || [];
+    if (!caps.includes('runtime')) {
+      return fail(res, 501, 'unsupported', `plugin '${params.id}' does not declare the runtime capability: it brings its own runtime, or it materialises nothing`);
+    }
+    prepareRuntime(params.id)
+      .then((r) => json(res, 200, { harnessId: params.id, runtimeReady: runtimeReady(params.id), ...r }))
+      .catch((e) => fail(res, e.code === 'runtime_prepare_failed' ? 502 : 500, e.code || 'runtime_prepare_failed', e.message));
+  } },
   { method: 'PATCH', path: '/v1/hub/harnesses/{id}', handler: ({ res, params, body }) =>
     body().then((b) => updateHarness(params.id, b, res))
       .catch((e) => fail(res, 400, 'validation_failed', e.message)) },
@@ -1472,6 +1528,144 @@ function providerValueFree(row) {
 
 function secretName(providerId) { return `provider-${providerId}-token`; }
 
+// What a plugin looks like on the wire: where it is, where it came from, and whether
+// the runtime its manifest pins is on disk. `runtimeReady` is a filesystem fact about
+// the declared command existing — not a claim that the harness works.
+function pluginValue(id) {
+  const m = manifestOf(id) || {};
+  const installed = readJson(PLUGINS_FILE, {}) || {};
+  const rec = installed[id] || null;
+  const prep = runtimePrepare.get(id) || null;
+  return {
+    id,
+    origin: pluginOrigin(id),
+    path: pluginDir(id),
+    source: rec ? rec.source : null,
+    ref: rec ? rec.ref : null,
+    commit: rec ? rec.commit : null,
+    installedAt: rec ? rec.installedAt : null,
+    runtime: m.runtime ? { package: m.runtime.package, version: m.runtime.version, target: runtimeTarget(id) } : null,
+    runtimeReady: runtimeReady(id),
+    prepare: prep ? { state: prep.state, detail: prep.detail, startedAt: prep.startedAt, finishedAt: prep.finishedAt } : null,
+    invalid: manifestFault(id),
+  };
+}
+
+// Installing a plugin: clone a repository into the hub's own plugins root, under the
+// id its manifest declares. The hub reads the id out of the clone and refuses a
+// manifest that would step outside that root; everything else about the plugin is the
+// plugin's business.
+function installPlugin(body, res) {
+  const source = body && body.source;
+  if (!source || typeof source.url !== 'string' || !source.url.trim()) {
+    return fail(res, 400, 'validation_failed', 'source.url is required (a git URL or a local path)');
+  }
+  if (source.ref !== undefined && typeof source.ref !== 'string') {
+    return fail(res, 400, 'validation_failed', 'source.ref must be a string');
+  }
+  fs.mkdirSync(HUB_PLUGINS_DIR, { recursive: true });
+  const staging = path.join(HUB_PLUGINS_DIR, `.staging-${process.pid}-${Date.now()}`);
+  const argv = ['clone', '--depth', '1', ...(source.ref ? ['--branch', source.ref] : []), source.url, staging];
+  try {
+    execFileSync('git', argv, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 600_000 });
+  } catch (e) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    const said = String((e.stderr || e.stdout || e.message || '')).trim().split(NL).filter(Boolean).pop() || 'git failed';
+    return fail(res, 502, 'plugin_install_failed', `git clone failed: ${said}`);
+  }
+  const mf = path.join(staging, 'manifest.json');
+  if (!fs.existsSync(mf)) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return fail(res, 502, 'plugin_install_failed', 'the repository has no manifest.json at its root, so it is not a plugin');
+  }
+  const m = readJson(mf, null) || {};
+  if (typeof m.id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(m.id)) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return fail(res, 502, 'plugin_install_failed', `the manifest declares an unusable id (${JSON.stringify(m.id)})`);
+  }
+  const dest = path.join(HUB_PLUGINS_DIR, m.id);
+  if (fs.existsSync(dest)) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return fail(res, 409, 'conflict', `plugin '${m.id}' is already installed at ${dest}`);
+  }
+  fs.renameSync(staging, dest);
+  let commit = null;
+  try {
+    commit = execFileSync('git', ['-C', dest, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true }).trim();
+  } catch { /* a plugin without git metadata is still a plugin */ }
+  const record = readJson(PLUGINS_FILE, {}) || {};
+  record[m.id] = { source: source.url, ref: source.ref || null, commit, installedAt: new Date().toISOString() };
+  writeJson(PLUGINS_FILE, record);
+  reconcileHarnesses();
+  // The runtime is prepared in the background: it is a network install, and the client
+  // that asked for the plugin gets an answer it can act on immediately. Its progress is
+  // visible on GET /v1/hub/plugins, and the first session waits for it (ensureRuntime).
+  prepareRuntime(m.id).catch(() => {});
+  json(res, 201, { plugin: pluginValue(m.id) });
+}
+
+// runtime/prepare: the plugin materialises the runtime its manifest pins. The hub
+// asks and verifies; it never installs a harness itself and knows nothing about
+// packages, registries or tarball layouts. State is kept per harness so a client can
+// see a long install happening (GET /v1/hub/plugins) and so two callers share one.
+const PREPARE_TIMEOUT = Number(process.env.PRTS_PREPARE_TIMEOUT_MS || 900_000);
+const runtimePrepare = new Map();   // harnessId -> {state, detail, startedAt, finishedAt, inFlight}
+
+function prepareRuntime(harnessId, conn = null) {
+  const held = runtimePrepare.get(harnessId);
+  if (held && held.inFlight) return held.inFlight;
+  const caps = (manifestOf(harnessId) || {}).capabilities || [];
+  if (!caps.includes('runtime')) {
+    // The plugin does not promise this method, so the hub does not pretend to have
+    // another way: the session will fail with whatever the adapter says, which is the
+    // truth about that plugin.
+    return Promise.resolve({ ready: runtimeReady(harnessId), unsupported: true });
+  }
+  const state = { state: 'running', detail: null, startedAt: new Date().toISOString(), finishedAt: null };
+  runtimePrepare.set(harnessId, state);
+  const call = conn
+    ? rpc(conn, 'runtime/prepare', {}, PREPARE_TIMEOUT)
+    : configRpc(harnessId, 'runtime/prepare', {});
+  const inFlight = withTimeout(call, PREPARE_TIMEOUT, `runtime/prepare did not answer within ${Math.round(PREPARE_TIMEOUT / 1000)}s`)
+    .then((r) => {
+      const ready = r && r.ready !== false && runtimeReady(harnessId);
+      state.state = ready ? 'ready' : 'failed';
+      state.detail = (r && r.detail) || null;
+      state.result = r || null;
+      state.finishedAt = new Date().toISOString();
+      if (!ready) {
+        throw Object.assign(new Error(state.detail || `the plugin answered that the runtime is not ready`), { code: 'runtime_prepare_failed' });
+      }
+      return state.result || { ready: true };
+    })
+    .catch((e) => {
+      state.state = 'failed';
+      state.detail = e.message;
+      state.finishedAt = new Date().toISOString();
+      throw Object.assign(new Error(e.message), { code: 'runtime_prepare_failed' });
+    })
+    .finally(() => { state.inFlight = null; });
+  state.inFlight = inFlight;
+  return inFlight;
+}
+
+// Before a session needs the harness: if the declared runtime is missing, ask the
+// plugin for it. Ready runtimes cost one stat and nothing else.
+function ensureRuntime(harnessId, conn) {
+  if (runtimeReady(harnessId)) return Promise.resolve(true);
+  const caps = (manifestOf(harnessId) || {}).capabilities || [];
+  if (!caps.includes('runtime')) return Promise.resolve(false);
+  return prepareRuntime(harnessId, conn).then(() => true);
+}
+
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
 // one-shot config-surface RPC against a provider-capable adapter (no session)
 function configRpc(harnessId, method, params) {
   declareAdapterRequest(method);
@@ -1482,7 +1676,7 @@ function configRpc(harnessId, method, params) {
     if (!caps.includes('providers') && !caps.includes('models')) {
       return reject(Object.assign(new Error('harness has no provider surface'), { code: 'unsupported-for-provider' }));
     }
-    const dir = path.join(PLUGINS_DIR, harnessId);
+    const dir = pluginDir(harnessId);
     const [cmd, ...args] = m.command || [];
     // Same runtime declaration as a session spawn: the manifest owns it and the
     // config plane reads the same one, so a probe and a turn drive the same pin.
@@ -1501,6 +1695,9 @@ function configRpc(harnessId, method, params) {
     });
     let buf = '';
     let settled = false;
+    proc.on('error', (e) => {
+      if (!settled) { settled = true; reject(new Error(`adapter could not be started: ${e.message}`)); }
+    });
     proc.stdout.setEncoding('utf8');
     proc.stdout.on('data', (d) => {
       buf += d;
@@ -2003,6 +2200,11 @@ function deleteConnection(id, res) {
 function initAdapter(conn, s, { modelProviderId, modelId, presetId, plan, review, thinkingLevel, title = null, freshSession = false, fork = null } = {}) {
   if (conn.ready) return Promise.resolve();
   if (conn.initializing) return conn.initializing;   // share the in-flight init
+  // A harness whose runtime is not on disk yet: the plugin installs it, through its
+  // own method, and this is where the hub asks. Doing it here rather than at spawn
+  // means every path that needs a started adapter (a session, a read-back, a resume)
+  // gets it, and the adapter process itself needs no runtime to answer — which is
+  // exactly why the answer can be the adapter's own.
   // freshSession is only ever set by repair, for the case where the harness has
   // no session artifact to resume (the cancelled turn never created one). It
   // opens the session anew and REPLACES the ref, so the session continues as a
@@ -2013,9 +2215,10 @@ function initAdapter(conn, s, { modelProviderId, modelId, presetId, plan, review
   // where to branch from, and the ref that comes back is the child's own. The
   // source session is never touched, so no adapter of the source needs to be
   // running — the child's process reads the source itself.
-  conn.initializing = (fork
+  conn.initializing = ensureRuntime(s.harnessId, conn)
+    .then(() => (fork
     ? rpc(conn, 'session/fork', { sid: s.id, from: fork.from, ...(fork.throughTurn !== undefined ? { throughTurn: fork.throughTurn } : {}) }, TURN_TIMEOUT)
-    : rpc(conn, 'session/start', { sid: s.id, ...(resumeRef ? { resume: resumeRef } : {}) }, TURN_TIMEOUT))
+    : rpc(conn, 'session/start', { sid: s.id, ...(resumeRef ? { resume: resumeRef } : {}) }, TURN_TIMEOUT)))
     .then((r) => {
       s.ref = r.ref;
       // The harness's own answer on additionalDirectories: {requested, applied,
@@ -3005,8 +3208,19 @@ function selfCheck() {
       ...(adapterContract.providerSurface.newInThisSlice || []).map((r) => r.method),
     ]);
     for (const m of ADAPTER_REQUESTS) if (!declaredRequests.has(m)) problems.push(`the hub sends adapter request '${m}', which adapter-v1.json does not declare`);
-    for (const id of fs.readdirSync(PLUGINS_DIR).filter((n) => fs.existsSync(path.join(PLUGINS_DIR, n, 'manifest.json')))) {
-      const dir = path.join(PLUGINS_DIR, id);
+    // Same id in both roots is a conflict, not a preference: the hub would have to
+    // pick one, and "which adapter drives this harness" must never be a coin toss.
+    for (const root of pluginRoots()) {
+      if (!fs.existsSync(root)) continue;   // a hub with no plugins is a valid hub
+      for (const n of fs.readdirSync(root)) {
+        if (!fs.existsSync(path.join(root, n, 'manifest.json'))) continue;
+        if (PLUGINS_DIR !== HUB_PLUGINS_DIR && pluginDir(n) !== path.join(root, n)) {
+          problems.push(`plugin '${n}' exists in both roots (${pluginDir(n)} and ${path.join(root, n)}); one harness, one directory`);
+        }
+      }
+    }
+    for (const id of installedPlugins()) {
+      const dir = pluginDir(id);
       let m = null;
       try { m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch (e) { problems.push(`${id}: manifest.json is not JSON`); continue; }
       if (m.id !== id) problems.push(`${id}: manifest id '${m.id}' is not the plugin directory name`);
@@ -3050,10 +3264,12 @@ server.listen(0, '127.0.0.1', () => {
   // already per-user.
   writeJson(ENDPOINT, { port: server.address().port, token, pid: process.pid, protocol: PROTOCOL, buildId: BUILD_ID, startedAt: STARTED_AT }, 0o600);
   const ids = installedPlugins();
+  const roots = pluginRoots();
   process.stdout.write(`agent-hub listening 127.0.0.1:${server.address().port}\n`);
+  process.stdout.write(`plugin roots: ${roots.join(' | ')}\n`);
   process.stdout.write(ids.length
-    ? `plugins: ${ids.length} from ${PLUGINS_DIR} (${ids.join(', ')})\n`
-    : `plugins: none found in ${PLUGINS_DIR} — this hub serves the contract and no harness. Point PRTS_PLUGINS_DIR at a directory of plugin directories (each carrying a manifest.json) and start it again.\n`);
+    ? `plugins: ${ids.length} (${ids.map((id) => `${id}:${pluginOrigin(id)}`).join(', ')})\n`
+    : `plugins: none — this hub serves the contract and no harness. Install one (POST /v1/hub/plugins {source:{url}}), or point PRTS_PLUGINS_DIR at a directory of plugin directories.\n`);
 });
 const bye = () => { fs.rmSync(ENDPOINT, { force: true }); process.exit(0); };
 process.on('SIGTERM', bye);

@@ -1,6 +1,6 @@
 # Agent Bus Protocol(散文说明)
 
-状态:**散文,不是权威**。协议的权威是 `../contract/adapter-v1.json`,由 `../tests/adapter-contract.mjs` 对照 hub 实际发出的请求、各插件实际处理的方法、各 manifest 实际声明的字段逐条检查。**两者不一致时以 adapter-v1.json 为准**,本文只保留机器合同放不下的散文(环境变量、数据归属、以及尚未被 hub 走通的配置面)。
+状态:**散文,不是权威**。协议的权威是 `../contract/adapter-v1.json`,由 hub 启动时的自检(`server.mjs` 的 `selfCheck()`)对照它实际发出的请求、各插件实际处理的方法、各 manifest 实际声明的字段逐条检查:不一致就**拒绝启动**并打印差异。**两者不一致时以 adapter-v1.json 为准**,本文只保留机器合同放不下的散文(环境变量、数据归属、以及尚未被 hub 走通的配置面)。
 
 本文写于桌面壳时期:**凡"壳"处,今天指 hub**;§8/§9/§10 记录的是已删除的 Rust 一致性与 UI,保留作为历史证据,不是今天的承诺。协议语言只有 **pass / fail**——没有"待实现"。
 
@@ -23,7 +23,7 @@
   "extensions": ["agent-presets", "plan"], "capabilities": ["models", "presets", "plan", "review"] }
 ```
 - `id` 必须等于插件目录名;`protocol` 必须等于本 hub 讲的 adapter 协议版本(不等=拒绝装载);`command` argv 相对插件目录执行。
-- **`runtime` 拥有 harness 的版本**——没有单独的 `pin`:一个事实写在两个字段里,总有一天会自相矛盾,而这个已经发生过。`scripts/prepare-runtimes.mjs` 按 `runtime.package`+`runtime.version` 物化运行时(hub 侧脚本,对给它的 plugins 目录通用:不认 harness 名字、不假定几家),hub 把 `runtime.command` 解析成绝对 argv 交给适配器(`PRTS_RUNTIME_COMMAND`)。
+- **`runtime` 拥有 harness 的版本**——没有单独的 `pin`:一个事实写在两个字段里,总有一天会自相矛盾,而这个已经发生过。**物化运行时是插件自己的方法**(`runtime/prepare`,见 `coreCompliance.requests`):按 `runtime.package`+`runtime.version` 装进 `<plugin>/runtime`。hub 只负责**要求**和**验证**(声明的 `command` 现在存在吗),它自己不认识 npm、不装任何 harness,hub 把 `runtime.command` 解析成绝对 argv 交给适配器(`PRTS_RUNTIME_COMMAND`)。
 - 字段全集与逐字段含义见 `../contract/adapter-v1.json` 的 `manifest`(required/optional/fields)。
 - `capabilities`(可选,字符串数组)= **真实 harness 局限**,合法值当前仅:`models`(harness 有可枚举模型目录)、**`providers`(配置面:§6 全部方法)**、`connectors`、`skills`(能消费对应配置)。`providerStatus` 废弃,并入 `providers`。注意:能力位声明的是"会诚实回答",不是"目录非空"——未接 provider 时 `models/list` 返回空数组+`failures` 是合法状态。
 - 装载 gate:`protocol` 相等 **且** 该 adapter 通过 `adapter_conformance` 套件核心用例。未通过=不出现在 agent 列表。
@@ -139,7 +139,7 @@ harness 身份仍不能通过该操作改变。操作进行中不接纳新 turn�
 
 ## 8. 【历史:Rust 时代】一致性套件(抽象的机器验收)
 
-`tests/adapter_conformance.rs`:mock 参考 adapter 必须全绿(套件自洽证明);四家真实 adapter 各跑同一套件(真实 turn 子集在 harness 缺失时跳过并如实报告)。核心检查:
+(这一段描述的 Rust 一致性套件在 hub 独立成仓库时已经不在了;现在的检查是启动自检本身,规则如上。)核心检查:
 
 C1 config/set 必需:缺失/报错→run 失败,不发 prompt。C2 history user 条目 `id==clientMessageId`。C3 每个 delta/message_end 带非空 `messageId`,同 turn 多消息 ID 互异。C4 `message_end` 后 history 可查同 ID 同全文。C5 `beforeId` 页语义四红线。C6 重启+resume 后历史 ID 不变。C7 合同外事件不外漏。C8 缺 `messageId` 事件被壳侧识别为违例(mock 演示合规路径)。
 

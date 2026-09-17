@@ -3,7 +3,7 @@
   "title": "Agent hub /v1 contract — single source of truth for hub<->consumer surface",
   "protocol": "prts-shell",
   "version": "2026-09-16",
-  "note": "Paths, request shapes, response shapes, SSE event objects and error codes live here, and this file is checked, not merely written down: the hub reports its own surface at GET /v1/hub/surface and tests/contract.mjs fails when the two disagree in either direction. So change this file when you change the surface — the check is what makes that instruction true instead of a hope. Adapter-facing surface lives in adapter-v1.json.",
+  "note": "Paths, request shapes, response shapes, SSE event objects and error codes live here, and this file is checked, not merely written down: the hub reports its own surface at GET /v1/hub/surface and the hub refuses to START when the two disagree in either direction (boot self-check, server.mjs). So change this file when you change the surface — the check is what makes that instruction true instead of a hope. Adapter-facing surface lives in adapter-v1.json.",
   "defs": {
     "harness": {
       "type": "object",
@@ -768,6 +768,38 @@
           "description": "whether the MODEL may load it; false means a human must invoke it"
         }
       }
+    },
+    "plugin": {
+      "id": "string",
+      "origin": {
+        "type": "string",
+        "description": "'deployment' when it came from the plugins directory this hub was given, 'hub' when the hub installed it into its own root"
+      },
+      "path": "string",
+      "source": {
+        "type": "string",
+        "description": "the git URL this hub installed it from; null when nobody installed it (a checkout or a deployment's directory)"
+      },
+      "ref": "string|null",
+      "commit": "string|null",
+      "installedAt": "string|null",
+      "runtime": {
+        "type": "object",
+        "description": "{package, version, target} as the manifest declares it; null when the plugin brings its own runtime"
+      },
+      "runtimeReady": {
+        "type": "boolean",
+        "description": "whether the declared runtime command exists on disk — a filesystem fact, not a claim that the harness works"
+      },
+      "prepare": {
+        "type": "object",
+        "description": "{state: running|ready|failed, detail, startedAt, finishedAt} of the last runtime/prepare for this plugin, or null when none ran in this process"
+      },
+      "invalid": {
+        "type": "string",
+        "description": "why the manifest cannot be honoured; null when it can",
+        "nullable": true
+      }
     }
   },
   "endpoints": [
@@ -941,7 +973,7 @@
     {
       "method": "GET",
       "path": "/v1/hub/surface",
-      "description": "The surface this process actually implements, as data: the route table the router matches, the SSE event names it can emit, and the identity of the contract it claims to keep. contract.sha256 is the hash of contract/v1.json; a consumer compares it with the contract it holds, and tests/contract.mjs compares both directions on every run.",
+      "description": "The surface this process actually implements, as data: the route table the router matches, the SSE event names it can emit, and the identity of the contract it claims to keep. contract.sha256 is the hash of contract/v1.json; a consumer compares it with the contract it holds, and the hub's boot self-check compares both directions before it binds a port.",
       "response": {
         "contract": {
           "file": "string",
@@ -1669,6 +1701,72 @@
       "events": [
         "session.compacting",
         "session.compacted"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/plugins",
+      "description": "what plugin directories the hub can see, where they came from, and whether each one's runtime is on disk. A plugin is a directory with a manifest; the hub reads the root it was given (PRTS_PLUGINS_DIR) and, when it is the hub's own, the plugins it installed there. `runtimeReady` is a fact about the filesystem (the manifest's command exists), not a claim about the harness working.",
+      "response": {
+        "plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/plugin"
+          }
+        },
+        "roots": {
+          "type": "object",
+          "description": "{given, hub}: the plugins directory this hub was handed (null when it was not given one) and the hub's own root inside its data dir"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/plugins",
+      "description": "install a plugin: `{source: {url, ref?}}` is cloned into the hub's own plugins directory (<DATA_DIR>/plugins/<id>, the id the cloned manifest declares) and registered, and its runtime is prepared by the adapter itself in the background. Refused (409) when the hub was given a plugins directory it does not own (a deployment's checkout): installing into that would write into someone else's tree, and preparing a plugin there is that deployment's business.",
+      "request": {
+        "source": {
+          "type": "object",
+          "description": "where the plugin comes from: a git URL or a local path (git is the installer, so a local clone of a plugin repository works)",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string",
+              "description": "a branch, tag or commit to check out"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      "response": {
+        "plugin": "object"
+      },
+      "errors": [
+        "validation_failed",
+        "conflict"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/plugins/{id}/prepare",
+      "description": "ask a plugin's adapter to materialise the runtime its manifest pins (`runtime/prepare`). Idempotent: a runtime already on disk answers `ready:true`. The hub reports the adapter's own words — including on failure (`runtime_prepare_failed`), because only the adapter knows how its harness is fetched. A plugin that does not declare the `runtime` capability answers 501 `unsupported`.",
+      "response": {
+        "harnessId": "string",
+        "runtimeReady": "boolean",
+        "ready": "boolean",
+        "package": "string?",
+        "version": "string?",
+        "target": "string?",
+        "detail": "string?"
+      },
+      "errors": [
+        "harness_not_found",
+        "unsupported",
+        "runtime_prepare_failed"
       ]
     }
   ],

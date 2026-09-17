@@ -212,6 +212,21 @@
       "http": 502,
       "retryable": true,
       "message": "the harness ran compaction and it failed; the harness's own words are in the message"
+    },
+    "runtime_prepare_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "the plugin could not materialise the runtime it pins; the adapter's own words are in `message`"
+    },
+    "conflict": {
+      "http": 409,
+      "retryable": false,
+      "message": "the request conflicts with the current state"
+    },
+    "plugin_install_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "the plugin could not be installed (git failed, or the repository is not a plugin); the messenger is the installer"
     }
   }
 }
