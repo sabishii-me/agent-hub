@@ -10,27 +10,27 @@ what it does not, [CLIENT.md](CLIENT.md) is how a client connects.
 node -v                                 # 22+ (developed on 24)
 node server.mjs                         # prints "agent-hub listening 127.0.0.1:<port>", and that it has no harness
 # a harness arrives by install (the hub clones it into <DATA_DIR>/plugins) or by
-# PRTS_PLUGINS_DIR pointing at checkouts; its runtime is prepared by the plugin itself:
+# AGENT_HUB_PLUGINS_DIR pointing at checkouts; its runtime is prepared by the plugin itself:
 #   POST /v1/hub/plugins {source:{url, ref?}}
 #   POST /v1/hub/plugins/{id}/prepare        (also happens by itself before a session)
 
 # the hub prints its port; hub-connect turns it into shell variables
-eval "$(node scripts/hub-connect.mjs)"   # exports PRTS_URL and PRTS_TOKEN
-curl -s "$PRTS_URL/v1/harnesses" | head -c 200          # discovery needs no token
+eval "$(node scripts/hub-connect.mjs)"   # exports AGENT_HUB_URL and AGENT_HUB_TOKEN
+curl -s "$AGENT_HUB_URL/v1/harnesses" | head -c 200          # discovery needs no token
 
 # add a provider: its own url + token. The token goes to the OS secret store and is
 # never written to the provider file; `declarations` is what a model list cannot tell
 # anyone (modalities, context window, thinking levels, cost).
-curl -s -X POST "$PRTS_URL/v1/hub/providers" \
-  -H "Authorization: Bearer $PRTS_TOKEN" -H 'content-type: application/json' \
+curl -s -X POST "$AGENT_HUB_URL/v1/hub/providers" \
+  -H "Authorization: Bearer $AGENT_HUB_TOKEN" -H 'content-type: application/json' \
   -d '{"id":"myprovider","url":"https://api.example/v1","token":"sk-...","declarations":{"my-model":{"name":"My Model","input":["text"],"contextWindow":128000}}}'
 
-curl -s -H "Authorization: Bearer $PRTS_TOKEN" "$PRTS_URL/v1/harnesses/pi/models" | head -c 300   # configured => available
+curl -s -H "Authorization: Bearer $AGENT_HUB_TOKEN" "$AGENT_HUB_URL/v1/harnesses/pi/models" | head -c 300   # configured => available
 ```
 
 What is **not** in the tree and must be recreated on a new machine: the harness
 runtimes (materialised above — a build product, never committed) and the state under
-`PRTS_DATA_DIR` (default `~/.prts-core`: sessions, providers, secrets, per-harness
+`AGENT_HUB_DATA_DIR` (default `~/.sabishii-me/agent-hub`: sessions, providers, secrets, per-harness
 homes). Provider tokens live in the OS secret store, so a token is re-entered once
 and never lives in a file the repo tracks.
 
@@ -45,7 +45,7 @@ observed facts are in the commit that shipped it. There is no test suite, on pur
 | the hub | `server.mjs` — one process, 53 routes, 17 stream events, no build step, loopback only, one hub per data dir |
 | the contract | `contract/v1.json` (authority) + `contract/errors.json` (status + retryable) + `contract/adapter-v1.json` (stdio protocol) + `contract/openapi.json` (generated) |
 | boot self-check | the hub refuses to start if its routes/events/error codes/OpenAPI/manifests disagree with the contract, and prints the differences |
-| the harnesses | NOT in this repository: one harness = one plugin = one directory + manifest, each in its own repo (`<id>/manifest.json` + `<id>-adapter.cjs` + its own `extensions/`, `presets/`, `runtime/`). The hub searches a documented path for them at startup — `PRTS_PLUGINS_DIR` → `<hub>/plugins` → `<deployment>/plugins` (when the hub is at `<deployment>/apps/<name>`) → `<DATA_DIR>/plugins` (its own, where installs land) — printing every root; a client that sees an empty list gets the roots in a `note` |
+| the harnesses | NOT in this repository: one harness = one plugin = one directory + manifest, each in its own repo (`<id>/manifest.json` + `<id>-adapter.cjs` + its own `extensions/`, `presets/`, `runtime/`). The hub searches a documented path for them at startup — `AGENT_HUB_PLUGINS_DIR` → `<hub>/plugins` → `<deployment>/plugins` (when the hub is at `<deployment>/apps/<name>`) → `<DATA_DIR>/plugins` (its own, where installs land) — printing every root; a client that sees an empty list gets the roots in a `note` |
 | installing a harness | `POST /v1/hub/plugins {source:{url, ref?}}` clones it into the hub's own root; the plugin then materialises its own runtime (`runtime/prepare`, asked by the hub before its first session, and idempotent) — the hub knows no package names |
 | sessions | create/read/patch/delete/close/reopen, per-knob `applied*` proofs, isolated harness homes, refusals (`session_busy`, `session_closed`, `needs_repair`, `unknown_session`, …) |
 | turns | SSE stream with 17 events, cancel, repair, resume after a hub restart, native message id required |
@@ -104,10 +104,10 @@ contract/               v1.json · errors.json · adapter-v1.json · openapi.jso
 scripts/                emit-openapi.mjs · hub-connect.mjs · prepare-runtimes.mjs
 docs/                   FEATURES.md · CLIENT.md · PROTOCOL.md · STATE.md (this file)
 plugins/                empty here: harness plugins live in their own repositories and a
-                        deployment points PRTS_PLUGINS_DIR at the directory holding them
+                        deployment points AGENT_HUB_PLUGINS_DIR at the directory holding them
 ```
 
-`<PRTS_DATA_DIR>` (default `~/.prts-core`) holds everything the hub owns at
+`<AGENT_HUB_DATA_DIR>` (default `~/.sabishii-me/agent-hub`) holds everything the hub owns at
 runtime: `endpoint.json` (port + token + pid + startedAt), `providers/`,
 `secrets/`, `sessions.json`, `agents/<harness>/` (that harness's home, its installed
 extensions and skills, its transcripts), `harnesses.json`.

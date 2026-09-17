@@ -5,8 +5,8 @@
 // This is the reference implementation of the client-side discovery rule, and the
 // tool a developer runs while wiring a front end up by hand:
 //
-//   node scripts/hub-connect.mjs                     # default dir (~/.prts-core)
-//   node scripts/hub-connect.mjs --data-dir /tmp/x   # a hub started with PRTS_DATA_DIR
+//   node scripts/hub-connect.mjs                     # default dir (~/.sabishii-me/agent-hub)
+//   node scripts/hub-connect.mjs --data-dir /tmp/x   # a hub started with AGENT_HUB_DATA_DIR
 //   node scripts/hub-connect.mjs --pid 12345         # only accept THIS process (a sidecar)
 //   node scripts/hub-connect.mjs --json              # machine readable
 //   node scripts/hub-connect.mjs --wait 30           # wait up to 30s for it to come up
@@ -35,7 +35,7 @@ const opt = (name, fallback) => {
 };
 const flag = (name) => args.includes(name);
 
-const dataDir = path.resolve(opt('--data-dir', path.join(os.homedir(), '.prts-core')));
+const dataDir = path.resolve(opt('--data-dir', path.join(os.homedir(), '.sabishii-me/agent-hub')));
 const wantPid = opt('--pid', null) ? Number(opt('--pid', null)) : null;
 const waitSeconds = Number(opt('--wait', '0'));
 const asJson = flag('--json');
@@ -63,15 +63,15 @@ async function readOnce() {
 function report(ep) {
   if (asJson) { process.stdout.write(JSON.stringify(ep, null, 2) + '\n'); return; }
   process.stdout.write([
-    `export PRTS_URL=http://127.0.0.1:${ep.port}`,
-    `export PRTS_TOKEN=${ep.token}`,
+    `export AGENT_HUB_URL=http://127.0.0.1:${ep.port}`,
+    `export AGENT_HUB_TOKEN=${ep.token}`,
     `# pid=${ep.pid} startedAt=${ep.startedAt ?? 'n/a'} buildId=${String(ep.buildId).slice(0, 12)}`,
     '',
   ].join('\n'));
 }
 
 const describe = {
-  absent: () => `no endpoint file at ${endpointFile} — nothing is running there (start a hub with PRTS_DATA_DIR=${dataDir})`,
+  absent: () => `no endpoint file at ${endpointFile} — nothing is running there (start a hub with AGENT_HUB_DATA_DIR=${dataDir})`,
   unparsable: (r) => `endpoint file is not JSON (${r.raw})`,
   'other-process': (r) => `endpoint file belongs to pid ${r.ep.pid}, not the process being waited for — a stale or foreign hub`,
   dead: (r) => `endpoint file names pid ${r.ep.pid}, which is not running — a hub that was killed leaves this behind; ignore it`,

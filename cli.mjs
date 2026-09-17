@@ -19,7 +19,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
+const DATA_DIR = process.env.AGENT_HUB_DATA_DIR || path.join(os.homedir(), '.sabishii-me/agent-hub');
 const ENDPOINT = path.join(DATA_DIR, 'endpoint.json');
 
 function endpoint() {
@@ -213,11 +213,11 @@ async function main() {
     print(await call('GET', `/v1/sessions/${encodeURIComponent(pos[1])}/approvals`));
   } else {
     process.stdout.write(
-      'prts — multi-harness manager\n' +
+      'agent-hub — multi-harness manager\n' +
         '  hub daemon start | stop\n' +
         '  hub harness list [--json]\n' +
-        '  prts harness enable <id> | disable <id>\n' +
-        '  prts harness tools <id>\n' +
+        '  agent-hub harness enable <id> | disable <id>\n' +
+        '  agent-hub harness tools <id>\n' +
         '  hub status\n' +
         '  hub chat -h <harnessId> [-m <modelId>] [-s <sessionId>] <message>\n' +
         '  hub session list | show <id> | delete <id> | turns <id> | messages <id>\n' +
@@ -225,18 +225,18 @@ async function main() {
         '  hub model <id> <modelId>\n' +
         '  hub repair <id> [--mode tombstone|truncate] [--confirm] [--preview]\n' +
         '  hub approvals <id>\n' +
-        '  prts provider list\n' +
-        '  prts provider create <label> <url> [token]\n' +
-        '  prts provider delete <id>\n' +
-        '  prts provider logout <id>\n' +
-        '  prts skill list\n' +
-        '  prts skill get <id> [path]\n' +
-        '  prts skill put <id> <path> <content>\n' +
-        '  prts skill delete <id>\n' +
-        '  prts connection list\n' +
-        '  prts connection create <name> <scheme> <endpoint> [envName] [token]\n' +
-        '  prts connection enable <id> | disable <id>\n' +
-        '  prts connection delete <id>\n'
+        '  agent-hub provider list\n' +
+        '  agent-hub provider create <label> <url> [token]\n' +
+        '  agent-hub provider delete <id>\n' +
+        '  agent-hub provider logout <id>\n' +
+        '  agent-hub skill list\n' +
+        '  agent-hub skill get <id> [path]\n' +
+        '  agent-hub skill put <id> <path> <content>\n' +
+        '  agent-hub skill delete <id>\n' +
+        '  agent-hub connection list\n' +
+        '  agent-hub connection create <name> <scheme> <endpoint> [envName] [token]\n' +
+        '  agent-hub connection enable <id> | disable <id>\n' +
+        '  agent-hub connection delete <id>\n'
     );
     process.exit(pos.length ? 2 : 0);
   }

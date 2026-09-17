@@ -13,7 +13,7 @@ try {
   hash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.resolve(HERE, '..', '..') })
     .toString().trim();
 } catch {
-  hash = process.env.PRTS_BUILD_ID || 'dev';
+  hash = process.env.AGENT_HUB_BUILD_ID || 'dev';
 }
 
 fs.writeFileSync(OUT, JSON.stringify({ buildId: hash, generatedAt: new Date().toISOString() }, null, 2));

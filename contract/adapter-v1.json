@@ -26,7 +26,7 @@
       "id": "must equal the plugin directory name; a manifest that claims another id is refused",
       "protocol": "the adapter protocol this plugin speaks; must equal this file's version, or the hub refuses to start the adapter (harness_invalid)",
       "command": "argv that starts the adapter; relative paths resolve against the plugin directory",
-      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives — there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. The PLUGIN materialises the package at that version, through the `runtime` capability's `runtime/prepare` method; the hub asks for that and verifies the result, and hands `command` (absolute) to the adapter as PRTS_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
+      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives — there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. The PLUGIN materialises the package at that version, through the `runtime` capability's `runtime/prepare` method; the hub asks for that and verifies the result, and hands `command` (absolute) to the adapter as AGENT_HUB_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
       "extensions": "harness-side extensions this plugin ships (registry defaults)",
       "capabilities": "what the hub may ask this plugin for; every value has an entry in capabilitySurface, and declaring one binds the plugin to its methods",
       "name": "display name for the harness; falls back to the id",
@@ -307,7 +307,7 @@
           "providers?"
         ],
         "result": "models[] + failures[]",
-        "rule": "answers what THIS harness can run: its own catalog plus the core-managed providers passed in (each {id,url,declarations}), so one query is enough. An injected provider is named `prts-<id>` in every harness. Empty catalog separated from read failure; one failure never pollutes another"
+        "rule": "answers what THIS harness can run: its own catalog plus the core-managed providers passed in (each {id,url,declarations}), so one query is enough. An injected provider is named `hub-<id>` in every harness. Empty catalog separated from read failure; one failure never pollutes another"
       },
       {
         "method": "credentials/grant",
@@ -414,7 +414,7 @@
         "skills/list"
       ],
       "hub": "GET /v1/sessions/{id}/skills",
-      "note": "The hub INSTALLS a harness's skills before its process starts (exactly like extensions: it writes them into <DATA_DIR>/agents/<harness>/skills and hands the directory over as PRTS_INSTALLED_SKILLS_DIR); the adapter only points its harness at that directory — pi/jouzu with `--no-skills --skill <dir>` (so the user's own skill directories stay out of a PRTS session), dsh with DSH_AGENTS_HOME. It is reported PER SESSION, because a catalogue depends on the session's directory. Skills no longer ride config/set: one path, one source."
+      "note": "The hub INSTALLS a harness's skills before its process starts (exactly like extensions: it writes them into <DATA_DIR>/agents/<harness>/skills and hands the directory over as AGENT_HUB_INSTALLED_SKILLS_DIR); the adapter only points its harness at that directory — pi/jouzu with `--no-skills --skill <dir>` (so the user's own skill directories stay out of a hub-managed session), dsh with DSH_AGENTS_HOME. It is reported PER SESSION, because a catalogue depends on the session's directory. Skills no longer ride config/set: one path, one source."
     },
     "connectionSchemes": {
       "methods": [],

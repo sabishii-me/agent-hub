@@ -12,14 +12,14 @@ Everything HERE travels together: the contract and the OpenAPI projection are re
 from this directory at start, and nothing outside is imported. The **harnesses are not
 here**: one harness = one plugin = one directory + manifest, and each plugin is its own
 repository. A deployment composes them into a plugins directory and hands it to the hub
-(`PRTS_PLUGINS_DIR`), so adding or removing a harness is a deployment decision, not a
+(`AGENT_HUB_PLUGINS_DIR`), so adding or removing a harness is a deployment decision, not a
 change to this repository. A hub started without one serves the contract and no
 harness, and says so on stdout — so this whole directory can move to a
 repository of its own without a code change (verified by running it from an unrelated
 working directory).
 
 **Connecting a client (desktop / sidecar):** [docs/CLIENT.md](docs/CLIENT.md) — discovery via
-`<PRTS_DATA_DIR>/endpoint.json`, readiness, stale files, restarts, and the two
+`<AGENT_HUB_DATA_DIR>/endpoint.json`, readiness, stale files, restarts, and the two
 integration facts (`EventSource` cannot send the token; there are no CORS headers).
 
 **Feature map:** [docs/FEATURES.md](docs/FEATURES.md) — the same ground as this
@@ -40,14 +40,14 @@ node server.mjs               # prints: agent-hub listening 127.0.0.1:<port>
 Then install a harness, or point the hub at checkouts you already have:
 
 ```
-# 1. the hub installs a plugin with git, into its own root (<PRTS_DATA_DIR>/plugins)
+# 1. the hub installs a plugin with git, into its own root (<AGENT_HUB_DATA_DIR>/plugins)
 curl -s -X POST \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"source":{"url":"<a plugin repository>","ref":"develop"}}' \
   http://127.0.0.1:<port>/v1/hub/plugins
 
 # 2. ...or read plugins you already have on disk (nobody's tree is written to)
-PRTS_PLUGINS_DIR=<a directory of plugin directories> node server.mjs
+AGENT_HUB_PLUGINS_DIR=<a directory of plugin directories> node server.mjs
 ```
 
 A **plugin** is a directory carrying a `manifest.json`; every harness lives in its own
@@ -59,8 +59,8 @@ declared command exists. A fresh machine therefore needs network once per plugin
 install time or at the first session — after that the hub has no network dependency of
 its own.
 
-State (sessions, providers, secrets, per-harness homes) lives in `PRTS_DATA_DIR`
-(default `~/.prts-core`) and is **not** in the repo. Provider tokens live in the OS
+State (sessions, providers, secrets, per-harness homes) lives in `AGENT_HUB_DATA_DIR`
+(default `~/.sabishii-me/agent-hub`) and is **not** in the repo. Provider tokens live in the OS
 secret store (`secrets/*.dpapi` on Windows), never in a provider file, so on a new
 machine you re-enter a token once. Nothing else has to be recreated: the contract,
 the adapters and the plugin manifests are all in the tree.
@@ -72,17 +72,17 @@ node server.mjs
 ```
 
 It binds loopback on an OS-assigned port and prints a line containing
-`127.0.0.1:<port>`. Pairing material is written to `<PRTS_DATA_DIR>/endpoint.json`
+`127.0.0.1:<port>`. Pairing material is written to `<AGENT_HUB_DATA_DIR>/endpoint.json`
 (`{ port, token }`); the token is a fresh random value per boot (no env override).
 Every route needs `Authorization: Bearer <token>` except `GET /v1/harnesses`.
 
 | Env | Meaning |
 |---|---|
-| `PRTS_DATA_DIR` | state dir (default `~/.prts-core`): endpoint file, sessions, secrets, per-harness homes |
-| `PRTS_PLUGINS_DIR` | a directory of harness plugins the hub may READ. Not required: the hub searches the roots listed under [Installing a harness](#installing-a-harness), and prints them at startup. The root it WRITES to is always `<PRTS_DATA_DIR>/plugins` |
-| `PRTS_APPROVAL_TIMEOUT_MS` | approval deadline (default 120000) |
-| `PRTS_CANCEL_TIMEOUT_MS` | cancel deadline (default 15000) |
-| `PRTS_TURN_TIMEOUT_MS` | turn deadline (default 0 = unbounded) |
+| `AGENT_HUB_DATA_DIR` | state dir (default `~/.sabishii-me/agent-hub`): endpoint file, sessions, secrets, per-harness homes |
+| `AGENT_HUB_PLUGINS_DIR` | a directory of harness plugins the hub may READ. Not required: the hub searches the roots listed under [Installing a harness](#installing-a-harness), and prints them at startup. The root it WRITES to is always `<AGENT_HUB_DATA_DIR>/plugins` |
+| `AGENT_HUB_APPROVAL_TIMEOUT_MS` | approval deadline (default 120000) |
+| `AGENT_HUB_CANCEL_TIMEOUT_MS` | cancel deadline (default 15000) |
+| `AGENT_HUB_TURN_TIMEOUT_MS` | turn deadline (default 0 = unbounded) |
 
 ## Installing a harness
 
@@ -112,10 +112,10 @@ somebody has to remember to pass in:
 
 | # | root | notes |
 | --- | --- | --- |
-| 1 | `PRTS_PLUGINS_DIR` | explicit; **read-only** to the hub |
+| 1 | `AGENT_HUB_PLUGINS_DIR` | explicit; **read-only** to the hub |
 | 2 | `<this directory>/plugins` | a hub that carries its own plugins |
 | 3 | `<deployment>/plugins` | used when this hub sits at `<deployment>/apps/<name>` — i.e. when it is checked out as part of a deployment that composes plugins |
-| 4 | `<PRTS_DATA_DIR>/plugins` | the hub's **own** root: `POST /v1/hub/plugins` installs here and nowhere else |
+| 4 | `<AGENT_HUB_DATA_DIR>/plugins` | the hub's **own** root: `POST /v1/hub/plugins` installs here and nowhere else |
 
 A directory a deployment put on that path is somebody else's tree: the hub only reads it.
 The same harness id in two roots is a conflict refused at startup, not a silent
@@ -286,7 +286,7 @@ whatever else it carries, belong in the same registry and are installed the same
 way — one row entry and one installer each, added when that thing is actually
 needed. Nothing here is designed as a closed set. Before a harness runs, the hub writes
 that harness's selected extensions into `<DATA_DIR>/agents/<id>/extensions/` and passes
-the path as `PRTS_INSTALLED_EXTENSIONS_DIR`. An adapter only *places* what it finds
+the path as `AGENT_HUB_INSTALLED_EXTENSIONS_DIR`. An adapter only *places* what it finds
 there into the layout its own harness reads (pi/jouzu: `<cwd>/.pi/extensions/<name>/`;
 dsh: its home's `.agent-presets` plus the node_modules walk its composition resolves
 through) — it never decides what to install. Removing an extension from the registry
@@ -430,7 +430,7 @@ different surface, it prints the differences and exits 1. That takes millisecond
 no provider, and there is nothing to remember to run.
 
 ```
-PRTS_DATA_DIR=<dir> node apps/harness-hub/server.mjs     # prints its port, writes endpoint.json
+AGENT_HUB_DATA_DIR=<dir> node apps/harness-hub/server.mjs     # prints its port, writes endpoint.json
 curl http://127.0.0.1:<port>/v1/harnesses                 # discovery needs no token
 curl -H "Authorization: Bearer <token>" http://127.0.0.1:<port>/v1/hub/status
 ```

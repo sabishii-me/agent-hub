@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export function getBuildId() {
-  if (process.env.PRTS_BUILD_ID) return process.env.PRTS_BUILD_ID;
+  if (process.env.AGENT_HUB_BUILD_ID) return process.env.AGENT_HUB_BUILD_ID;
   const file = path.join(HERE, 'build-id.json');
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));

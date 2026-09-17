@@ -21,12 +21,12 @@ import { getBuildId } from './build-id.mjs';
 import { storeSecret, getSecret, deleteSecret, listSecretNames } from './secret-store.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
+const DATA_DIR = process.env.AGENT_HUB_DATA_DIR || path.join(os.homedir(), '.sabishii-me', 'agent-hub');
 // WHERE PLUGINS ARE LOOKED FOR. A hub that cannot find its harnesses is useless, so
 // the search is a documented path rather than one directory somebody has to remember
 // to pass in. In order, and every root is printed at startup:
 //
-//   1. PRTS_PLUGINS_DIR       — explicit, and read-only to the hub
+//   1. AGENT_HUB_PLUGINS_DIR       — explicit, and read-only to the hub
 //   2. <hub>/plugins          — a hub that carries its own (the original default)
 //   3. <deployment>/plugins   — when the hub is checked out at <deployment>/apps/<name>,
 //                               i.e. as part of a deployment that composes plugins
@@ -35,7 +35,7 @@ const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-cor
 // `POST /v1/hub/plugins` installs into (4) and nowhere else: a directory a deployment
 // put on the path is somebody else's tree and the hub only reads it. The same harness
 // id in two roots is a conflict the hub refuses to start with, not a silent preference.
-const GIVEN_PLUGINS_DIR = process.env.PRTS_PLUGINS_DIR || null;
+const GIVEN_PLUGINS_DIR = process.env.AGENT_HUB_PLUGINS_DIR || null;
 const PLUGINS_DIR = GIVEN_PLUGINS_DIR || path.resolve(HERE, 'plugins');
 const HUB_PLUGINS_DIR = path.join(DATA_DIR, 'plugins');
 const PLUGINS_FILE = path.join(HUB_PLUGINS_DIR, 'installed.json');
@@ -73,17 +73,17 @@ const ENDPOINT = path.join(DATA_DIR, 'endpoint.json');
 const HARNESSES_FILE = path.join(DATA_DIR, 'harnesses.json');
 const LEGACY_DISABLED = path.join(DATA_DIR, 'disabled.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
-const APPROVAL_TIMEOUT = Number(process.env.PRTS_APPROVAL_TIMEOUT_MS) || 120_000;
+const APPROVAL_TIMEOUT = Number(process.env.AGENT_HUB_APPROVAL_TIMEOUT_MS) || 120_000;
 // A question is a decision about work, not a permission to act, so it gets a
 // longer window before the harness is unblocked by cancellation.
-const QUESTION_TIMEOUT = Number(process.env.PRTS_QUESTION_TIMEOUT_MS) || 300_000;
-const CANCEL_TIMEOUT = Number(process.env.PRTS_CANCEL_TIMEOUT_MS) || 15_000;
+const QUESTION_TIMEOUT = Number(process.env.AGENT_HUB_QUESTION_TIMEOUT_MS) || 300_000;
+const CANCEL_TIMEOUT = Number(process.env.AGENT_HUB_CANCEL_TIMEOUT_MS) || 15_000;
 // A turn may legitimately run for a long time (a slow/free model can take minutes
 // to emit a large artefact). There is NO default wall-clock cap on a turn: the
 // turn ends when the adapter reports it, when it is cancelled, or when the
 // adapter dies. Operators may optionally bound it via env if they really want.
 // 0 (default) = unlimited.
-const TURN_TIMEOUT = Number(process.env.PRTS_TURN_TIMEOUT_MS) || 0;
+const TURN_TIMEOUT = Number(process.env.AGENT_HUB_TURN_TIMEOUT_MS) || 0;
 
 // The contract this server keeps (contract/v1.json) — read, never duplicated.
 // The protocol name/version a consumer is handed, and the hash it can compare
@@ -133,6 +133,7 @@ function readOpenapi() {
 const PROTOCOL = { name: CONTRACT.protocol, version: CONTRACT.version };
 const BUILD_ID = getBuildId();
 
+adoptLegacyDataDir();
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
 const NL = String.fromCharCode(10);
@@ -166,6 +167,33 @@ const readStateJson = (p, fallback) => {
 };
 
 const token = crypto.randomBytes(32).toString('hex');
+
+// --- one-time carry-over from the old data dir ----------------------------------
+// The state dir used to be `~/.prts-core`. A hub that is started with no data dir
+// override, finds no directory of its own and DOES find the old one adopts it by
+// COPYING it into place (staged next to the target, then renamed, so a half-copied
+// directory is never mistaken for a real one) and says so. The old directory is left
+// where it is and untouched: sessions, providers, secrets and per-harness homes are in
+// there, and nothing about this migration is worth losing them over. Session refs point
+// at absolute paths, so sessions from before the migration keep reading from the old
+// directory — which is exactly why it is not deleted.
+function adoptLegacyDataDir() {
+  if (process.env.AGENT_HUB_DATA_DIR || fs.existsSync(DATA_DIR)) return;
+  const legacy = path.join(os.homedir(), '.prts-core');
+  if (!fs.existsSync(legacy)) return;
+  const staging = `${DATA_DIR}.migrating-${process.pid}`;
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(DATA_DIR), { recursive: true });
+    fs.cpSync(legacy, staging, { recursive: true });
+    fs.renameSync(staging, DATA_DIR);
+    process.stdout.write(`data dir: adopted ${legacy} as ${DATA_DIR} (the old directory is left untouched; delete it when nothing reads it any more)\n`);
+  } catch (e) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    process.stdout.write(`data dir: could not adopt ${legacy} (${e.message}); starting fresh at ${DATA_DIR}\n`);
+  }
+}
+// called as soon as the function exists below — it must run before DATA_DIR is created
 
 // ---------------------------------------------------------------------------
 // harness domain: the hub manages harnesses.
@@ -484,7 +512,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
     windowsHide: true,
     cwd: dir,
     // (inherit the terminal's own login/upstream). private = isolated home.
-    env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { PRTS_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), PRTS_SESSION_ID: sid, PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { PRTS_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
+    env: { ...process.env, AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { AGENT_HUB_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), AGENT_HUB_SESSION_ID: sid, AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
     // stderr is CAPTURED as well as echoed: when an adapter dies before it can
     // answer, its own last words are the only useful part of the error, and a
     // caller who forgot to materialise the runtime should be told that instead of
@@ -901,7 +929,7 @@ const ROUTES = [
     // "no engines" with no reason.
     return json(res, 200, {
       harnesses, next_cursor: null,
-      note: `no harness plugins found. searched: ${pluginRoots().join(' | ')} — install one (POST /v1/hub/plugins {source:{url}}) or point PRTS_PLUGINS_DIR at a directory of plugin directories.`,
+      note: `no harness plugins found. searched: ${pluginRoots().join(' | ')} — install one (POST /v1/hub/plugins {source:{url}}) or point AGENT_HUB_PLUGINS_DIR at a directory of plugin directories.`,
     });
   } },
 
@@ -1338,7 +1366,7 @@ function catalogView(row) {
     models: (c?.models || []).map((m) => {
       const d = decls[m.id];
       const declared = d && d.reasoning && Array.isArray(d.reasoning.efforts) && d.reasoning.efforts.length;
-      return { ...m, providerId: row.id, provider: `prts/${row.id}`, enabled: isSelected(row, m.id), available: m.available && !stale,
+      return { ...m, providerId: row.id, provider: `hub/${row.id}`, enabled: isSelected(row, m.id), available: m.available && !stale,
         ...(declared ? { reasoning: d.reasoning, thinkingLevels: d.reasoning.efforts, thinkingLevelsSource: 'declared' } : {}),
         ...(d && typeof d.name === 'string' ? { name: d.name } : {}),
         ...(d && d.cost ? { cost: d.cost } : {}),
@@ -1636,7 +1664,7 @@ function installPlugin(body, res) {
 // asks and verifies; it never installs a harness itself and knows nothing about
 // packages, registries or tarball layouts. State is kept per harness so a client can
 // see a long install happening (GET /v1/hub/plugins) and so two callers share one.
-const PREPARE_TIMEOUT = Number(process.env.PRTS_PREPARE_TIMEOUT_MS || 900_000);
+const PREPARE_TIMEOUT = Number(process.env.AGENT_HUB_PREPARE_TIMEOUT_MS || 900_000);
 const runtimePrepare = new Map();   // harnessId -> {state, detail, startedAt, finishedAt, inFlight}
 
 function prepareRuntime(harnessId, conn = null) {
@@ -1718,7 +1746,7 @@ function configRpc(harnessId, method, params) {
     const proc = spawn(cmd, args, {
     windowsHide: true,
       cwd: dir,
-      env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: process.cwd(), PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { PRTS_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
+      env: { ...process.env, AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: process.cwd(), AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let buf = '';
@@ -2797,6 +2825,10 @@ function cancelTurn(sid, res) {
 // endpoint wants which, so both are accepted and reduced to the registry id.
 function canonicalProviderId(value) {
   if (typeof value !== 'string' || !value) return null;
+  // A session stores the provider it was created with, so this accepts the spelling the
+  // hub used before the rename as well: `prts-<id>` is what every session created before
+  // it says, and refusing that would break them for no reason.
+  if (value.startsWith('hub-')) return value.slice('hub-'.length) || null;
   if (value.startsWith('prts-')) return value.slice('prts-'.length) || null;
   return value;
 }
@@ -3292,7 +3324,7 @@ server.listen(0, '127.0.0.1', () => {
   process.stdout.write(`plugin roots: ${roots.map((r) => `${r}${fs.existsSync(r) ? '' : ' (none)'}`).join(' | ')}\n`);
   process.stdout.write(ids.length
     ? `plugins: ${ids.length} (${ids.map((id) => `${id}:${pluginOrigin(id)}`).join(', ')})\n`
-    : `plugins: none — this hub serves the contract and no harness. Install one (POST /v1/hub/plugins {source:{url}}), or point PRTS_PLUGINS_DIR at a directory of plugin directories.\n`);
+    : `plugins: none — this hub serves the contract and no harness. Install one (POST /v1/hub/plugins {source:{url}}), or point AGENT_HUB_PLUGINS_DIR at a directory of plugin directories.\n`);
 });
 const bye = () => { fs.rmSync(ENDPOINT, { force: true }); process.exit(0); };
 process.on('SIGTERM', bye);

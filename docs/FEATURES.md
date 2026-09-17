@@ -201,12 +201,12 @@ handles.
 ## How to drive it
 
 ```
-PRTS_DATA_DIR=<dir> node server.mjs                  # prints its port, writes endpoint.json
+AGENT_HUB_DATA_DIR=<dir> node server.mjs                  # prints its port, writes endpoint.json
 node scripts/hub-connect.mjs --data-dir <dir>        # prints the url + token for a client
 node scripts/emit-openapi.mjs                        # after editing contract/v1.json
 ```
 
-The hub itself: `PRTS_DATA_DIR=<dir> node server.mjs` — it prints the loopback
+The hub itself: `AGENT_HUB_DATA_DIR=<dir> node server.mjs` — it prints the loopback
 port and writes `<dir>/endpoint.json` (port + token). There is no build step; the
 harness runtimes are materialised by the plugin's own `runtime/prepare` method,
 from the pin in that plugin's manifest, and are not committed.

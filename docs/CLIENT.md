@@ -1,23 +1,23 @@
 # Connecting to a hub
 
 For the desktop team. Short version: **a hub publishes its connection material in
-`<PRTS_DATA_DIR>/endpoint.json`, and that IS the supported discovery mechanism.**
+`<AGENT_HUB_DATA_DIR>/endpoint.json`, and that IS the supported discovery mechanism.**
 There is no environment variable for the token, no fixed port, and no way to turn
 authentication off.
 
 ```
-$PRTS_DATA_DIR/endpoint.json          (written after the port is bound, removed on exit)
+$AGENT_HUB_DATA_DIR/endpoint.json          (written after the port is bound, removed on exit)
 {
   "port": 58200,                      // loopback port, different every boot
   "token": "bca71a88…",               // 32 random bytes, NEW every boot
   "pid": 9576,                        // the hub process that owns this file
-  "protocol": { "name": "prts-hub", "version": "2026-09-16" },
+  "protocol": { "name": "agent-hub", "version": "2026-09-16" },
   "buildId": "9336145c3771…",
   "startedAt": "2026-09-16T16:10:11.236Z"
 }
 ```
 
-Default data dir: `~/.prts-core` (`%USERPROFILE%\.prts-core` on Windows). **One hub
+Default data dir: `~/.sabishii-me/agent-hub` (`%USERPROFILE%\.sabishii-me/agent-hub` on Windows). **One hub
 per data dir** — the file is a single slot, and the hub deletes it before binding,
 so its existence means "a hub believes it is up".
 
@@ -25,19 +25,19 @@ so its existence means "a hub believes it is up".
 
 ```bash
 # 1. start a hub against a data dir of your own (a terminal, or from your app)
-PRTS_DATA_DIR=/tmp/prts-dev node apps/harness-hub/server.mjs
+AGENT_HUB_DATA_DIR=/tmp/agent-hub-dev node apps/harness-hub/server.mjs
 #    it prints:  agent-hub listening 127.0.0.1:58200
 
 # 2. get the url + token, in shell form or as JSON
-node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/prts-dev
-node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/prts-dev --json
-node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/prts-dev --pid 9576   # only this process
-node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/prts-dev --wait 30    # wait for startup
+node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/agent-hub-dev
+node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/agent-hub-dev --json
+node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/agent-hub-dev --pid 9576   # only this process
+node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/agent-hub-dev --wait 30    # wait for startup
 
 # 3. talk to it (the helper prints shell exports, so this works in one line)
-eval "$(node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/prts-dev)"
-curl -s "$PRTS_URL/v1/harnesses"                                    # no token needed
-curl -s -H "Authorization: Bearer $PRTS_TOKEN" "$PRTS_URL/v1/hub/status"
+eval "$(node apps/harness-hub/scripts/hub-connect.mjs --data-dir /tmp/agent-hub-dev)"
+curl -s "$AGENT_HUB_URL/v1/harnesses"                                    # no token needed
+curl -s -H "Authorization: Bearer $AGENT_HUB_TOKEN" "$AGENT_HUB_URL/v1/hub/status"
 ```
 
 `scripts/hub-connect.mjs` is also the reference implementation of the rule below —
@@ -143,7 +143,7 @@ POSIX (a no-op on Windows, where the data dir is already per-user).
 ```text
 desktop                          hub
   ├─ spawn: node server.mjs  ──────►  binds 127.0.0.1:0
-     env: PRTS_DATA_DIR=<app data dir>   writes endpoint.json (atomic, 0600)
+     env: AGENT_HUB_DATA_DIR=<app data dir>   writes endpoint.json (atomic, 0600)
   ├─ watch <data dir> for endpoint.json
   ├─ require endpoint.pid == child.id()
   ├─ GET /v1/harnesses  (no token) until 200

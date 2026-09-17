@@ -6,13 +6,13 @@
 // Usage:
 //   node debate.mjs --a <harnessId> --b <harnessId> [--rounds N] [--stop TOKEN] [--topic TEXT]
 //
-// Env: PRTS_DATA_DIR (like the CLI). Requires the core daemon to be running.
+// Env: AGENT_HUB_DATA_DIR (like the CLI). Requires the core daemon to be running.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
+const DATA_DIR = process.env.AGENT_HUB_DATA_DIR || path.join(os.homedir(), '.sabishii-me/agent-hub');
 const ENDPOINT = path.join(DATA_DIR, 'endpoint.json');
 
 function endpoint() {

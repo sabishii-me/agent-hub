@@ -16,14 +16,14 @@
 
 ## 1. 插件发现与清单
 
-- 位置:`<plugins dir>/<id>/manifest.json`(插件即目录,目录名就是 id)。plugins dir 由跑 hub 的人指定(`PRTS_PLUGINS_DIR`,默认本仓库内的 `plugins/`,那里是空的:本仓库不随附任何 harness,每个 harness 在自己的仓库里)。下面这份清单只是**格式示例**,不是 hub 知道的 harness 名单。
+- 位置:`<plugins dir>/<id>/manifest.json`(插件即目录,目录名就是 id)。plugins dir 由跑 hub 的人指定(`AGENT_HUB_PLUGINS_DIR`,默认本仓库内的 `plugins/`,那里是空的:本仓库不随附任何 harness,每个 harness 在自己的仓库里)。下面这份清单只是**格式示例**,不是 hub 知道的 harness 名单。
 ```json
 { "id": "pi", "protocol": 0, "command": ["node", "pi-adapter.cjs"],
   "runtime": { "package": "@earendil-works/pi-coding-agent", "version": "0.85.1", "command": ["node", "runtime/dist/cli.js"] },
   "extensions": ["agent-presets", "plan"], "capabilities": ["models", "presets", "plan", "review"] }
 ```
 - `id` 必须等于插件目录名;`protocol` 必须等于本 hub 讲的 adapter 协议版本(不等=拒绝装载);`command` argv 相对插件目录执行。
-- **`runtime` 拥有 harness 的版本**——没有单独的 `pin`:一个事实写在两个字段里,总有一天会自相矛盾,而这个已经发生过。**物化运行时是插件自己的方法**(`runtime/prepare`,见 `coreCompliance.requests`):按 `runtime.package`+`runtime.version` 装进 `<plugin>/runtime`。hub 只负责**要求**和**验证**(声明的 `command` 现在存在吗),它自己不认识 npm、不装任何 harness,hub 把 `runtime.command` 解析成绝对 argv 交给适配器(`PRTS_RUNTIME_COMMAND`)。
+- **`runtime` 拥有 harness 的版本**——没有单独的 `pin`:一个事实写在两个字段里,总有一天会自相矛盾,而这个已经发生过。**物化运行时是插件自己的方法**(`runtime/prepare`,见 `coreCompliance.requests`):按 `runtime.package`+`runtime.version` 装进 `<plugin>/runtime`。hub 只负责**要求**和**验证**(声明的 `command` 现在存在吗),它自己不认识 npm、不装任何 harness,hub 把 `runtime.command` 解析成绝对 argv 交给适配器(`AGENT_HUB_RUNTIME_COMMAND`)。
 - 字段全集与逐字段含义见 `../contract/adapter-v1.json` 的 `manifest`(required/optional/fields)。
 - `capabilities`(可选,字符串数组)= **真实 harness 局限**,合法值当前仅:`models`(harness 有可枚举模型目录)、**`providers`(配置面:§6 全部方法)**、`connectors`、`skills`(能消费对应配置)。`providerStatus` 废弃,并入 `providers`。注意:能力位声明的是"会诚实回答",不是"目录非空"——未接 provider 时 `models/list` 返回空数组+`failures` 是合法状态。
 - 装载 gate:`protocol` 相等 **且** 该 adapter 通过 `adapter_conformance` 套件核心用例。未通过=不出现在 agent 列表。
@@ -39,7 +39,7 @@
 | `session/abort` | `{ sid }` | — | 停止当前 turn。 |
 | `history/page` | `{ sid, beforeId?, limit }` | `{ messages[], hasMore }` | 分页读历史。**messages 形状 `{ id, role: user\|assistant, text, complete: true }`**,页内**旧→新**排列;无 `beforeId`=最近页;有 `beforeId`=锚点**之前**一页(**不含锚点**);锚点不存在=**error**,不许静默回第一页。 |
 
-- **历史真相源**:adapter 在 `PRTS_AGENT_DATA_DIR` **自持久化 transcript 与 ID 映射**,不依赖 harness 原生会话文件;消息 ID 与文本**跨进程重启与 resume 不变**。
+- **历史真相源**:adapter 在 `AGENT_HUB_HARNESS_DIR` **自持久化 transcript 与 ID 映射**,不依赖 harness 原生会话文件;消息 ID 与文本**跨进程重启与 resume 不变**。
 - `history/page` 只含**已完成**消息:`message_end` 已发出的 assistant 消息与已接纳的 user 消息必须可查。
 - `sid` 格式 `s-{pid}-{n:x}`;v1 拓扑=一进程一会话,wire 已带 sid。
 - 未知方法必须回 `-32601` error(不许静默吞掉)。
@@ -65,15 +65,15 @@
 ## 4. 审批(插件→壳 request)
 
 - `method: "approval_need"`;壳应答 `{ approved, reason }`;`DEFAULT_APPROVAL_TIMEOUT`(**120 秒**)无应答=fail closed(`approved:false, "timeout"`)。
-- 过期/未知 request_id 双向拒绝应答。壳侧注记(非合同):`prts_approval_request/expired/exit`。
+- 过期/未知 request_id 双向拒绝应答。壳侧注记(非合同):`hub_approval_request/expired/exit`。
 
 ## 5. 进程环境(壳→插件)
 
-- `PRTS_AGENT_DATA_DIR`:每 agent 专属目录。**transcript、identity 映射、缓存必须写这里**,不许写插件代码旁。
-- `PRTS_RUNTIME_COMMAND`:manifest `runtime.command` 解析成绝对路径后的 JSON argv。**插件不自己找运行时**——没有"系统全局安装"可回退,自己去找就把 pin 变成注释而不是事实。
-- `PRTS_INSTALLED_EXTENSIONS_DIR`:hub 已为这个 harness 装好的扩展。装哪些由**该插件 manifest 的 `extensions` 声明**决定,内容取自该插件自己的 `extensions/<id>/`(hub 不认任何 harness 名字);adapter 只负责按各自 harness 的布局摆好。
-- `PRTS_PRESETS_DIR`:仅当该插件目录里有 `presets/` 时才有此变量;它是这个插件列给 `presets` 的预设定义目录。没有就是不传——不是传一个空目录。
-- `PRTS_PRESETS_DIR`、`PRTS_CWD`、`PRTS_ADDITIONAL_DIRS`(JSON)、`PRTS_SESSION_ID`、`PRTS_HARNESS_CONFIG_SCOPE`(`system|private`)。
+- `AGENT_HUB_HARNESS_DIR`:每 agent 专属目录。**transcript、identity 映射、缓存必须写这里**,不许写插件代码旁。
+- `AGENT_HUB_RUNTIME_COMMAND`:manifest `runtime.command` 解析成绝对路径后的 JSON argv。**插件不自己找运行时**——没有"系统全局安装"可回退,自己去找就把 pin 变成注释而不是事实。
+- `AGENT_HUB_INSTALLED_EXTENSIONS_DIR`:hub 已为这个 harness 装好的扩展。装哪些由**该插件 manifest 的 `extensions` 声明**决定,内容取自该插件自己的 `extensions/<id>/`(hub 不认任何 harness 名字);adapter 只负责按各自 harness 的布局摆好。
+- `AGENT_HUB_PRESETS_DIR`:仅当该插件目录里有 `presets/` 时才有此变量;它是这个插件列给 `presets` 的预设定义目录。没有就是不传——不是传一个空目录。
+- `AGENT_HUB_PRESETS_DIR`、`AGENT_HUB_CWD`、`AGENT_HUB_ADDITIONAL_DIRS`(JSON)、`AGENT_HUB_SESSION_ID`、`PRTS_HARNESS_CONFIG_SCOPE`(`system|private`)。
 - 插件目录只读;harness 的安装位置由 manifest `runtime` 声明。
 
 ## 当前修订：会话内切换 core provider
@@ -132,7 +132,7 @@ harness 身份仍不能通过该操作改变。操作进行中不接纳新 turn�
 | 数据 | 归属 | 存储 |
 |---|---|---|
 | 项目/agent/harness identity/session 元数据/opaque ref | 壳 | domain store |
-| **transcript + ID 映射(历史真相源)** | **adapter** | `PRTS_AGENT_DATA_DIR`(自持久化,跨 resume 稳定) |
+| **transcript + ID 映射(历史真相源)** | **adapter** | `AGENT_HUB_HARNESS_DIR`(自持久化,跨 resume 稳定) |
 | 连接器/skills 定义与启停 | 壳 | store;启用集经 `config/set` 推送 |
 | 凭据(hub 托管) | **壳 OS keychain**(keyring crate) | 经 `credentials/grant` 内存注入 adapter;adapter 只写引用,**禁明文落盘** |
 | 凭据(harness 自生,如 codex OAuth) | harness 自己的存储 | 只读使用,不回写不拷贝不显示 |
