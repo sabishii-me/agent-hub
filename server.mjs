@@ -24,11 +24,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
 const PLUGINS_DIR =
   process.env.PRTS_PLUGINS_DIR || path.resolve(HERE, 'plugins');
-// Harness-side extensions shipped here (installed into a workspace when needed)
-// and the preset definitions that travel with them. Adapters read these paths.
-const HARNESS_EXT_DIR =
-  process.env.PRTS_EXTENSIONS_DIR || path.resolve(HERE, 'harness-extensions');
-const PRESETS_DIR = path.join(HARNESS_EXT_DIR, 'agent-presets', 'presets');
+// Everything harness-specific lives under that one root, inside the plugin that owns
+// it: `<plugin>/extensions/<id>/` is an extension the plugin's manifest declares, and
+// `<plugin>/presets/` is the preset definitions that plugin lists. The hub is given
+// the root and reads what a manifest declares; it knows no harness by name.
+const pluginDir = (id) => path.join(PLUGINS_DIR, id);
+const pluginExtensionsDir = (id) => path.join(pluginDir(id), 'extensions');
+const pluginPresetsDir = (id) => path.join(pluginDir(id), 'presets');
 // One hub per data dir: the endpoint file is a single slot, and the hub OWNS it.
 // A file left behind by a hub that was killed is stale by definition (its token is
 // dead), so it is removed BEFORE the port is bound: from then on, the file's
@@ -144,7 +146,20 @@ const token = crypto.randomBytes(32).toString('hex');
 // it — an adapter never decides what to install, and nothing about installation
 // is hardcoded in one.
 // ---------------------------------------------------------------------------
-const EXTENSIONS_DIR = path.join(HERE, 'harness-extensions');
+// A plugin that lists presets keeps them in its own directory; a harness that has
+// none is not handed a path at all, rather than an empty directory that would read
+// as "this harness has no presets".
+function presetsArgv(id) {
+  const dir = pluginPresetsDir(id);
+  return fs.existsSync(dir) ? dir : null;
+}
+
+// The plugins present on disk: a directory under the plugins root that carries a
+// manifest. Nothing here knows a harness by name.
+function installedPlugins() {
+  if (!fs.existsSync(PLUGINS_DIR)) return [];
+  return fs.readdirSync(PLUGINS_DIR).filter((d) => manifestOf(d)).sort();
+}
 
 function manifestOf(id) {
   const mf = path.join(PLUGINS_DIR, id, 'manifest.json');
@@ -200,11 +215,14 @@ function manifestFault(id) {
 function loadHarnessRows() { return readStateJson(HARNESSES_FILE, []); }
 function persistHarnessRows(rows) { writeJson(HARNESSES_FILE, rows); }
 
-// The extensions the hub can install: one directory each.
-function availableExtensions() {
-  if (!fs.existsSync(EXTENSIONS_DIR)) return [];
-  return fs.readdirSync(EXTENSIONS_DIR)
-    .filter((n) => { try { return fs.statSync(path.join(EXTENSIONS_DIR, n)).isDirectory(); } catch { return false; } })
+// The extensions a plugin can install: the directories inside its own
+// `extensions/` folder. Which of them it wants is the manifest's `extensions` list,
+// so a plugin ships its extensions and the hub installs what it is told to install.
+function availableExtensions(id) {
+  const dir = pluginExtensionsDir(id);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter((n) => { try { return fs.statSync(path.join(dir, n)).isDirectory(); } catch { return false; } })
     .sort();
 }
 
@@ -216,10 +234,7 @@ function availableExtensions() {
 function reconcileHarnesses() {
   const rows = loadHarnessRows();
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const available = availableExtensions();
-  const onDisk = fs.existsSync(PLUGINS_DIR)
-    ? fs.readdirSync(PLUGINS_DIR).filter((d) => manifestOf(d))
-    : [];
+  const onDisk = installedPlugins();
   let changed = false;
   // one-time carry-over from the old shape (a bare array of disabled ids)
   const legacy = readJson(LEGACY_DISABLED, null);
@@ -236,7 +251,7 @@ function reconcileHarnesses() {
       id,
       enabled: !legacyDisabled.has(id),
       // what the plugin ships by default; the hub may change it afterwards
-      extensions: Array.isArray(m.extensions) ? m.extensions.filter((e) => available.includes(e)) : [],
+      extensions: Array.isArray(m.extensions) ? m.extensions.filter((e) => availableExtensions(id).includes(e)) : [],
       // null = every skill the hub holds; an array = exactly those
       skills: null,
       registeredAt: now,
@@ -320,7 +335,7 @@ function updateHarness(id, patch, res) {
     if (!Array.isArray(patch.extensions) || patch.extensions.some((e) => typeof e !== 'string')) {
       if (res) return fail(res, 400, 'validation_failed', 'extensions must be an array of names');
     }
-    const available = availableExtensions();
+    const available = availableExtensions(id);
     const unknown = patch.extensions.filter((e) => !available.includes(e));
     if (unknown.length) {
       if (res) return fail(res, 400, 'validation_failed', `unknown extension(s): ${unknown.join(', ')} (available: ${available.join(', ') || 'none'})`);
@@ -418,7 +433,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
     windowsHide: true,
     cwd: dir,
     // (inherit the terminal's own login/upstream). private = isolated home.
-    env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { PRTS_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), PRTS_SESSION_ID: sid, PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, PRTS_PRESETS_DIR: PRESETS_DIR, ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
+    env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { PRTS_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), PRTS_SESSION_ID: sid, PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { PRTS_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
     // stderr is CAPTURED as well as echoed: when an adapter dies before it can
     // answer, its own last words are the only useful part of the error, and a
     // caller who forgot to materialise the runtime should be told that instead of
@@ -857,8 +872,12 @@ const ROUTES = [
   // not in an adapter.
   { method: 'GET', path: '/v1/hub/harnesses', handler: ({ res }) =>
     json(res, 200, {
-      harnesses: reconcileHarnesses().filter((r) => !r.missing).map(harnessValue),
-      availableExtensions: availableExtensions(),
+      harnesses: reconcileHarnesses().filter((r) => !r.missing).map((r) => ({ ...harnessValue(r), availableExtensions: availableExtensions(r.id) })),
+      // kept as the union of ids any installed plugin ships: the field means the same
+      // thing it always did (what the hub could install from), while each harness row
+      // above is authoritative for that harness — an id two plugins both ship is two
+      // different directories, and only the harness's own list says which one is meant.
+      availableExtensions: [...new Set(reconcileHarnesses().filter((r) => !r.missing).flatMap((r) => availableExtensions(r.id)))].sort(),
     }) },
   { method: 'PATCH', path: '/v1/hub/harnesses/{id}', handler: ({ res, params, body }) =>
     body().then((b) => updateHarness(params.id, b, res))
@@ -1477,7 +1496,7 @@ function configRpc(harnessId, method, params) {
     const proc = spawn(cmd, args, {
     windowsHide: true,
       cwd: dir,
-      env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: process.cwd(), PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, PRTS_PRESETS_DIR: PRESETS_DIR, ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
+      env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: process.cwd(), PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { PRTS_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let buf = '';
@@ -1838,10 +1857,10 @@ function installExtensions(harnessId) {
   fs.mkdirSync(dir, { recursive: true });
   const row = harnessRow(harnessId);
   const wanted = row && Array.isArray(row.extensions) ? row.extensions : [];
-  const available = availableExtensions();
+  const available = availableExtensions(harnessId);
   const installed = [];
   for (const id of wanted.filter((e) => available.includes(e))) {
-    copyTree(path.join(EXTENSIONS_DIR, id), path.join(dir, id));
+    copyTree(path.join(pluginExtensionsDir(harnessId), id), path.join(dir, id));
     installed.push(id);
   }
   return { dir, installed };
@@ -3030,7 +3049,11 @@ server.listen(0, '127.0.0.1', () => {
   // process and this hub. On Windows the mode is a no-op and %LOCALAPPDATA% is
   // already per-user.
   writeJson(ENDPOINT, { port: server.address().port, token, pid: process.pid, protocol: PROTOCOL, buildId: BUILD_ID, startedAt: STARTED_AT }, 0o600);
+  const ids = installedPlugins();
   process.stdout.write(`agent-hub listening 127.0.0.1:${server.address().port}\n`);
+  process.stdout.write(ids.length
+    ? `plugins: ${ids.length} from ${PLUGINS_DIR} (${ids.join(', ')})\n`
+    : `plugins: none found in ${PLUGINS_DIR} — this hub serves the contract and no harness. Point PRTS_PLUGINS_DIR at a directory of plugin directories (each carrying a manifest.json) and start it again.\n`);
 });
 const bye = () => { fs.rmSync(ENDPOINT, { force: true }); process.exit(0); };
 process.on('SIGTERM', bye);

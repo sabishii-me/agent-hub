@@ -1,3 +1,0 @@
-name: Heavy review
-description: The full coding agent, but every tool call asks before it runs.
-order: 90

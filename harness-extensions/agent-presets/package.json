@@ -1,6 +1,0 @@
-{
-  "name": "agent-presets",
-  "version": "0.0.1",
-  "private": true,
-  "pi": { "extensions": ["./index.ts"] }
-}

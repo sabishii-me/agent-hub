@@ -16,14 +16,14 @@
 
 ## 1. 插件发现与清单
 
-- 位置:`plugins/<id>/manifest.json`(插件即目录,目录名就是 id)。当前三家:pi、jouzu、deepseek。
+- 位置:`<plugins dir>/<id>/manifest.json`(插件即目录,目录名就是 id)。plugins dir 由跑 hub 的人指定(`PRTS_PLUGINS_DIR`,默认本仓库内的 `plugins/`,那里是空的:本仓库不随附任何 harness,每个 harness 在自己的仓库里)。下面这份清单只是**格式示例**,不是 hub 知道的 harness 名单。
 ```json
 { "id": "pi", "protocol": 0, "command": ["node", "pi-adapter.cjs"],
   "runtime": { "package": "@earendil-works/pi-coding-agent", "version": "0.85.1", "command": ["node", "runtime/dist/cli.js"] },
   "extensions": ["agent-presets", "plan"], "capabilities": ["models", "presets", "plan", "review"] }
 ```
 - `id` 必须等于插件目录名;`protocol` 必须等于本 hub 讲的 adapter 协议版本(不等=拒绝装载);`command` argv 相对插件目录执行。
-- **`runtime` 拥有 harness 的版本**——没有单独的 `pin`:一个事实写在两个字段里,总有一天会自相矛盾,而这个已经发生过。`scripts/prepare-runtimes.mjs` 按 `runtime.package`+`runtime.version` 物化运行时,hub 把 `runtime.command` 解析成绝对 argv 交给适配器(`PRTS_RUNTIME_COMMAND`)。
+- **`runtime` 拥有 harness 的版本**——没有单独的 `pin`:一个事实写在两个字段里,总有一天会自相矛盾,而这个已经发生过。`scripts/prepare-runtimes.mjs` 按 `runtime.package`+`runtime.version` 物化运行时(hub 侧脚本,对给它的 plugins 目录通用:不认 harness 名字、不假定几家),hub 把 `runtime.command` 解析成绝对 argv 交给适配器(`PRTS_RUNTIME_COMMAND`)。
 - 字段全集与逐字段含义见 `../contract/adapter-v1.json` 的 `manifest`(required/optional/fields)。
 - `capabilities`(可选,字符串数组)= **真实 harness 局限**,合法值当前仅:`models`(harness 有可枚举模型目录)、**`providers`(配置面:§6 全部方法)**、`connectors`、`skills`(能消费对应配置)。`providerStatus` 废弃,并入 `providers`。注意:能力位声明的是"会诚实回答",不是"目录非空"——未接 provider 时 `models/list` 返回空数组+`failures` 是合法状态。
 - 装载 gate:`protocol` 相等 **且** 该 adapter 通过 `adapter_conformance` 套件核心用例。未通过=不出现在 agent 列表。
@@ -71,7 +71,8 @@
 
 - `PRTS_AGENT_DATA_DIR`:每 agent 专属目录。**transcript、identity 映射、缓存必须写这里**,不许写插件代码旁。
 - `PRTS_RUNTIME_COMMAND`:manifest `runtime.command` 解析成绝对路径后的 JSON argv。**插件不自己找运行时**——没有"系统全局安装"可回退,自己去找就把 pin 变成注释而不是事实。
-- `PRTS_INSTALLED_EXTENSIONS_DIR`:hub 已为这个 harness 装好的扩展(装什么由 hub 的注册表决定,adapter 只负责按各自 harness 的布局摆好)。
+- `PRTS_INSTALLED_EXTENSIONS_DIR`:hub 已为这个 harness 装好的扩展。装哪些由**该插件 manifest 的 `extensions` 声明**决定,内容取自该插件自己的 `extensions/<id>/`(hub 不认任何 harness 名字);adapter 只负责按各自 harness 的布局摆好。
+- `PRTS_PRESETS_DIR`:仅当该插件目录里有 `presets/` 时才有此变量;它是这个插件列给 `presets` 的预设定义目录。没有就是不传——不是传一个空目录。
 - `PRTS_PRESETS_DIR`、`PRTS_CWD`、`PRTS_ADDITIONAL_DIRS`(JSON)、`PRTS_SESSION_ID`、`PRTS_HARNESS_CONFIG_SCOPE`(`system|private`)。
 - 插件目录只读;harness 的安装位置由 manifest `runtime` 声明。
 

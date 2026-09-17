@@ -1371,7 +1371,7 @@
         "tags": [
           "hub"
         ],
-        "description": "the hub's harness registry. The hub manages harnesses, not just lists them: for each one it holds whether it is enabled and which extensions and skills are installed for it. A plugin present under plugins/ is registered on first sight, carrying the extensions its manifest ships; a plugin that is gone keeps its row marked missing. `availableExtensions` is the catalogue the hub can install from. Extensions are installed BY the hub: before a harness runs, the hub writes that harness's selected extension directories into its data dir, and the adapter places them where its harness reads them.",
+        "description": "the hub's harness registry. The hub manages harnesses, not just lists them: for each one it holds whether it is enabled and which extensions and skills are installed for it. A plugin present under the plugins directory is registered on first sight, carrying the extensions its manifest declares; a plugin that is gone keeps its row marked missing. Each harness row's `availableExtensions` is the catalogue THAT plugin ships (its own `extensions/` directories, and the only extensions that harness may be given); the top-level `availableExtensions` is the union of ids across installed plugins. Extensions are installed BY the hub: before a harness runs, the hub writes that harness's selected extension directories into its data dir, and the adapter places them where its harness reads them.",
         "parameters": [],
         "responses": {
           "200": {

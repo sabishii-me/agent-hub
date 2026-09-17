@@ -8,7 +8,8 @@ what it does not, [CLIENT.md](CLIENT.md) is how a client connects.
 
 ```
 node -v                                 # 22+ (developed on 24)
-node scripts/prepare-runtimes.mjs       # installs the pinned harness releases (network, once)
+export PRTS_PLUGINS_DIR=<dir of harness plugin checkouts>   # the hub ships no harness
+node scripts/prepare-runtimes.mjs       # installs what each plugin's manifest pins (network, once)
 node server.mjs                         # prints "agent-hub listening 127.0.0.1:<port>"
 
 # the hub prints its port; hub-connect turns it into shell variables
@@ -42,7 +43,7 @@ observed facts are in the commit that shipped it. There is no test suite, on pur
 | the hub | `server.mjs` — one process, 53 routes, 17 stream events, no build step, loopback only, one hub per data dir |
 | the contract | `contract/v1.json` (authority) + `contract/errors.json` (status + retryable) + `contract/adapter-v1.json` (stdio protocol) + `contract/openapi.json` (generated) |
 | boot self-check | the hub refuses to start if its routes/events/error codes/OpenAPI/manifests disagree with the contract, and prints the differences |
-| the harnesses | `plugins/{pi,jouzu,deepseek}` — one plugin per harness: manifest (runtime pin, capabilities, extensions) + adapter (v1 JSON-RPC over stdio) |
+| the harnesses | NOT in this repository: one harness = one plugin = one directory + manifest, each in its own repo, composed by a deployment into `PRTS_PLUGINS_DIR` (`<id>/manifest.json` + `<id>-adapter.cjs` + its own `extensions/` and `presets/`) |
 | sessions | create/read/patch/delete/close/reopen, per-knob `applied*` proofs, isolated harness homes, refusals (`session_busy`, `session_closed`, `needs_repair`, `unknown_session`, …) |
 | turns | SSE stream with 17 events, cancel, repair, resume after a hub restart, native message id required |
 | approvals and questions | both answered through `/v1`; a question is not an approval; deadline-denied dialogs are auto-cancelled rather than left hanging |
@@ -53,7 +54,7 @@ observed facts are in the commit that shipped it. There is no test suite, on pur
 | rename | pushed into the harness; `title` vs `appliedTitle`; a name the harness gives itself is reported back |
 | skills | installed by the hub into the harness's own directory, pointed at by the adapter, read back per session (`known:false` when a harness does not answer, never an empty list) |
 | providers | one file per provider, token write-only in the secret store, declarations (modalities, window, thinking levels, cost), legacy single-file migration |
-| model availability | for a hub-managed provider, the HUB answers (it holds the token): configured ⇒ available, on all three harnesses |
+| model availability | for a hub-managed provider, the HUB answers (it holds the token): configured ⇒ available, on every harness (one rule, per plugin — not per harness) |
 | isolation | no config scope; harness homes live under the data dir; the user's own `~/.agents/skills` and dsh credentials are neither read nor written (a marker skill in the user's directory never appeared in a session) |
 
 ## Open ends (recorded, not forgotten)
@@ -97,10 +98,10 @@ observed facts are in the commit that shipped it. There is no test suite, on pur
 server.mjs              the hub (sessions, routes, SSE, installs, boot self-check)
 cli.mjs, secret-store.mjs, build-id.mjs, debate.mjs
 contract/               v1.json · errors.json · adapter-v1.json · openapi.json
-plugins/<id>/           manifest.json (runtime pin, capabilities) + <id>-adapter.cjs
-harness-extensions/     extensions shipped here (plan, presets, approval baseline)
 scripts/                emit-openapi.mjs · hub-connect.mjs · prepare-runtimes.mjs
-docs/                   FEATURES.md · CLIENT.md · STATE.md (this file)
+docs/                   FEATURES.md · CLIENT.md · PROTOCOL.md · STATE.md (this file)
+plugins/                empty here: harness plugins live in their own repositories and a
+                        deployment points PRTS_PLUGINS_DIR at the directory holding them
 ```
 
 `<PRTS_DATA_DIR>` (default `~/.prts-core`) holds everything the hub owns at

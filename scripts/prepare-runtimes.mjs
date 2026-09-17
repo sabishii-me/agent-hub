@@ -10,9 +10,14 @@
 // The pin the manifest states is the only version this script will install, so
 // "which version runs" is answered by the manifest and nothing else.
 //
+// The harnesses themselves live in their own repositories, so the plugins directory
+// is composed by whoever runs the hub: this script prepares whatever it finds there
+// and knows no harness by name.
+//
 // Usage:
-//   node scripts/prepare-runtimes.mjs            # all plugins
-//   node scripts/prepare-runtimes.mjs pi jouzu   # named plugins only
+//   node scripts/prepare-runtimes.mjs                  # all plugins in PRTS_PLUGINS_DIR
+//   node scripts/prepare-runtimes.mjs <id> [<id>...]   # named plugins only
+//   node scripts/prepare-runtimes.mjs --plugins <dir>  # a different plugins directory
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,7 +25,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PLUGINS_DIR = path.join(HERE, '..', 'plugins');
+let PLUGINS_DIR = process.env.PRTS_PLUGINS_DIR || path.join(HERE, '..', 'plugins');
 
 function readManifest(id) {
   const file = path.join(PLUGINS_DIR, id, 'manifest.json');
@@ -29,6 +34,7 @@ function readManifest(id) {
 }
 
 function pluginIds() {
+  if (!fs.existsSync(PLUGINS_DIR)) return [];
   return fs.readdirSync(PLUGINS_DIR)
     .filter((d) => fs.existsSync(path.join(PLUGINS_DIR, d, 'manifest.json')))
     .sort();
@@ -101,7 +107,17 @@ export function preparePlugin(id) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('prepare-runtimes.mjs')) {
-  const named = process.argv.slice(2);
-  const ids = named.length ? named : pluginIds();
+  const argv = process.argv.slice(2);
+  const flag = argv.indexOf('--plugins');
+  if (flag >= 0) {
+    PLUGINS_DIR = path.resolve(argv[flag + 1]);
+    argv.splice(flag, 2);
+  }
+  console.log(`plugins directory: ${PLUGINS_DIR}`);
+  const ids = argv.length ? argv : pluginIds();
+  if (!ids.length) {
+    console.log('no plugin directories with a manifest.json found — nothing to prepare.');
+    console.log('point PRTS_PLUGINS_DIR (or --plugins <dir>) at the directory that holds them.');
+  }
   for (const id of ids) preparePlugin(id);
 }

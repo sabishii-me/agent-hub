@@ -8,9 +8,13 @@ It was extracted from the PRTS monorepo, where a Rust agent-bus shell was retire
 its favour. That repository is not a dependency: nothing here imports it, and this
 directory runs on its own.
 
-Everything here travels together: the contract and the OpenAPI projection are read
-from this directory at start, each plugin's runtime is materialised under its own
-directory, and nothing outside is imported — so this whole directory can move to a
+Everything HERE travels together: the contract and the OpenAPI projection are read
+from this directory at start, and nothing outside is imported. The **harnesses are not
+here**: one harness = one plugin = one directory + manifest, and each plugin is its own
+repository. A deployment composes them into a plugins directory and hands it to the hub
+(`PRTS_PLUGINS_DIR`), so adding or removing a harness is a deployment decision, not a
+change to this repository. A hub started without one serves the contract and no
+harness, and says so on stdout — so this whole directory can move to a
 repository of its own without a code change (verified by running it from an unrelated
 working directory).
 
@@ -28,16 +32,22 @@ covered.
 ## Fresh checkout (a new machine)
 
 ```
-node -v                                # node 22+ (developed on 24); nothing else is required
-node scripts/prepare-runtimes.mjs      # installs each plugin's pinned harness release (network)
-node server.mjs                        # prints: agent-hub listening 127.0.0.1:<port>
+node -v                                                # node 22+ (developed on 24); nothing else is required
+export PRTS_PLUGINS_DIR=<the directory holding your harness plugins>
+node scripts/prepare-runtimes.mjs                      # materialises each plugin's pinned harness release (network)
+node server.mjs                                        # prints: agent-hub listening 127.0.0.1:<port>
 ```
-The harness runtimes are **not committed** (they are official releases, a build
-product): `prepare-runtimes.mjs` materialises exactly the version each plugin's
-manifest pins — `@earendil-works/pi-coding-agent@0.85.1`, `jouzu@0.1.10`,
-`@deepseek-ai/dsh@0.1.0-rc.7` — under `plugins/<id>/runtime/`, which the manifest's
-command is relative to. A fresh machine therefore needs network once; after that the
-hub has no network dependency of its own.
+```
+node server.mjs                                        # ...or with no plugins at all: contract only
+```
+
+A **plugin** is a directory under that root carrying a `manifest.json`; the harnesses
+live in their own repositories, and this repository contains none. A harness runtime is
+**not committed** anywhere (it is an official release, a build product): the script
+installs exactly the version each plugin's manifest pins under `<plugin>/runtime/`,
+which the manifest's command is relative to, and `--plugins <dir>` prepares a directory
+other than `PRTS_PLUGINS_DIR`. A fresh machine therefore needs network once per plugin;
+after that the hub has no network dependency of its own.
 
 State (sessions, providers, secrets, per-harness homes) lives in `PRTS_DATA_DIR`
 (default `~/.prts-core`) and is **not** in the repo. Provider tokens live in the OS
@@ -59,8 +69,7 @@ Every route needs `Authorization: Bearer <token>` except `GET /v1/harnesses`.
 | Env | Meaning |
 |---|---|
 | `PRTS_DATA_DIR` | state dir (default `~/.prts-core`): endpoint file, sessions, secrets, per-harness homes |
-| `PRTS_PLUGINS_DIR` | adapter dir (default `apps/harness-hub/plugins`) |
-| `PRTS_EXTENSIONS_DIR` | shipped extensions (default `apps/harness-hub/harness-extensions`) |
+| `PRTS_PLUGINS_DIR` | the directory holding harness plugins (default `<this directory>/plugins`, which ships empty — the hub contains no harness) |
 | `PRTS_APPROVAL_TIMEOUT_MS` | approval deadline (default 120000) |
 | `PRTS_CANCEL_TIMEOUT_MS` | cancel deadline (default 15000) |
 | `PRTS_TURN_TIMEOUT_MS` | turn deadline (default 0 = unbounded) |
@@ -185,8 +194,9 @@ the option exists.
 
 ## Harness / adapter model
 
-- A **harness** is `plugins/<id>/` = `manifest.json` + a `*-adapter.cjs`. Shipped:
-  `deepseek`, `pi`, `jouzu`.
+- A **harness** is `<plugins dir>/<id>/` = `manifest.json` + a `*-adapter.cjs`, and the
+  directory name is the harness id. Each one is a repository of its own, pinned by the
+  deployment that composes the plugins directory; this hub ships none.
 - An **adapter** speaks line-delimited JSON-RPC over stdio. Core spawns **one adapter
   process per session** (v1 topology). **How the adapter reaches its harness is its own
   business**: pi/jouzu start a private child; deepseek attaches to a shared `dsh web`
@@ -196,11 +206,13 @@ the option exists.
   (`models`, `providers`, `presets`, `plan`, `review`) and the `agent-v1` protocol.
   **Nothing may special-case a harness by id.**
 - A harness declares the **runtime it drives** (`manifest.json#runtime`:
-  `package`, `version`, `command`) and the **extensions it ships**
-  (`manifest.json#extensions`). The runtime is an official release installed into
-  `<plugin>/runtime/` by `scripts/prepare-runtimes.mjs` (gitignored — it is a build
-  product, not source); the hub resolves the command against the plugin directory and
-  hands the argv to the adapter, which looks nothing up.
+  `package`, `version`, `command`), the **extensions it installs**
+  (`manifest.json#extensions`, resolving to the directories in that plugin's own
+  `extensions/`) and the **presets it lists** (`<plugin>/presets/`, when it has any).
+  The runtime is an official release installed into `<plugin>/runtime/` by
+  `scripts/prepare-runtimes.mjs` (gitignored — it is a build product, not source); the
+  hub resolves the command against the plugin directory and hands the argv to the
+  adapter, which looks nothing up.
 
 ### The hub manages harnesses; the hub installs
 
@@ -215,12 +227,12 @@ from, so the source session's log, ref and live process are untouched — pi's f
 rebinds whichever process runs it, which is why it is never run on the source's
 own process. The anchor is a completed turn because that is the only cut every
 harness makes exactly (pi forks *before* a message, dsh snaps to the end of a
-turn), and `GET /v1/sessions/{id}/turns` is therefore the fork menu. All three
-shipped harnesses declare the `fork` capability; a harness that cannot fork
-answers `501 unsupported` rather than being handed an empty conversation.
+turn), and `GET /v1/sessions/{id}/turns` is therefore the fork menu. A harness that cannot fork
+answers `501 unsupported` rather than being handed an empty conversation — the
+capability is declared by the plugin, never assumed from its id.
 
 **Installation is the hub's job, so adding an extension to a harness is a registry
-change, not a code change in three adapters.** Extensions are the first thing the
+change, not a code change in every adapter.** Extensions are the first thing the
 hub installs, not the only one: a harness's skills, and later its MCP servers and
 whatever else it carries, belong in the same registry and are installed the same
 way — one row entry and one installer each, added when that thing is actually
