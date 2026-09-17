@@ -48,11 +48,16 @@
                     "next_cursor": {
                       "type": "null",
                       "description": "reserved seat: no cursor is implemented, this is always null"
+                    },
+                    "note": {
+                      "type": "string",
+                      "description": "present only when the list is EMPTY: where the hub searched for plugins, and the two ways to give it one. An empty catalogue with no reason is indistinguishable from a broken hub"
                     }
                   },
                   "required": [
                     "harnesses",
-                    "next_cursor"
+                    "next_cursor",
+                    "note"
                   ]
                 }
               }
@@ -7750,7 +7755,7 @@
                     },
                     "roots": {
                       "type": "object",
-                      "description": "{given, hub}: the plugins directory this hub was handed (null when it was not given one) and the hub's own root inside its data dir"
+                      "description": "{given, hub, searched}: `given` is PRTS_PLUGINS_DIR when it was set (null otherwise), `hub` is the hub's OWN writable root (<DATA_DIR>/plugins, where POST installs), and `searched` is every root the hub looked in, in order"
                     }
                   },
                   "required": [

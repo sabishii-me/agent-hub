@@ -79,7 +79,7 @@ Every route needs `Authorization: Bearer <token>` except `GET /v1/harnesses`.
 | Env | Meaning |
 |---|---|
 | `PRTS_DATA_DIR` | state dir (default `~/.prts-core`): endpoint file, sessions, secrets, per-harness homes |
-| `PRTS_PLUGINS_DIR` | a directory of harness plugins the hub may READ (default `<this directory>/plugins`, which ships empty). The hub's own root, where `POST /v1/hub/plugins` installs, is always `<PRTS_DATA_DIR>/plugins` |
+| `PRTS_PLUGINS_DIR` | a directory of harness plugins the hub may READ. Not required: the hub searches the roots listed under [Installing a harness](#installing-a-harness), and prints them at startup. The root it WRITES to is always `<PRTS_DATA_DIR>/plugins` |
 | `PRTS_APPROVAL_TIMEOUT_MS` | approval deadline (default 120000) |
 | `PRTS_CANCEL_TIMEOUT_MS` | cancel deadline (default 15000) |
 | `PRTS_TURN_TIMEOUT_MS` | turn deadline (default 0 = unbounded) |
@@ -104,9 +104,23 @@ and the hub verifies the declared command exists afterwards. A plugin that bring
 runtime declares no `runtime` capability and answers `501 unsupported`, which is the
 truth about it rather than a guess.
 
-The hub never writes into a plugins directory it was handed (`PRTS_PLUGINS_DIR`): that
-is somebody's checkout. Its own root is `<PRTS_DATA_DIR>/plugins`, and the same harness
-id in both roots is refused at startup rather than silently preferred.
+### Where a hub looks for plugins
+
+A hub that cannot find its harnesses is useless, so this is a search path, printed at
+every startup (with `(none)` on the roots that do not exist) — not one directory
+somebody has to remember to pass in:
+
+| # | root | notes |
+| --- | --- | --- |
+| 1 | `PRTS_PLUGINS_DIR` | explicit; **read-only** to the hub |
+| 2 | `<this directory>/plugins` | a hub that carries its own plugins |
+| 3 | `<deployment>/plugins` | used when this hub sits at `<deployment>/apps/<name>` — i.e. when it is checked out as part of a deployment that composes plugins |
+| 4 | `<PRTS_DATA_DIR>/plugins` | the hub's **own** root: `POST /v1/hub/plugins` installs here and nowhere else |
+
+A directory a deployment put on that path is somebody else's tree: the hub only reads it.
+The same harness id in two roots is a conflict refused at startup, not a silent
+preference. And an empty `GET /v1/harnesses` says where it looked (`note`), because an
+empty catalogue with no reason is indistinguishable from a broken hub.
 
 ## Surface
 

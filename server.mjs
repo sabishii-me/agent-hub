@@ -22,15 +22,27 @@ import { storeSecret, getSecret, deleteSecret, listSecretNames } from './secret-
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
+// WHERE PLUGINS ARE LOOKED FOR. A hub that cannot find its harnesses is useless, so
+// the search is a documented path rather than one directory somebody has to remember
+// to pass in. In order, and every root is printed at startup:
+//
+//   1. PRTS_PLUGINS_DIR       — explicit, and read-only to the hub
+//   2. <hub>/plugins          — a hub that carries its own (the original default)
+//   3. <deployment>/plugins   — when the hub is checked out at <deployment>/apps/<name>,
+//                               i.e. as part of a deployment that composes plugins
+//   4. <DATA_DIR>/plugins     — the hub's OWN root, the only one it writes to
+//
+// `POST /v1/hub/plugins` installs into (4) and nowhere else: a directory a deployment
+// put on the path is somebody else's tree and the hub only reads it. The same harness
+// id in two roots is a conflict the hub refuses to start with, not a silent preference.
 const GIVEN_PLUGINS_DIR = process.env.PRTS_PLUGINS_DIR || null;
 const PLUGINS_DIR = GIVEN_PLUGINS_DIR || path.resolve(HERE, 'plugins');
-// The hub's OWN plugins root, inside its data dir. `POST /v1/hub/plugins` installs
-// here and nowhere else: a directory a deployment handed the hub is somebody else's
-// tree and the hub only reads it. Both roots are scanned, and the same harness id in
-// both is a conflict the hub refuses to start with, not a silent preference.
 const HUB_PLUGINS_DIR = path.join(DATA_DIR, 'plugins');
 const PLUGINS_FILE = path.join(HUB_PLUGINS_DIR, 'installed.json');
-const pluginRoots = () => [...new Set([PLUGINS_DIR, HUB_PLUGINS_DIR])];
+// (3) only when this hub really sits inside a deployment: <deployment>/apps/<hub>
+const DEPLOYMENT_PLUGINS_DIR =
+  path.basename(path.dirname(HERE)) === 'apps' ? path.resolve(HERE, '..', '..', 'plugins') : null;
+const pluginRoots = () => [...new Set([GIVEN_PLUGINS_DIR, path.resolve(HERE, 'plugins'), DEPLOYMENT_PLUGINS_DIR, HUB_PLUGINS_DIR].filter(Boolean))];
 // Everything harness-specific lives under that root, inside the plugin that owns it:
 // `<plugin>/extensions/<id>/` is an extension the plugin's manifest declares, and
 // `<plugin>/presets/` is the preset definitions that plugin lists. The hub reads what
@@ -41,9 +53,16 @@ function pluginDir(id) {
   }
   return path.join(PLUGINS_DIR, id);
 }
+// which root a plugin was found in (the writable one is the hub's own)
+function pluginRootOf(id) {
+  for (const root of pluginRoots()) {
+    if (fs.existsSync(path.join(root, id, 'manifest.json'))) return root;
+  }
+  return null;
+}
 const pluginExtensionsDir = (id) => path.join(pluginDir(id), 'extensions');
 const pluginPresetsDir = (id) => path.join(pluginDir(id), 'presets');
-const pluginOrigin = (id) => (pluginDir(id).startsWith(HUB_PLUGINS_DIR + path.sep) ? 'hub' : 'deployment');
+const pluginOrigin = (id) => (pluginRootOf(id) === HUB_PLUGINS_DIR ? 'hub' : 'deployment');
 // One hub per data dir: the endpoint file is a single slot, and the hub OWNS it.
 // A file left behind by a hub that was killed is stale by definition (its token is
 // dead), so it is removed BEFORE the port is bound: from then on, the file's
@@ -874,8 +893,17 @@ function answerQuestion(qid, answers) {
 // must be declared before a placeholder that could swallow it (see providers).
 const ROUTES = [
   // discovery: which harnesses exist. Answers without a token.
-  { method: 'GET', path: '/v1/harnesses', auth: false, handler: ({ res }) =>
-    json(res, 200, { harnesses: listHarnesses(), next_cursor: null }) },
+  { method: 'GET', path: '/v1/harnesses', auth: false, handler: ({ res }) => {
+    const harnesses = listHarnesses();
+    if (harnesses.length) return json(res, 200, { harnesses, next_cursor: null });
+    // Nothing installed is a legitimate answer, but it is also the state a client
+    // cannot diagnose: say where the hub looked, so a UI can show that instead of
+    // "no engines" with no reason.
+    return json(res, 200, {
+      harnesses, next_cursor: null,
+      note: `no harness plugins found. searched: ${pluginRoots().join(' | ')} — install one (POST /v1/hub/plugins {source:{url}}) or point PRTS_PLUGINS_DIR at a directory of plugin directories.`,
+    });
+  } },
 
   // the surface itself, as data (this table, the event names, the contract)
   { method: 'GET', path: '/v1/hub/surface', handler: ({ res }) =>
@@ -922,7 +950,7 @@ const ROUTES = [
   // this hub (read-only to the hub) and the hub's own inside its data dir. The route
   // says which is which, because a client that installs has to know where it landed.
   { method: 'GET', path: '/v1/hub/plugins', handler: ({ res }) =>
-    json(res, 200, { plugins: installedPlugins().map(pluginValue), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR } }) },
+    json(res, 200, { plugins: installedPlugins().map(pluginValue), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR, searched: pluginRoots() } }) },
   { method: 'POST', path: '/v1/hub/plugins', handler: ({ res, body }) =>
     body().then((b) => installPlugin(b, res)).catch((e) => failError(res, e)) },
   { method: 'POST', path: '/v1/hub/plugins/{id}/prepare', handler: ({ res, params }) => {
@@ -3210,14 +3238,9 @@ function selfCheck() {
     for (const m of ADAPTER_REQUESTS) if (!declaredRequests.has(m)) problems.push(`the hub sends adapter request '${m}', which adapter-v1.json does not declare`);
     // Same id in both roots is a conflict, not a preference: the hub would have to
     // pick one, and "which adapter drives this harness" must never be a coin toss.
-    for (const root of pluginRoots()) {
-      if (!fs.existsSync(root)) continue;   // a hub with no plugins is a valid hub
-      for (const n of fs.readdirSync(root)) {
-        if (!fs.existsSync(path.join(root, n, 'manifest.json'))) continue;
-        if (PLUGINS_DIR !== HUB_PLUGINS_DIR && pluginDir(n) !== path.join(root, n)) {
-          problems.push(`plugin '${n}' exists in both roots (${pluginDir(n)} and ${path.join(root, n)}); one harness, one directory`);
-        }
-      }
+    for (const id of installedPlugins()) {
+      const found = pluginRoots().filter((root) => fs.existsSync(path.join(root, id, 'manifest.json')));
+      if (found.length > 1) problems.push(`plugin '${id}' is in ${found.length} roots (${found.join(' and ')}); one harness, one directory`);
     }
     for (const id of installedPlugins()) {
       const dir = pluginDir(id);
@@ -3266,7 +3289,7 @@ server.listen(0, '127.0.0.1', () => {
   const ids = installedPlugins();
   const roots = pluginRoots();
   process.stdout.write(`agent-hub listening 127.0.0.1:${server.address().port}\n`);
-  process.stdout.write(`plugin roots: ${roots.join(' | ')}\n`);
+  process.stdout.write(`plugin roots: ${roots.map((r) => `${r}${fs.existsSync(r) ? '' : ' (none)'}`).join(' | ')}\n`);
   process.stdout.write(ids.length
     ? `plugins: ${ids.length} (${ids.map((id) => `${id}:${pluginOrigin(id)}`).join(', ')})\n`
     : `plugins: none — this hub serves the contract and no harness. Install one (POST /v1/hub/plugins {source:{url}}), or point PRTS_PLUGINS_DIR at a directory of plugin directories.\n`);
