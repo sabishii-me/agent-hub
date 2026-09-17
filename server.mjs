@@ -419,11 +419,16 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
     cwd: dir,
     // (inherit the terminal's own login/upstream). private = isolated home.
     env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { PRTS_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), PRTS_SESSION_ID: sid, PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, PRTS_PRESETS_DIR: PRESETS_DIR, ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
-    stdio: ['pipe', 'pipe', 'inherit'],
+    // stderr is CAPTURED as well as echoed: when an adapter dies before it can
+    // answer, its own last words are the only useful part of the error, and a
+    // caller who forgot to materialise the runtime should be told that instead of
+    // reading `adapter exited code=2`.
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
 
   const conn = {
     proc,
+    tail: [],          // the last few lines the adapter said on stderr
     sid,
     harnessId,
     nextId: 1,
@@ -436,6 +441,15 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
   };
   adapters.set(connKey, conn);
 
+  proc.stderr.setEncoding('utf8');
+  proc.stderr.on('data', (d) => {
+    for (const line of String(d).split(NL)) {
+      if (!line.trim()) continue;
+      process.stderr.write(line + NL);
+      conn.tail.push(line.trim());
+      if (conn.tail.length > 6) conn.tail.shift();
+    }
+  });
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', (d) => {
     conn.buf += d;
@@ -453,7 +467,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
       emitSessionEvent(sid, 'turn.ended', { turn: s.activeTurn });
       // read-through truth: the adapter's transcript holds whatever persisted.
     }
-    for (const [, p] of conn.pending) { clearTimeout(p.timer); p.reject(new Error(`adapter exited code=${code}`)); }
+    for (const [, p] of conn.pending) { clearTimeout(p.timer); p.reject(new Error(`adapter exited code=${code}${conn.tail.length ? ` — it said: ${conn.tail[conn.tail.length - 1]}` : ''}`)); }
     conn.pending.clear();
     if (adapters.get(connKey) === conn) adapters.delete(connKey);
   });
