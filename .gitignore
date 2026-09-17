@@ -1,0 +1,10 @@
+# A plugin's runtime is an official release installed from its package
+# (manifest.runtime.package + .version), prepared by scripts/prepare-runtimes.mjs:
+# a build product, never committed.
+plugins/*/runtime/
+
+node_modules/
+build-id.json
+.vscode/
+.DS_Store
+*.log

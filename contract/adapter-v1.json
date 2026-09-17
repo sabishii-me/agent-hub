@@ -1,0 +1,447 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent hub <-> adapter contract (agent-bus protocol)",
+  "proseAuthority": "plugins/PROTOCOL.md",
+  "transport": "stdin/stdout, one JSON-RPC 2.0 message per LF-terminated UTF-8 line",
+  "version": 0,
+  "manifest": {
+    "file": "plugins/<id>/manifest.json — a plugin is a directory; the directory name is its id",
+    "required": [
+      "id",
+      "protocol",
+      "command"
+    ],
+    "optional": [
+      "runtime",
+      "extensions",
+      "capabilities",
+      "name",
+      "base",
+      "version",
+      "permissionModel",
+      "planMode",
+      "repair"
+    ],
+    "fields": {
+      "id": "must equal the plugin directory name; a manifest that claims another id is refused",
+      "protocol": "the adapter protocol this plugin speaks; must equal this file's version, or the hub refuses to start the adapter (harness_invalid)",
+      "command": "argv that starts the adapter; relative paths resolve against the plugin directory",
+      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives — there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. scripts/prepare-runtimes.mjs materialises the package at that version; the hub hands `command` (absolute) to the adapter as PRTS_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
+      "extensions": "harness-side extensions this plugin ships (registry defaults)",
+      "capabilities": "what the hub may ask this plugin for; every value has an entry in capabilitySurface, and declaring one binds the plugin to its methods",
+      "name": "display name for the harness; falls back to the id",
+      "base": "the adapter base id a consumer groups by; falls back to the id",
+      "version": "the harness version as the plugin declares it (not the runtime pin: see runtime.version)",
+      "permissionModel": "how the harness gates tools: native|extension|none — reported, never guessed",
+      "planMode": "how the harness carries plan mode; reported, never guessed",
+      "repair": "whether the harness can repair an orphaned tail; reported, never guessed"
+    },
+    "rule": "a field set that does not match this list is a contract test failure (tests/adapter-contract.mjs), not a warning",
+    "capabilityValues": [
+      "models",
+      "presets",
+      "tools",
+      "plan",
+      "review",
+      "approvals",
+      "providers",
+      "connectors",
+      "skills",
+      "connectionSchemes",
+      "fork",
+      "stats",
+      "compact",
+      "rename"
+    ]
+  },
+  "coreCompliance": {
+    "requests": [
+      {
+        "method": "session/start",
+        "params": [
+          "sid",
+          "resume?"
+        ],
+        "result": "ref"
+      },
+      {
+        "method": "config/set",
+        "params": [
+          "sid",
+          "config"
+        ],
+        "result": "{}",
+        "note": "config is the preset shape (v1 defs.preset: name/persona/tools/approval/sandbox/mcp/model/context) plus materialization blocks: connections [{id,name,scheme,endpoint,envName}] (enabled only; NO credential value — a connection's token reaches the adapter as an env var named envName, injected at process start, so it never lands in this payload or in conversation history). Skills are NOT in this payload: the hub installs them into a directory the adapter is pointed at (see capabilitySurface.skills), so there is one source of truth for what is installed. core never interprets these — the adapter translates to its native dialect (A-4). MUST be called before first prompt; may be re-sent mid-session; failure = run fails, never silent fallback"
+      },
+      {
+        "method": "presets/list",
+        "params": [],
+        "result": "harnessId, known, presets[]",
+        "note": "the roster a caller chooses a presetId from; opaque ids, whatever names the harness uses"
+      },
+      {
+        "method": "session/prompt",
+        "params": [
+          "sid",
+          "message",
+          "clientMessageId",
+          "images?"
+        ],
+        "result": "turn-ended"
+      },
+      {
+        "method": "session/abort",
+        "params": [
+          "sid"
+        ],
+        "result": null
+      },
+      {
+        "method": "session/fork",
+        "params": [
+          "sid",
+          "from",
+          "throughTurn?"
+        ],
+        "result": "{ ref }",
+        "note": "The hub spawns the CHILD's process and hands it where to branch from: `from` is the source session's native ref. This process opens the source only to fork it, then ADOPTS the result as its own session and answers with that ref — it is the child, not the source. The source session, its log and its live process are not touched. throughTurn is 1-based over the source's COMPLETED turns; absent = the whole conversation. The anchor is a turn because it is the only cut every harness makes exactly (pi forks before a message, so 'end with turn N' is the message that STARTS turn N+1, and the last turn is a copy; dsh snaps to the end of the turn containing its seq, and a seq past the log is a copy). A harness that cannot fork does not declare the `fork` capability and the hub answers `unsupported`.",
+        "rule": "never run on the source's own process: pi's fork rebinds whichever process executes it, so a source process would silently become a different conversation than the hub believes it serves (verified: the source file's hash and its live process are unaffected when another process forks)"
+      },
+      {
+        "method": "history/page",
+        "params": [
+          "sid",
+          "beforeId?",
+          "limit"
+        ],
+        "result": "messages[]"
+      },
+      {
+        "method": "session/stats",
+        "params": [
+          "sid"
+        ],
+        "result": "{ tokens?, cost?, context?, turns?, messages? }",
+        "note": "What the harness itself reports about this session: token totals (with cache and reasoning where it has them), cost, and context-window occupancy {tokens, window, percent}. A field the harness does not report is ABSENT — never zero, never a value computed against a window nobody declared. Read-only: it must not start, resume or change a turn."
+      },
+      {
+        "method": "session/compact",
+        "params": [
+          "sid",
+          "instructions?"
+        ],
+        "result": "{ compacted, reason?, tokensBefore?, tokensAfter?, summary?, usage?, detail? }",
+        "note": "Ask the harness to compact its own conversation. The numbers are the harness's: pi reports tokensBefore plus ITS OWN ESTIMATE of the rebuilt context (estimatedTokensAfter), and its usage for the summarization call; dsh reports the token count of the span it replaced (shadowedTokenCount) and its own context projection read right after the rewrite as tokensAfter — the same number GET /stats reports. A harness with nothing worth compacting answers compacted:false with its own words in detail ('Nothing to compact (session too small)' / 'No compactable history yet.') — that is not an error. A compaction that FAILED is an error (compact_failed)."
+      },
+      {
+        "method": "session/rename",
+        "params": [
+          "sid",
+          "title"
+        ],
+        "result": "{ title }",
+        "note": "Name the session in the harness itself, and answer with the title the harness ACCEPTED — not the one that was asked for. dsh normalizes and sanitises a title and refuses one that normalises to empty; pi appends a session_info entry, so its accepted name is read back from get_state. A title the harness did not accept is an error, never a hub-only rename that looks applied."
+      },
+      {
+        "method": "skills/list",
+        "params": [
+          "sid"
+        ],
+        "result": "{ skills: [{ name, description?, modelInvocable?, whenToUse? }] }",
+        "note": "What THIS harness actually has, read from the harness itself — pi/jouzu from get_commands (skill:<name> entries), dsh from its skill.list RPC. It is a READ-BACK, not an echo: dsh SILENTLY drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level bundle, and only the harness knows it did. A caller must be able to see 'installed: 4, the harness sees: 3'. The call can be slow the FIRST time on a harness that finishes its own startup lazily (jouzu measured 9s and 70s, then 24ms); the hub bounds it and reports known:false rather than an empty catalogue when it does not arrive."
+      }
+    ],
+    "events": [
+      {
+        "type": "turn_started"
+      },
+      {
+        "type": "text_delta",
+        "requires": "messageId"
+      },
+      {
+        "type": "reasoning_delta",
+        "requires": "messageId"
+      },
+      {
+        "type": "tool_started",
+        "id": "toolCallId"
+      },
+      {
+        "type": "tool_end",
+        "id": "toolCallId"
+      },
+      {
+        "type": "message_end",
+        "requires": [
+          "messageId",
+          "role",
+          "text"
+        ]
+      },
+      {
+        "type": "plan_changed",
+        "field": "plan: boolean",
+        "note": "the harness changed plan mode on its own (a model leaving plan when its plan is approved). The hub follows the harness: it records the flip and streams plan.changed, rather than believing its own last request"
+      },
+      {
+        "type": "turn_end",
+        "field": "state: ok|aborted|failed"
+      },
+      {
+        "type": "adapter_dialog_auto_cancelled",
+        "requires": "method",
+        "note": "the adapter cancelled a harness dialog nobody rendered, so the agent does not hang waiting for a window that is not there. The hub drops it deliberately (no consumer yet) — declared, so the vocabulary is complete and the drop is a decision on the record"
+      },
+      {
+        "type": "compaction_started",
+        "field": "reason?: string (the harness's own word: manual|threshold|overflow on pi; manual|auto on dsh)",
+        "note": "the harness began compacting, whether the hub asked or the harness decided (a full context compacts by itself mid-turn). Emitted so a UI can say what is happening instead of going quiet."
+      },
+      {
+        "type": "compaction_ended",
+        "field": "reason?, tokensBefore?, tokensAfter?, summary?, aborted?, willRetry?",
+        "note": "the harness finished compacting. Sent for EVERY compaction the adapter observes, including the automatic ones nobody asked for — the same numbers the request would return."
+      },
+      {
+        "type": "title_changed",
+        "field": "title: string|null",
+        "note": "the harness's session title changed without the hub asking — dsh titles a session by itself from the first user message (its title service is part of its own composition), and a harness UI can rename one. The hub follows the harness: it records what the harness now holds and streams session.renamed, exactly as it does for plan mode"
+      }
+    ],
+    "approval": {
+      "method": "approval_need",
+      "reply": [
+        "approved",
+        "reason"
+      ],
+      "timeoutSeconds": 120,
+      "timeoutBehaviour": "fail-closed approved:false"
+    },
+    "question": {
+      "method": "question_need",
+      "reply": [
+        "answers"
+      ],
+      "timeoutSeconds": 300,
+      "timeoutBehaviour": "cancel the waiting question; the harness unblocks and the model is told no answer came",
+      "note": "Separate from approval on purpose. An approval permits one action (approved:boolean); a question asks for an answer (one entry per asked question, each {id, selected[], custom?}). An adapter MUST NOT carry a question on approval_need, nor an approval on question_need"
+    },
+    "identityRules": [
+      "assistant message ids are adapter-native; never fabricated by core",
+      "user message id == clientMessageId persisted by adapter",
+      "history/page is the read-through source of truth; ids and text stable across restart+resume"
+    ]
+  },
+  "providerSurface": {
+    "capability": "providers",
+    "requests": [
+      {
+        "method": "connections/schema",
+        "result": "providers[]"
+      },
+      {
+        "method": "connections/list",
+        "result": "connections[]",
+        "rule": "value-free; never returns credential values"
+      },
+      {
+        "method": "connections/validate",
+        "params": [
+          "draft"
+        ],
+        "result": "ok/fieldErrors/transportError",
+        "rule": "may have network side-effects; never persists"
+      },
+      {
+        "method": "connections/save",
+        "params": [
+          "id?",
+          "providerId",
+          "label",
+          "fields",
+          "secretPolicy",
+          "expectedRevision?"
+        ],
+        "result": "connection + requires"
+      },
+      {
+        "method": "connections/delete",
+        "params": [
+          "id",
+          "expectedRevision?"
+        ],
+        "result": "{}"
+      },
+      {
+        "method": "auth/start",
+        "params": [
+          "providerId"
+        ],
+        "result": "operationId + next"
+      },
+      {
+        "method": "auth/status",
+        "params": [
+          "operationId"
+        ],
+        "result": "status"
+      },
+      {
+        "method": "auth/cancel",
+        "params": [
+          "operationId"
+        ],
+        "result": "{}"
+      },
+      {
+        "method": "models/list",
+        "params": [
+          "providers?"
+        ],
+        "result": "models[] + failures[]",
+        "rule": "answers what THIS harness can run: its own catalog plus the core-managed providers passed in (each {id,url,declarations}), so one query is enough. An injected provider is named `prts-<id>` in every harness. Empty catalog separated from read failure; one failure never pollutes another"
+      },
+      {
+        "method": "credentials/grant",
+        "params": [
+          "connectionId",
+          "value",
+          "url?",
+          "declarations?"
+        ],
+        "result": "{}",
+        "rule": "memory-only; re-grant after restart"
+      }
+    ],
+    "errors": [
+      "revision-conflict",
+      "credential-shadowed",
+      "unknown-provider",
+      "unknown-model",
+      "validation-failed",
+      "auth-expired",
+      "busy-session-active",
+      "unsupported-for-provider",
+      "requires-new-session"
+    ],
+    "newInThisSlice": [
+      {
+        "method": "tools/list",
+        "capability": "tools",
+        "result": "tools[] {name,description,kind,approvalDefault,enabled} + partial",
+        "rule": "partial:true when catalog incomplete; never fake completeness"
+      }
+    ]
+  },
+  "invariants": [
+    "session retains harness identity; core-managed provider and model may change between turns through credentials/grant then config/set; native ref is preserved",
+    "harness change requires a new session; provider change does not",
+    "unknown session id -> unknown-session; never silently creates",
+    "credential values never written to disk in plaintext by hub-managed paths",
+    "unsupported capability = explicit 'not supported' in UI, never silent fallback to another harness",
+    "disabledTools is a preset field (preset.tools.disabledTools), not a separate system; it is delivered via adapter config/set and is mutable mid-session",
+    "preset.tools honesty: never claim a block that did not happen; never silently drop a tool",
+    "Connection is a managed object: enable/disable/delete only; disable == cut-off == zero materialization",
+    "session/abort acknowledges only that the harness was ASKED to stop; the turn's own turn_end proves it stopped. An abort that could not be delivered -> error data.code='abort-failed'; an abort delivered but never confirmed is the core's cancel timeout to report, not the adapter's to hide",
+    "config/set with connectionId reports applied.modelProviderId as the requested provider identity and applied.connectionId as its resolved native route; model is selected within that route, not by bare-ID first match",
+    "Harness Adapter and Model Provider are two identities: a harness provides the agent runtime, a provider provides models. They are never conflated in names or DTOs (a session displays `via <harness> · <provider> · <model>`).",
+    "saved != validated: a successful connections/save or provider PATCH means stored, nothing more. \"Usable\" is a separate answer (connections/validate, or the first real request), and it is never rendered as validated before that."
+  ],
+  "capabilitySurface": {
+    "note": "A capability is a promise about methods AND about a hub-side surface. `methods` are the requests the plugin must answer; `hub` is the route a consumer reaches them through (null = the capability is carried inside session/start|config/set and has no route of its own).",
+    "models": {
+      "methods": [
+        "models/list"
+      ],
+      "hub": "GET /v1/harnesses/{id}/models"
+    },
+    "presets": {
+      "methods": [
+        "presets/list"
+      ],
+      "hub": "GET /v1/harnesses/{id}/presets"
+    },
+    "tools": {
+      "methods": [
+        "tools/list"
+      ],
+      "hub": "GET /v1/harnesses/{id}/tools",
+      "rule": "known:false while no plugin declares this capability — an empty catalog is never faked"
+    },
+    "plan": {
+      "methods": [],
+      "hub": null,
+      "carried": "config/set {plan}; the harness may flip it on its own and report plan_changed"
+    },
+    "review": {
+      "methods": [],
+      "hub": null,
+      "carried": "config/set {review}"
+    },
+    "approvals": {
+      "methods": [],
+      "hub": "GET/POST /v1/sessions/{id}/approvals[/{aid}]",
+      "carried": "the adapter initiates approval_need; the decision comes back as its reply"
+    },
+    "providers": {
+      "methods": [
+        "connections/schema",
+        "connections/list",
+        "connections/validate",
+        "connections/save",
+        "connections/delete",
+        "auth/start",
+        "auth/status",
+        "auth/cancel"
+      ],
+      "hub": null,
+      "note": "adapter-internal today: declared and implemented (deepseek), called by nothing in the hub, because the hub keeps its own provider files. Recorded here instead of being quietly described as if it were reachable"
+    },
+    "connectors": {
+      "methods": [],
+      "hub": null
+    },
+    "skills": {
+      "methods": [
+        "skills/list"
+      ],
+      "hub": "GET /v1/sessions/{id}/skills",
+      "note": "The hub INSTALLS a harness's skills before its process starts (exactly like extensions: it writes them into <DATA_DIR>/agents/<harness>/skills and hands the directory over as PRTS_INSTALLED_SKILLS_DIR); the adapter only points its harness at that directory — pi/jouzu with `--no-skills --skill <dir>` (so the user's own skill directories stay out of a PRTS session), dsh with DSH_AGENTS_HOME. It is reported PER SESSION, because a catalogue depends on the session's directory. Skills no longer ride config/set: one path, one source."
+    },
+    "connectionSchemes": {
+      "methods": [],
+      "hub": null
+    },
+    "fork": {
+      "methods": [
+        "session/fork"
+      ],
+      "hub": "POST /v1/sessions/{id}/fork",
+      "note": "pi/jouzu: fork at the next turn's first user message (their fork excludes the anchored message), or clone for the whole conversation; dsh: session.fork with atSeq snapped to the completed-turn boundary. The hub anchor is a turn, never a raw harness id."
+    },
+    "stats": {
+      "methods": [
+        "session/stats"
+      ],
+      "hub": "GET /v1/sessions/{id}/stats",
+      "note": "pi/jouzu: get_session_stats. dsh: the tokenUsage and contextPressure projections (plus sessionStats for the turn count). The hub also emits the same object as a `session.stats` event on the turn stream right after `turn.ended`, which is when the numbers move — there is no separate stats stream, because only dsh pushes projection updates and pi/jouzu push nothing."
+    },
+    "compact": {
+      "methods": [
+        "session/compact"
+      ],
+      "hub": "POST /v1/sessions/{id}/compact",
+      "note": "pi/jouzu: the native `compact` command (its response carries the result). dsh: the `/compact` command over commands/execute; the result names the compaction/summary event seq, from which the adapter reads the summary and the replaced-token count out of the session log. Both harnesses also report a compaction they performed on their own: the hub turns those into session.compacting / session.compacted on the turn stream, so a caller sees one shape whether it asked or not."
+    },
+    "rename": {
+      "methods": [
+        "session/rename"
+      ],
+      "hub": "PATCH /v1/sessions/{id}",
+      "note": "pi/jouzu: set_session_name (the accepted name is read back from get_state, since the command itself answers only success). dsh: session.rename, which answers with the normalized title and the seq of the session/title event it appended. Refused (409 session_busy) while a turn is running, like every other PATCH knob."
+    }
+  },
+  "checkedBy": "tests/adapter-contract.mjs compares this file with what the hub sends, what each plugin answers, and what the manifests declare",
+  "note": "What an adapter says to its harness is its own dialect and deliberately NOT here: this file is only what the hub and an adapter say to each other. (deepseek listening to turn/start, assistant/chunk, tool/call, tool/result, turn/end, plan/mode is exactly that — its harness speaking, translated by the adapter into the events below.) A method or event the HUB sends or handles, or an adapter emits toward the hub, must be declared here."
+}

@@ -1,0 +1,3023 @@
+// Agent hub — multi-harness management server.
+// Transport: localhost HTTP + SSE. Zero runtime dependencies: node built-ins.
+//
+// Domains landed:
+//   - discovery + build-id lockstep (B-0)
+//   - harness list/enable/disable (H-1/H-2)
+//   - sessions/turns/SSE/cancel/approvals/model-switch/repair/artifacts (S1)
+//
+// The core speaks §6 (adapter-v1.json) toward adapter processes; consumers
+// speak /v1 (v1.json). History is read-through from the adapter, never a
+// server-side copy. Assistant message ids are adapter-native, never forged.
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { getBuildId } from './build-id.mjs';
+import { storeSecret, getSecret, deleteSecret, listSecretNames } from './secret-store.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = process.env.PRTS_DATA_DIR || path.join(os.homedir(), '.prts-core');
+const PLUGINS_DIR =
+  process.env.PRTS_PLUGINS_DIR || path.resolve(HERE, 'plugins');
+// Harness-side extensions shipped here (installed into a workspace when needed)
+// and the preset definitions that travel with them. Adapters read these paths.
+const HARNESS_EXT_DIR =
+  process.env.PRTS_EXTENSIONS_DIR || path.resolve(HERE, 'harness-extensions');
+const PRESETS_DIR = path.join(HARNESS_EXT_DIR, 'agent-presets', 'presets');
+// One hub per data dir: the endpoint file is a single slot, and the hub OWNS it.
+// A file left behind by a hub that was killed is stale by definition (its token is
+// dead), so it is removed BEFORE the port is bound: from then on, the file's
+// existence means "a hub believes it is up", and its `pid` says which one. Clients
+// still check the pid — two hubs can only share a data dir by mistake.
+const STARTED_AT = new Date().toISOString();
+const ENDPOINT = path.join(DATA_DIR, 'endpoint.json');
+const HARNESSES_FILE = path.join(DATA_DIR, 'harnesses.json');
+const LEGACY_DISABLED = path.join(DATA_DIR, 'disabled.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const APPROVAL_TIMEOUT = Number(process.env.PRTS_APPROVAL_TIMEOUT_MS) || 120_000;
+// A question is a decision about work, not a permission to act, so it gets a
+// longer window before the harness is unblocked by cancellation.
+const QUESTION_TIMEOUT = Number(process.env.PRTS_QUESTION_TIMEOUT_MS) || 300_000;
+const CANCEL_TIMEOUT = Number(process.env.PRTS_CANCEL_TIMEOUT_MS) || 15_000;
+// A turn may legitimately run for a long time (a slow/free model can take minutes
+// to emit a large artefact). There is NO default wall-clock cap on a turn: the
+// turn ends when the adapter reports it, when it is cancelled, or when the
+// adapter dies. Operators may optionally bound it via env if they really want.
+// 0 (default) = unlimited.
+const TURN_TIMEOUT = Number(process.env.PRTS_TURN_TIMEOUT_MS) || 0;
+
+// The contract this server keeps (contract/v1.json) — read, never duplicated.
+// The protocol name/version a consumer is handed, and the hash it can compare
+// against, come from the same file as the promises themselves, so there is no
+// second copy to forget to update. A hub that cannot read its contract refuses
+// to start: it would have nothing to keep.
+function readContract() {
+  const file = path.join(HERE, 'contract', 'v1.json');
+  try {
+    const raw = fs.readFileSync(file);
+    const parsed = JSON.parse(raw.toString('utf8'));
+    return {
+      file: 'contract/v1.json',
+      protocol: parsed.protocol,
+      version: parsed.version,
+      sha256: crypto.createHash('sha256').update(raw).digest('hex'),
+    };
+  } catch (e) {
+    console.error(`the contract is not optional: ${file}: ${e.message}`);
+    process.exit(1);
+  }
+}
+const CONTRACT = readContract();
+// The parsed document itself is NOT part of the surface (`CONTRACT` above is what
+// /v1/hub/surface reports, and its shape is in the contract): it is here so the hub
+// can check itself against it at boot.
+const CONTRACT_DOC = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(HERE, 'contract', 'v1.json'), 'utf8')); }
+  catch { return { endpoints: [], events: [] }; }
+})();
+// The OpenAPI document is a GENERATED projection of the contract (scripts/
+// emit-openapi.mjs). It is read here for the same reason the contract is: the hub
+// serves it, so a hub that cannot read it must not start and pretend it can.
+const OPENAPI = readOpenapi();
+function readOpenapi() {
+  const file = path.join(HERE, 'contract', 'openapi.json');
+  try {
+    const raw = fs.readFileSync(file);
+    const parsed = JSON.parse(raw.toString('utf8'));
+    if (parsed.openapi !== '3.1.0' || !parsed.paths) throw new Error('not an OpenAPI 3.1 document');
+    return { file: 'contract/openapi.json', doc: parsed, sha256: crypto.createHash('sha256').update(raw).digest('hex') };
+  } catch (e) {
+    console.error(`the OpenAPI projection is not optional (run scripts/emit-openapi.mjs): ${file}: ${e.message}`);
+    process.exit(1);
+  }
+}
+const PROTOCOL = { name: CONTRACT.protocol, version: CONTRACT.version };
+const BUILD_ID = getBuildId();
+
+fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+
+const NL = String.fromCharCode(10);
+const readJson = (p, fallback) => {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; }
+};
+// State the hub owns is written ATOMICALLY: a temp file followed by a rename. A
+// plain writeFileSync truncates the target first, so a hub killed mid-write (the
+// resume test does exactly that) leaves a half-written file, and the next boot
+// reads it as "no state at all" — every session silently gone. With the rename
+// there is only ever the old file or the new one.
+const writeJson = (p, v, mode) => {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = `${p}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(v, null, 2), mode ? { mode } : undefined);
+  fs.renameSync(tmp, p);
+  if (mode) { try { fs.chmodSync(p, mode); } catch {} }
+};
+// And a state file that cannot be parsed is not "empty": keep it (an operator can
+// see what happened) and say so, instead of starting from nothing in silence.
+const readStateJson = (p, fallback) => {
+  if (!fs.existsSync(p)) return fallback;
+  const raw = fs.readFileSync(p, 'utf8');
+  try { return JSON.parse(raw); } catch (e) {
+    const kept = `${p}.corrupt-${Date.now()}`;
+    try { fs.renameSync(p, kept); } catch {}
+    process.stderr.write(`[core] ${path.basename(p)} could not be parsed (${e.message}); kept as ${path.basename(kept)}, starting from empty state
+`);
+    return fallback;
+  }
+};
+
+const token = crypto.randomBytes(32).toString('hex');
+
+// ---------------------------------------------------------------------------
+// harness domain: the hub manages harnesses.
+//
+// A plugin's manifest says what it ships — its runtime, and the extensions it
+// expects to carry. The hub keeps the registration: whether the harness is
+// enabled, and which extensions and skills are installed for it. Installing is
+// the hub's job, so a session is handed the material it carries (extensions,
+// skills, connections) and the adapter only places it where its harness reads
+// it — an adapter never decides what to install, and nothing about installation
+// is hardcoded in one.
+// ---------------------------------------------------------------------------
+const EXTENSIONS_DIR = path.join(HERE, 'harness-extensions');
+
+function manifestOf(id) {
+  const mf = path.join(PLUGINS_DIR, id, 'manifest.json');
+  return fs.existsSync(mf) ? readJson(mf, null) : null;
+}
+
+// Why a plugin cannot be used, or null when it can. A manifest is a promise
+// about a plugin, and every field in it is read by something: `command` is how
+// the adapter is spawned, `protocol` is which adapter protocol it speaks,
+// `runtime` is the harness it drives, `capabilities` is what the hub may ask it
+// for, `extensions` is what it ships. A manifest that cannot be honoured is
+// refused here with its reason, rather than spawning a process that then fails
+// in a way nobody can explain.
+const ADAPTER_PROTOCOL = readJson(path.join(HERE, 'contract', 'adapter-v1.json'), {}).version ?? null;
+// The declared status of every error code (contract/errors.json). failError()
+// uses it, and the boot self-check refuses to start if a literal disagrees with it
+// against it.
+// One table, three facts: the status a code is answered with, whether retrying it
+// unchanged can work, and the message default. errors.json is the master; a code
+// that is not in it cannot be answered (the contract trial prints any that are).
+const ERROR_TABLE = readJson(path.join(HERE, 'contract', 'errors.json'), { errors: {} }).errors;
+const ERROR_STATUS = Object.fromEntries(Object.entries(ERROR_TABLE).map(([k, v]) => [k, v.http]));
+// The body carries `retryable` instead of leaving the caller to find the table: a
+// client that has to guess whether a 409 is worth another attempt will guess wrong,
+// and the table already knows.
+function errorBody(code, message, extra) {
+  const row = ERROR_TABLE[code] || null;
+  return { error: { code, message, retryable: row ? row.retryable === true : false }, ...(extra || {}) };
+}
+function manifestFault(id) {
+  const m = manifestOf(id);
+  if (!m) return 'no manifest.json';
+  if (m.id !== id) return `manifest id '${m.id}' is not the plugin directory '${id}'`;
+  if (!Number.isInteger(m.protocol)) return 'protocol must be an integer (the adapter protocol it speaks)';
+  if (m.protocol !== ADAPTER_PROTOCOL) return `protocol ${m.protocol} is not the adapter protocol this hub speaks (${ADAPTER_PROTOCOL})`;
+  if (!Array.isArray(m.command) || m.command.length === 0 || m.command.some((c) => typeof c !== 'string')) {
+    return 'command must be a non-empty argv array';
+  }
+  if (m.runtime !== undefined) {
+    const r = m.runtime;
+    if (!r || typeof r !== 'object') return 'runtime must be an object';
+    if (typeof r.package !== 'string' || !r.package) return 'runtime.package must be a package name';
+    if (typeof r.version !== 'string' || !r.version) return 'runtime.version must be a version';
+    if (!Array.isArray(r.command) || r.command.length === 0) return 'runtime.command must be a non-empty argv array';
+  }
+  for (const key of ['capabilities', 'extensions']) {
+    if (m[key] !== undefined && (!Array.isArray(m[key]) || m[key].some((x) => typeof x !== 'string'))) {
+      return `${key} must be an array of strings`;
+    }
+  }
+  return null;
+}
+function loadHarnessRows() { return readStateJson(HARNESSES_FILE, []); }
+function persistHarnessRows(rows) { writeJson(HARNESSES_FILE, rows); }
+
+// The extensions the hub can install: one directory each.
+function availableExtensions() {
+  if (!fs.existsSync(EXTENSIONS_DIR)) return [];
+  return fs.readdirSync(EXTENSIONS_DIR)
+    .filter((n) => { try { return fs.statSync(path.join(EXTENSIONS_DIR, n)).isDirectory(); } catch { return false; } })
+    .sort();
+}
+
+// Reconcile the registration with what is actually installed. A plugin that is
+// present gets a row the first time it is seen (enabled, carrying the
+// extensions its manifest ships); a plugin that is gone keeps its row, marked
+// missing — the row is also where that harness's install state lives, so it is
+// not silently dropped, and a returning plugin finds it again.
+function reconcileHarnesses() {
+  const rows = loadHarnessRows();
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const available = availableExtensions();
+  const onDisk = fs.existsSync(PLUGINS_DIR)
+    ? fs.readdirSync(PLUGINS_DIR).filter((d) => manifestOf(d))
+    : [];
+  let changed = false;
+  // one-time carry-over from the old shape (a bare array of disabled ids)
+  const legacy = readJson(LEGACY_DISABLED, null);
+  const legacyDisabled = new Set(Array.isArray(legacy) ? legacy : []);
+  for (const id of onDisk) {
+    const existing = byId.get(id);
+    if (existing) {
+      if (existing.missing) { existing.missing = false; existing.updatedAt = new Date().toISOString(); changed = true; }
+      continue;
+    }
+    const m = manifestOf(id) || {};
+    const now = new Date().toISOString();
+    const row = {
+      id,
+      enabled: !legacyDisabled.has(id),
+      // what the plugin ships by default; the hub may change it afterwards
+      extensions: Array.isArray(m.extensions) ? m.extensions.filter((e) => available.includes(e)) : [],
+      // null = every skill the hub holds; an array = exactly those
+      skills: null,
+      registeredAt: now,
+      updatedAt: now,
+      missing: false,
+    };
+    rows.push(row); byId.set(id, row); changed = true;
+  }
+  for (const row of rows) {
+    const present = onDisk.includes(row.id);
+    if (row.missing !== !present) { row.missing = !present; changed = true; }
+  }
+  if (changed) {
+    persistHarnessRows(rows);
+    // the old file has been folded in; it is no longer a source
+    if (Array.isArray(legacy)) fs.rmSync(LEGACY_DISABLED, { force: true });
+  }
+  return rows;
+}
+function harnessRow(id) { return reconcileHarnesses().find((r) => r.id === id) || null; }
+function listHarnesses() {
+  const out = reconcileHarnesses().filter((r) => !r.missing).map((row) => {
+    const m = manifestOf(row.id) || {};
+    return {
+      id: row.id,
+      name: m.name || row.id,
+      base: m.base || row.id,
+      version: m.version || null,
+      capabilities: m.capabilities || [],
+      status: row.enabled ? 'enabled' : 'disabled',
+      permissionModel: m.permissionModel || 'none',
+      planMode: m.planMode || 'none',
+      repair: m.repair || 'none',
+      // null when the plugin can be used; the reason when it cannot.
+      invalid: manifestFault(row.id),
+    };
+  });
+  out.sort((a, b) => a.id.localeCompare(b.id));
+  return out;
+}
+
+// errors.json declares `harness_disabled` (409, "deactivated; activate before
+// use"). Use = create a session, or send a turn into one.
+function isHarnessEnabled(id) {
+  const row = harnessRow(id);
+  return row ? row.enabled === true : false;
+}
+
+// The hub's view of one harness: what the plugin is, plus what the hub has
+// installed for it.
+function harnessValue(row) {
+  const m = manifestOf(row.id) || {};
+  return {
+    id: row.id,
+    enabled: row.enabled === true,
+    extensions: Array.isArray(row.extensions) ? row.extensions : [],
+    skills: Array.isArray(row.skills) ? row.skills : null,
+    missing: row.missing === true,
+    runtime: m.runtime || null,
+    // The harness version IS the runtime version the manifest declares. There is
+    // no second field for it: a duplicate version is a version that will one day
+    // disagree with itself, and this one did (`pin` vs `runtime.version`) until
+    // the field was removed.
+    version: (m.runtime && m.runtime.version) || null,
+    capabilities: m.capabilities || [],
+    registeredAt: row.registeredAt || null,
+    updatedAt: row.updatedAt || null,
+    invalid: manifestFault(row.id),
+  };
+}
+function updateHarness(id, patch, res) {
+  if (rejectUnknownFields(res, patch, ['extensions', 'skills', 'enabled'], 'PATCH /v1/hub/harnesses/{id}')) return;
+  const rows = loadHarnessRows();
+  const existing = rows.find((r) => r.id === id);
+  if (!existing) {
+    if (!manifestOf(id)) { if (res) return fail(res, 404, 'harness_not_found', `no harness ${id}`); return null; }
+    reconcileHarnesses();
+    return updateHarness(id, patch, res);
+  }
+  if (patch.extensions !== undefined) {
+    if (!Array.isArray(patch.extensions) || patch.extensions.some((e) => typeof e !== 'string')) {
+      if (res) return fail(res, 400, 'validation_failed', 'extensions must be an array of names');
+    }
+    const available = availableExtensions();
+    const unknown = patch.extensions.filter((e) => !available.includes(e));
+    if (unknown.length) {
+      if (res) return fail(res, 400, 'validation_failed', `unknown extension(s): ${unknown.join(', ')} (available: ${available.join(', ') || 'none'})`);
+    }
+    existing.extensions = [...patch.extensions];
+  }
+  if (patch.skills !== undefined) {
+    if (patch.skills !== null && (!Array.isArray(patch.skills) || patch.skills.some((s) => typeof s !== 'string'))) {
+      if (res) return fail(res, 400, 'validation_failed', 'skills must be null (all) or an array of skill ids');
+    }
+    existing.skills = patch.skills === null ? null : [...patch.skills];
+  }
+  if (patch.enabled !== undefined) existing.enabled = patch.enabled === true;
+  existing.updatedAt = new Date().toISOString();
+  persistHarnessRows(rows);
+  const value = harnessValue(existing);
+  return res ? json(res, 200, { harness: value }) : value;
+}
+
+// ---------------------------------------------------------------------------
+// session domain
+// ---------------------------------------------------------------------------
+const sessions = new Map(); // sid -> metadata record
+const adapters = new Map(); // sid -> adapter conn
+const configuringSessions = new Set(); // in-flight configuration, never persisted
+const approvals = new Map(); // aid -> approval record
+const questions = new Map(); // qid -> question record
+let eventSeq = 0;
+
+function loadSessions() {
+  for (const s of readStateJson(SESSIONS_FILE, [])) {
+    if (s && s.id) {
+      // No terminal event survived the restart -> honest 'unknown', never 'completed'.
+      s.activeTurn = { state: 'unknown', ended: null, cause: null, partialPersisted: false, partialItems: 0 };
+      sessions.set(s.id, s);
+    }
+  }
+}
+function persistSessions() {
+  writeJson(SESSIONS_FILE, [...sessions.values()].map(({ activeTurn: _drop, ...s }) => s));
+}
+
+// C-3: a session keeps thin per-turn entries {turnId, startedAt, ended, cause}
+// (details are fetched separately, read-through). core is the sole truth for the
+// turn state machine, so it records the entry itself; it is NOT derived from the
+// adapter's message history (which carries no turn boundaries or causes).
+let turnSeq = 0;
+function beginTurn(s) {
+  const turnId = `t-${process.pid}-${++turnSeq}-${crypto.randomBytes(2).toString('hex')}`;
+  s.currentTurnId = turnId;
+  s.currentTurnStarted = new Date().toISOString();
+  return turnId;
+}
+function endTurn(s, ended, cause) {
+  if (!s.currentTurnId) return;
+  s.turns = s.turns || [];
+  s.turns.push({ turnId: s.currentTurnId, startedAt: s.currentTurnStarted, ended, cause: cause ?? null });
+  s.currentTurnId = null;
+  s.currentTurnStarted = null;
+}
+
+// --- adapter process (one process per session, §6 topology) ------------------
+function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
+  const m = manifestOf(harnessId);
+  if (!m) throw Object.assign(new Error('harness_not_found'), { code: 'harness_not_found' });
+  const fault = manifestFault(harnessId);
+  if (fault) {
+    throw Object.assign(new Error(`harness '${harnessId}' cannot be used: ${fault}`), { code: 'harness_invalid' });
+  }
+  const dir = path.join(PLUGINS_DIR, harnessId);
+  const [cmd, ...args] = m.command;
+  // The runtime an adapter drives is declared by its manifest, not discovered by
+  // the adapter: there is no "system install" to fall back to, and an adapter
+  // that went looking on its own would make the pin a comment instead of a fact.
+  // The declaration is passed as an absolute argv, resolved against the plugin
+  // directory the same way `command` is, so a relative path in the manifest means
+  // "inside this plugin".
+  const runtimeArgv = Array.isArray(m.runtime && m.runtime.command) && m.runtime.command.length
+    ? m.runtime.command.map((part, i) => (i === 0 ? part : path.resolve(dir, part)))
+    : null;
+  // One adapter process per session (the v1 topology). How an adapter backs its
+  // harness — a private child, or a shared server other adapters also attach
+  // to — is the adapter's own business; the hub neither knows nor decides.
+  const connKey = sid;
+  const existing = adapters.get(connKey);
+  if (existing) return existing;
+  // One data dir PER HARNESS (shared by the config plane and every session of
+  // that harness), matching the Rust owner's data_dir = agent-data/<manifest.id>.
+  // Splitting per-session would create isolated dsh-homes so a provider saved by
+  // the config plane is invisible to the session (D-5).
+  const agentDir = path.join(DATA_DIR, 'agents', harnessId);
+  fs.mkdirSync(agentDir, { recursive: true });
+
+  const proc = spawn(cmd, args, {
+    windowsHide: true,
+    cwd: dir,
+    // (inherit the terminal's own login/upstream). private = isolated home.
+    env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { PRTS_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), PRTS_SESSION_ID: sid, PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, PRTS_PRESETS_DIR: PRESETS_DIR, ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+
+  const conn = {
+    proc,
+    sid,
+    harnessId,
+    nextId: 1,
+    pending: new Map(),
+    buf: '',
+    started: false,   // session/start succeeded on THIS process
+    ready: false,     // start + grant + config/set all succeeded
+    initializing: null, // in-flight init promise, shared by concurrent callers
+    onEvent: null, // (sid, data) => void
+  };
+  adapters.set(connKey, conn);
+
+  proc.stdout.setEncoding('utf8');
+  proc.stdout.on('data', (d) => {
+    conn.buf += d;
+    let i;
+    while ((i = conn.buf.indexOf('\n')) >= 0) {
+      const line = conn.buf.slice(0, i); conn.buf = conn.buf.slice(i + 1);
+      if (line.trim()) handleAdapterMessage(conn, line);
+    }
+  });
+  proc.on('exit', (code) => {
+    const s = sessions.get(sid);
+    if (adapters.get(connKey) === conn && s && ['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+      s.activeTurn = { state: 'ended', ended: 'interrupted', cause: 'adapter-crash', partialPersisted: true, partialItems: 0 };
+      endTurn(s, 'interrupted', 'adapter-crash');
+      emitSessionEvent(sid, 'turn.ended', { turn: s.activeTurn });
+      // read-through truth: the adapter's transcript holds whatever persisted.
+    }
+    for (const [, p] of conn.pending) { clearTimeout(p.timer); p.reject(new Error(`adapter exited code=${code}`)); }
+    conn.pending.clear();
+    if (adapters.get(connKey) === conn) adapters.delete(connKey);
+  });
+  proc.stdin.on('error', () => {});
+
+  return conn;
+}
+
+// The requests the hub may send to an adapter, as data — the same discipline as
+// ROUTES. Every send passes declareAdapterRequest() first, and
+// the boot self-check makes this list and contract/adapter-v1.json
+// identical: a request the hub sends without declaring it is a request no
+// plugin was ever told to answer, and it would fail deep inside an adapter
+// instead of here.
+const ADAPTER_REQUESTS = [
+  'session/start',
+  'config/set',
+  'session/prompt',
+  'session/abort',
+  'history/page',
+  'credentials/grant',
+  'models/list',
+  'presets/list',
+  'tools/list',
+  'session/fork',
+  'session/stats',
+  'session/compact',
+  'session/rename',
+  'skills/list',
+];
+const ADAPTER_REQUEST_SET = new Set(ADAPTER_REQUESTS);
+
+function declareAdapterRequest(method) {
+  if (!ADAPTER_REQUEST_SET.has(method)) {
+    throw new Error(`undeclared adapter request '${method}': add it to ADAPTER_REQUESTS in server.mjs and to contract/adapter-v1.json`);
+  }
+}
+
+function rpc(conn, method, params, timeoutMs = 30_000) {
+  declareAdapterRequest(method);
+  return new Promise((resolve, reject) => {
+    const id = conn.nextId++;
+    // timeoutMs <= 0 means no wall-clock bound: the call settles only when the
+    // adapter answers (or crashes). Used for session/prompt, whose duration is
+    // the model's business, not ours.
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      conn.pending.delete(id);
+      reject(new Error(`${method} timed out`));
+    }, timeoutMs) : null;
+    conn.pending.set(id, { resolve, reject, timer });
+    conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+}
+
+function handleAdapterMessage(conn, line) {
+  let msg;
+  try { msg = JSON.parse(line); } catch { return; }
+  if (msg.method === 'event') {
+    const { sid, data } = msg.params || {};
+    if (sid === conn.sid && data && adapters.get(conn.sid) === conn) handleAdapterEvent(sid, data);
+    return;
+  }
+  if (msg.method === 'approval_need') {
+    handleApprovalRequest(conn, msg);
+    return;
+  }
+  if (msg.method === 'question_need') {
+    handleQuestionRequest(conn, msg);
+    return;
+  }  const p = conn.pending.get(msg.id);
+  if (p) {
+    conn.pending.delete(msg.id);
+    clearTimeout(p.timer);
+    if (msg.error) p.reject(Object.assign(new Error(msg.error.message), { code: msg.error.code, data: msg.error.data }));
+    else p.resolve(msg.result);
+  }
+}
+
+function handleAdapterEvent(sid, data) {
+  const s = sessions.get(sid);
+  if (!s) return;
+  switch (data.type) {
+    case 'turn_started':
+      s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: false, partialItems: 0 };
+      emitSessionEvent(sid, 'turn.running', { turn: s.activeTurn });
+      break;
+    case 'text_delta':
+    case 'reasoning_delta':
+      emitSessionEvent(sid, 'message.delta', { messageId: data.messageId, text: data.text, kind: data.type === 'reasoning_delta' ? 'reasoning' : 'text' });
+      break;
+    case 'message_end':
+      s.activeTurn.partialPersisted = true;
+      emitSessionEvent(sid, 'message.completed', { messageId: data.messageId, role: data.role, text: data.text });
+      break;
+    case 'tool_started':
+    case 'tool_end':
+      emitSessionEvent(sid, `tool.${data.type === 'tool_started' ? 'started' : 'ended'}`, data);
+      break;
+    case 'plan_changed':
+      // The harness changed plan mode on its own (the model leaves plan when its
+      // plan is approved). Record it, so a session read reports the state the
+      // harness is actually in, not the last one the core requested.
+      s.appliedPlan = data.plan === true;
+      s.updatedAt = new Date().toISOString();
+      persistSessions();
+      emitSessionEvent(sid, 'plan.changed', { plan: s.appliedPlan });
+      break;
+    case 'title_changed':
+      // The harness renamed the session on its own (dsh titles a session from the
+      // first prompt; a harness UI can rename one). The hub follows: it records
+      // the name the harness now holds and says so on the stream, instead of
+      // showing a title that only the hub still believes in.
+      s.appliedTitle = data.title ?? null;
+      s.updatedAt = new Date().toISOString();
+      persistSessions();
+      emitSessionEvent(sid, 'session.renamed', { sessionId: sid, title: s.appliedTitle, appliedBy: 'harness' });
+      break;
+    case 'compaction_started':
+      // The harness is rewriting its own context — because the hub asked, or
+      // because it decided to (a full context compacts mid-turn). Both are
+      // reported: a caller reading this stream must not go quiet while the
+      // conversation being shown is being replaced.
+      emitSessionEvent(sid, 'session.compacting', { sessionId: sid, reason: data.reason ?? null });
+      break;
+    case 'compaction_ended': {
+      const facts = { sessionId: sid, reason: data.reason ?? null, aborted: data.aborted === true };
+      if (typeof data.tokensBefore === 'number') facts.tokensBefore = data.tokensBefore;
+      if (typeof data.tokensAfter === 'number') facts.tokensAfter = data.tokensAfter;
+      if (typeof data.willRetry === 'boolean') facts.willRetry = data.willRetry;
+      if (typeof data.summary === 'string') facts.summary = data.summary;
+      if (data.usage) facts.usage = data.usage;
+      if (typeof data.detail === 'string') facts.detail = data.detail;
+      s.updatedAt = new Date().toISOString();
+      persistSessions();
+      emitSessionEvent(sid, 'session.compacted', facts);
+      break;
+    }
+    case 'turn_end': {
+      const st = data.state ?? data.status; // canonical: state; status tolerated during migration
+      const ended = st === 'aborted' ? 'cancelled' : st === 'failed' ? 'failed' : 'completed';
+      const cause = ended === 'cancelled' ? 'user-cancel' : ended === 'failed' ? 'model-error' : null;
+      s.activeTurn = { state: 'ended', ended, cause, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+      endTurn(s, ended, cause);
+      s.updatedAt = new Date().toISOString();
+      persistSessions();
+      emitSessionEvent(sid, 'turn.ended', { turn: s.activeTurn });
+      closeTurnStream(sid, connFor(sid));
+      break;
+    }
+    case 'adapter_dialog_auto_cancelled':
+      // The adapter cancelled a harness dialog nobody rendered, so the agent
+      // does not hang waiting for a window that is not there. Nothing in the hub
+      // consumes it yet: dropped deliberately, not silently — the fact is in the
+      // adapter protocol (adapter-v1.json) and the case is here so that "nobody
+      // handles this" is a decision on the record instead of a fall-through.
+      break;
+    default:
+      // contract-whitelisted events only; adapter-side filter drops the rest
+      break;
+  }
+}
+
+// The SSE event names this hub can emit, as data — the same discipline as the
+// route table. GET /v1/hub/surface reports them, the contract must carry the
+// same set, and this function refuses a name that is not in it: a consumer
+// reads the stream without guessing, and an event that exists only in the code
+// (or only in the contract) fails the contract test instead of surprising
+// somebody. Both directions had drifted before this list existed.
+const SURFACE_EVENTS = [
+  'turn.admitted',
+  'turn.running',
+  'message.delta',
+  'message.completed',
+  'tool.started',
+  'tool.ended',
+  'approval.requested',
+  'approval.resolved',
+  'question.requested',
+  'question.answered',
+  'question.cancelled',
+  'plan.changed',
+  'turn.ended',
+  'session.stats',
+  'session.compacting',
+  'session.compacted',
+  'session.renamed',
+];
+const SURFACE_EVENT_SET = new Set(SURFACE_EVENTS);
+
+function emitSessionEvent(sid, event, data) {
+  if (!SURFACE_EVENT_SET.has(event)) {
+    throw new Error(`undeclared SSE event '${event}': add it to SURFACE_EVENTS in server.mjs and to contract/v1.json`);
+  }
+  const conn = connFor(sid);
+  if (!conn || !conn.onEvent) return;
+  const id = `${sid}-${++eventSeq}`;
+  conn.onEvent({ id, event, data });
+}
+
+// The adapter process backing a session (one process per session).
+function connFor(sid) {
+  return adapters.get(sid) || null;
+}
+function sessOf(sid) { return sessions.get(sid); }
+
+// --- SSE plumbing ------------------------------------------------------------
+function sseWrite(res, { id, event, data }) {
+  if (res.writableEnded) return;
+  if (id) res.write(`id: ${id}\n`);
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+// --- approvals ----------------------------------------------------------------
+function handleApprovalRequest(conn, msg) {
+  const params = msg.params || {};
+  // A shared adapter carries several sessions on one process, so the approval
+  // must name its session; a per-session adapter's params omit it.
+  const sid = params.sid || conn.sid;
+  const s = sessions.get(sid);
+  const aid = `appr-${crypto.randomUUID()}`;
+  const record = { id: aid, sid, tool: params.kind || 'confirm', args: { detail: params.detail }, options: Array.isArray(params.options) ? params.options : null, state: 'pending', adapterRequestId: msg.id, conn, timer: null };
+  const failClosed = (approved, choice) => {
+    conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { approved, reason: approved ? 'allowed' : 'timeout', ...(choice !== undefined ? { choice } : {}) } }) + '\n');
+    if (approved) record.state = 'allowed';
+    else record.state = 'expired';
+    if (s) s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    emitSessionEvent(sid, 'approval.resolved', { approvalId: aid, approved, state: record.state });
+  };
+  record.timer = setTimeout(() => failClosed(false), APPROVAL_TIMEOUT);
+  approvals.set(aid, record);
+  if (s) s.activeTurn = { state: 'awaiting_approval', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+  emitSessionEvent(sid, 'approval.requested', { approvalId: aid, tool: record.tool, args: record.args, options: record.options, state: 'pending' });
+}
+
+function decideApproval(aid, decision, reason) {
+  const r = approvals.get(aid);
+  if (!r) return null;
+  clearTimeout(r.timer);
+  // Two answer shapes: a binary allow/deny (confirm dialogs) or a choice from
+  // the request's options (select dialogs, e.g. Allow Once / Allow Always /
+  // Reject). A choice is approved unless it is the rejection-ish option; the
+  // adapter decides the exact mapping via `approved`.
+  const choice = r.options && r.options.includes(decision) ? decision : undefined;
+  const approved = choice !== undefined
+    ? !/reject|deny|no\b/i.test(choice)
+    : (decision === 'allow' || decision === 'always');
+  // Reason: the user's rejection text, when the harness asks for one (codex
+  // denied.rejection; pi/jouzu Reject with Reason). Carried to the adapter as
+  // `comment` — `reason` is already the fixed status string below.
+  const comment = (!approved && typeof reason === 'string' && reason.length) ? reason : undefined;
+  r.reason = comment !== undefined ? comment : null;
+  r.state = approved ? 'allowed' : 'denied';
+  r.conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: r.adapterRequestId, result: { approved, reason: approved ? 'allowed' : 'denied', ...(comment !== undefined ? { comment } : {}), ...(choice !== undefined ? { choice } : {}) } }) + '\n');
+  const s = sessions.get(r.sid);
+  if (s) {
+    s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    if (!approved) s.activeTurn = { state: 'ended', ended: 'failed', cause: 'approval-denied', partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+  }
+  emitSessionEvent(r.sid, 'approval.resolved', { approvalId: aid, approved, state: r.state, ...(r.reason ? { reason: r.reason } : {}) });
+  if (!approved) emitSessionEvent(r.sid, 'turn.ended', { turn: sessions.get(r.sid).activeTurn });
+  return r;
+}
+
+// --- questions ----------------------------------------------------------------
+// A question is the harness asking the user to decide something. It is NOT an
+// approval: an approval permits one action (allow/deny), a question asks for an
+// answer the harness reads back (possibly several options, possibly detail).
+// The two travel on separate methods and never share a shape.
+function handleQuestionRequest(conn, msg) {
+  const params = msg.params || {};
+  const sid = params.sid || conn.sid;
+  const s = sessions.get(sid);
+  const qid = `q-${crypto.randomUUID()}`;
+  const asked = Array.isArray(params.questions) ? params.questions : [];
+  const record = {
+    id: qid,
+    sid,
+    questions: asked.map((q) => ({
+      id: String(q.id),
+      header: q.header != null ? q.header : null,
+      question: String(q.question != null ? q.question : ''),
+      detail: q.detail != null ? q.detail : null,
+      options: Array.isArray(q.options) ? q.options.map((o) => ({ label: String(o.label), description: o.description != null ? o.description : null })) : null,
+      multiSelect: q.multiSelect === true,
+      intent: q.intent && typeof q.intent === 'object' ? { kind: String(q.intent.kind), approve: q.intent.approve != null ? String(q.intent.approve) : null } : null,
+    })),
+    answers: null,
+    state: 'pending',
+    requestedAt: new Date().toISOString(),
+    adapterRequestId: msg.id,
+    conn,
+    timer: null,
+  };
+  // A question nobody answers must not wedge the harness forever. Cancelling is
+  // the honest outcome: the harness unblocks and the model is told no answer
+  // came, rather than being fed an invented one.
+  const cancelQuestion = () => {
+    conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { cancelled: true } }) + '\n');
+    record.state = 'cancelled';
+    if (s) s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    emitSessionEvent(sid, 'question.cancelled', { questionId: qid, state: record.state });
+  };
+  record.timer = setTimeout(cancelQuestion, QUESTION_TIMEOUT);
+  questions.set(qid, record);
+  if (s) s.activeTurn = { state: 'awaiting_question', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+  emitSessionEvent(sid, 'question.requested', { questionId: qid, questions: record.questions, state: 'pending' });
+}
+
+function answerQuestion(qid, answers) {
+  const r = questions.get(qid);
+  if (!r) return null;
+  clearTimeout(r.timer);
+  // Normalise to one entry per asked question. A skipped item stays as
+  // { id, selected: [] } so the shape is stable whatever the UI could show.
+  const byId = new Map((Array.isArray(answers) ? answers : []).map((a) => [String(a && a.id), a]));
+  const normalised = r.questions.map((q) => {
+    const a = byId.get(q.id);
+    const selected = a && Array.isArray(a.selected) ? a.selected.map(String) : [];
+    const custom = a && typeof a.custom === 'string' && a.custom.length ? a.custom : undefined;
+    return { id: q.id, selected, ...(custom !== undefined ? { custom } : {}) };
+  });
+  r.answers = normalised;
+  r.state = 'answered';
+  r.conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: r.adapterRequestId, result: { answers: normalised } }) + '\n');
+  const s = sessions.get(r.sid);
+  if (s) s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+  emitSessionEvent(r.sid, 'question.answered', { questionId: qid, answers: normalised, state: r.state });
+  return r;
+}
+
+// --- the surface ---------------------------------------------------------------
+//
+// One row per (method, path). This table IS the routing: route() resolves a
+// request by matching a row here, and GET /v1/hub/surface reports the same
+// table. The routes this process answers and the routes the contract promises
+// are therefore one object, and the hub refuses to start when they disagree in
+// either direction — a route only here is one nobody can find, a route only in
+// the contract is a promise nobody keeps. Both had happened before this table
+// existed; that is what it is for, and why the surface is data instead of a
+// chain of string comparisons that nothing can compare anything against.
+//
+//   path  literal segments, {placeholders}, and a trailing {name...} that
+//         captures the remaining segments (the skill-file route needs whole
+//         file paths, slashes included).
+//   auth  false ONLY for discovery — the hub's one unauthenticated route. The
+//         hub binds 127.0.0.1 and the hub is not a security boundary (S-1), so a
+//         consumer may ask what harnesses exist before it holds a token.
+//         Everything else needs the endpoint token.
+//
+// Matching is first-row-wins and exact in segment count, so a literal segment
+// must be declared before a placeholder that could swallow it (see providers).
+const ROUTES = [
+  // discovery: which harnesses exist. Answers without a token.
+  { method: 'GET', path: '/v1/harnesses', auth: false, handler: ({ res }) =>
+    json(res, 200, { harnesses: listHarnesses(), next_cursor: null }) },
+
+  // the surface itself, as data (this table, the event names, the contract)
+  { method: 'GET', path: '/v1/hub/surface', handler: ({ res }) =>
+    json(res, 200, surfaceValue()) },
+
+  // the generated OpenAPI document, byte for byte as scripts/emit-openapi.mjs
+  // wrote it — the same bytes whose sha256 /v1/hub/surface reports
+  { method: 'GET', path: '/v1/hub/openapi.json', handler: ({ res }) => {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(OPENAPI.doc, null, 2) + String.fromCharCode(10));
+  } },
+
+  // ---- harness catalogue: what a harness says it can do --------------------
+  { method: 'POST', path: '/v1/harnesses/{id}/enable', handler: ({ res, params }) =>
+    harnessToggle(params.id, true, res, false) },
+  { method: 'POST', path: '/v1/harnesses/{id}/disable', handler: ({ res, params }) =>
+    harnessToggle(params.id, false, res, false) },
+  { method: 'GET', path: '/v1/harnesses/{id}/presets', handler: ({ res, params }) =>
+    withHarness(params.id, res, () => listPresets(params.id)
+      .then((r) => json(res, 200, r)).catch((e) => fail(res, 502, 'adapter_unreachable', e.message))) },
+  { method: 'GET', path: '/v1/harnesses/{id}/models', handler: ({ res, params }) =>
+    withHarness(params.id, res, () => listModels(params.id)
+      .then((r) => json(res, 200, r)).catch((e) => fail(res, 502, 'adapter_unreachable', e.message))) },
+  { method: 'GET', path: '/v1/harnesses/{id}/tools', handler: ({ res, params, url }) =>
+    withHarness(params.id, res, () => listTools(params.id, url.searchParams.get('mode') || undefined)
+      .then((r) => json(res, 200, r)).catch((e) => fail(res, 502, 'adapter_unreachable', e.message))) },
+
+  // ---- the hub's harness registry ------------------------------------------
+  // What each harness ships, what the hub has installed for it, and whether it
+  // is enabled. A session's material (extensions, skills, connections) is
+  // assembled from here, so an extension is added to a harness in the registry,
+  // not in an adapter.
+  { method: 'GET', path: '/v1/hub/harnesses', handler: ({ res }) =>
+    json(res, 200, {
+      harnesses: reconcileHarnesses().filter((r) => !r.missing).map(harnessValue),
+      availableExtensions: availableExtensions(),
+    }) },
+  { method: 'PATCH', path: '/v1/hub/harnesses/{id}', handler: ({ res, params, body }) =>
+    body().then((b) => updateHarness(params.id, b, res))
+      .catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+  { method: 'POST', path: '/v1/hub/harnesses/{id}/enable', handler: ({ res, params }) =>
+    harnessToggle(params.id, true, res, true) },
+  { method: 'POST', path: '/v1/hub/harnesses/{id}/disable', handler: ({ res, params }) =>
+    harnessToggle(params.id, false, res, true) },
+
+  // ---- providers: one provider is one file ---------------------------------
+  { method: 'GET', path: '/v1/hub/providers', handler: ({ res }) =>
+    json(res, 200, { providers: loadProviders().map((r) => providerValueFree(r)), broken: brokenProviderFiles() }) },
+  { method: 'POST', path: '/v1/hub/providers', handler: ({ res, body }) =>
+    body().then((b) => createProvider(b, res)).catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+  // API 1: the models of the providers the HUB manages. Distinct from API 2
+  // (/v1/harnesses/{id}/models), which is a harness's own catalog; a caller asks
+  // both and has the whole picture. Declared before /{id}: 'models' is also a
+  // legal provider id, and the literal route wins.
+  { method: 'GET', path: '/v1/hub/providers/models/list', handler: ({ res }) =>
+    listManagedProviderModels()
+      .then((r) => json(res, 200, r))
+      .catch((e) => fail(res, 502, 'provider_catalog_failed', e.message)) },
+  { method: 'GET', path: '/v1/hub/providers/{id}', handler: ({ res, params }) => {
+    // Read one by id: a caller holding an id should not have to list and filter.
+    const row = loadProviders().find((p) => p.id === params.id);
+    if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+    return json(res, 200, { provider: providerValueFree(row) });
+  } },
+  { method: 'PATCH', path: '/v1/hub/providers/{id}', handler: ({ res, params, body }) =>
+    body().then((b) => updateProvider(params.id, b, res)).catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+  { method: 'DELETE', path: '/v1/hub/providers/{id}', handler: ({ res, params }) =>
+    deleteProvider(params.id, res) },
+  { method: 'POST', path: '/v1/hub/providers/{id}/logout', handler: ({ res, params }) =>
+    logoutProvider(params.id, res) },
+  { method: 'GET', path: '/v1/hub/providers/{id}/models', handler: ({ res, params }) => {
+    const row = loadProviders().find((p) => p.id === params.id);
+    if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+    return json(res, 200, catalogView(row));
+  } },
+  { method: 'PATCH', path: '/v1/hub/providers/{id}/models', handler: ({ res, params, body }) =>
+    body().then((b) => {
+      if (rejectUnknownFields(res, b, ['enabledModelIds'], 'PATCH /v1/hub/providers/{id}/models')) return;
+      return selectProviderModels(params.id, b.enabledModelIds, res);
+    })
+      .catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+  { method: 'POST', path: '/v1/hub/providers/{id}/models/refresh', handler: ({ res, params }) =>
+    refreshProviderCatalog(params.id).then((r) => json(res, 200, r)).catch((e) => {
+      const status = e.code === 'provider_not_found' ? 404 : e.code === 'revision_conflict' ? 409 : e.code === 'provider_unauthorized' || e.code === 'validation_failed' ? 400 : 502;
+      const row = loadProviders().find((p) => p.id === params.id);
+      return json(res, status, { ...errorBody(e.code || 'provider_catalog_failed', e.code ? e.message : 'catalog unavailable'), catalog: row ? catalogView(row) : null });
+    }) },
+
+  // ---- skills: a directory per skill, round-tripped byte for byte ----------
+  { method: 'GET', path: '/v1/hub/skills', handler: ({ res }) =>
+    json(res, 200, { skills: listSkills() }) },
+  { method: 'DELETE', path: '/v1/hub/skills/{id}', handler: ({ res, params }) => {
+    let dir;
+    try { dir = skillDir(params.id); } catch (e) { return fail(res, 400, 'validation_failed', e.message); }
+    fs.rmSync(dir, { recursive: true, force: true });
+    return json(res, 200, { ok: true, id: params.id });
+  } },
+  { method: 'GET', path: '/v1/hub/skills/{id}/files/{file...}', handler: ({ res, params }) => {
+    const rel = params.file.join('/');
+    let target;
+    try { target = skillPath(params.id, rel); } catch (e) { return fail(res, 400, 'validation_failed', e.message); }
+    if (!fs.existsSync(target)) return fail(res, 404, 'not_found', 'no such skill file');
+    return json(res, 200, { skillId: params.id, path: rel, content: fs.readFileSync(target, 'utf8') });
+  } },
+  { method: 'PUT', path: '/v1/hub/skills/{id}/files/{file...}', handler: ({ res, params, body }) =>
+    body().then((b) => {
+      const rel = params.file.join('/');
+      let target;
+      try { target = skillPath(params.id, rel); } catch (e) { return fail(res, 400, 'validation_failed', e.message); }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, b.content ?? '', 'utf8');
+      return json(res, 200, { skillId: params.id, path: rel, bytes: Buffer.byteLength(b.content ?? '', 'utf8') });
+    }).catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+
+  // ---- connections (S4, connection-only model) -----------------------------
+  { method: 'GET', path: '/v1/hub/connections', handler: ({ res }) =>
+    json(res, 200, { connections: loadConnections().map(connectionValueFree) }) },
+  { method: 'POST', path: '/v1/hub/connections', handler: ({ res, body }) =>
+    body().then((b) => createConnection(b, res)).catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+  { method: 'PATCH', path: '/v1/hub/connections/{id}', handler: ({ res, params, body }) =>
+    body().then((b) => updateConnection(params.id, b, res)).catch((e) => fail(res, 400, 'validation_failed', e.message)) },
+  { method: 'DELETE', path: '/v1/hub/connections/{id}', handler: ({ res, params }) =>
+    deleteConnection(params.id, res) },
+
+  // ---- the hub itself ------------------------------------------------------
+  { method: 'GET', path: '/v1/hub/status', handler: ({ res }) =>
+    json(res, 200, {
+      pid: process.pid,
+      port: server.address() ? server.address().port : null,
+      startedAt: STARTED_AT,
+      buildId: BUILD_ID,
+      protocol: PROTOCOL,
+      contract: CONTRACT,
+      // What the hub manages, in the same value-free shape the list routes use:
+      // a provider shows tokenConfigured, never the token; a connection shows its
+      // materialization fields, never the credential (that lives in the OS store
+      // and reaches a harness as an env var only).
+      harnesses: listHarnesses(),
+      providers: loadProviders().map(providerValueFree),
+      connections: loadConnections().map(connectionValueFree),
+      sessionCount: sessions.size,
+      activeTurns: [...sessions.values()].filter((s) => ['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)).length,
+    }) },
+  { method: 'POST', path: '/v1/hub/shutdown', handler: ({ res }) => {
+    json(res, 200, { ok: true });
+    fs.rmSync(ENDPOINT, { force: true });
+    return res.on('finish', () => process.exit(0));
+  } },
+
+  // ---- sessions ------------------------------------------------------------
+  { method: 'POST', path: '/v1/sessions', handler: ({ res, body }) =>
+    body().then((b) => createSession(b, res)).catch((e) => failError(res, e)) },
+  { method: 'GET', path: '/v1/sessions', handler: ({ res, url }) => {
+    // ACP session/list: a deleted session is not listed, and neither is a
+    // closed one — not appearing is what closing means, as opposed to deleting.
+    // ?includeClosed=true brings them back so a caller can still reopen one.
+    const includeClosed = url.searchParams.get('includeClosed') === 'true';
+    const list = [...sessions.values()]
+      .filter((s) => s.deleted !== true)
+      .filter((s) => includeClosed || s.status !== 'closed')
+      .map((s) => ({ ...s, activeTurn: s.activeTurn }));
+    return json(res, 200, { sessions: list, next_cursor: null });
+  } },
+  { method: 'GET', path: '/v1/sessions/{id}', handler: (c) =>
+    withSession(c.params.id, c.res, (s) => json(c.res, 200, { session: s })) },
+  // ACP session/delete: remove from session/list. Not a wipe.
+  { method: 'DELETE', path: '/v1/sessions/{id}', handler: (c) =>
+    withSession(c.params.id, c.res, () => deleteSession(c.params.id, c.res)) },
+  { method: 'PATCH', path: '/v1/sessions/{id}', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body()
+      .then((b) => switchModel(c.params.id, b, c.res))
+      .catch((e) => failError(c.res, e))) },
+  { method: 'GET', path: '/v1/sessions/{id}/skills', handler: (c) =>
+    withSession(c.params.id, c.res, (s) => readHarnessSkills(c.params.id, s, c.res)) },
+  { method: 'GET', path: '/v1/sessions/{id}/stats', handler: (c) =>
+    withSession(c.params.id, c.res, (s) => readStats(c.params.id, s, c.res)) },
+  { method: 'POST', path: '/v1/sessions/{id}/fork', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body()
+      .then((b) => forkSession(c.params.id, b, c.res))
+      .catch((e) => failError(c.res, e))) },
+  { method: 'POST', path: '/v1/sessions/{id}/compact', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body()
+      .then((b) => compactSession(c.params.id, b, c.res))
+      .catch((e) => failError(c.res, e))) },
+  { method: 'POST', path: '/v1/sessions/{id}/close', handler: (c) =>
+    withSession(c.params.id, c.res, () => closeSession(c.params.id, c.res)) },
+  { method: 'POST', path: '/v1/sessions/{id}/reopen', handler: (c) =>
+    withSession(c.params.id, c.res, () => reopenSession(c.params.id, c.res)) },
+  { method: 'GET', path: '/v1/sessions/{id}/turns', handler: (c) =>
+    withSession(c.params.id, c.res, () => listTurns(c.params.id, c.res)) },
+  { method: 'GET', path: '/v1/sessions/{id}/messages', handler: (c) =>
+    withSession(c.params.id, c.res, () => readMessages(c.params.id, c.res, c.url.searchParams)) },
+  { method: 'POST', path: '/v1/sessions/{id}/turns', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body()
+      .then((b) => sendTurn(c.params.id, b, c.req, c.res))
+      .catch((e) => failError(c.res, e))) },
+  { method: 'POST', path: '/v1/sessions/{id}/cancel', handler: (c) =>
+    withSession(c.params.id, c.res, () => cancelTurn(c.params.id, c.res)) },
+  { method: 'POST', path: '/v1/sessions/{id}/repair', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body()
+      .then((b) => repairSession(c.params.id, b, c.res))
+      .catch((e) => failError(c.res, e))) },
+  { method: 'GET', path: '/v1/sessions/{id}/approvals', handler: (c) =>
+    withSession(c.params.id, c.res, () =>
+      json(c.res, 200, { approvals: [...approvals.values()].filter((a) => a.sid === c.params.id).map(({ conn: _c, timer: _t, adapterRequestId: _r, ...a }) => a) })) },
+  { method: 'POST', path: '/v1/sessions/{id}/approvals/{aid}', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body().then((b) => {
+      const r = decideApproval(c.params.aid, b.decision, b.reason);
+      if (!r) return fail(c.res, 404, 'approval_not_found', 'no such approval request');
+      return json(c.res, 200, { approval: { id: r.id, sid: r.sid, tool: r.tool, args: r.args, state: r.state } });
+    }).catch((e) => fail(c.res, 400, 'validation_failed', e.message))) },
+  { method: 'GET', path: '/v1/sessions/{id}/questions', handler: (c) =>
+    withSession(c.params.id, c.res, () =>
+      json(c.res, 200, { questions: [...questions.values()].filter((q) => q.sid === c.params.id).map(({ conn: _c, timer: _t, adapterRequestId: _r, ...q }) => q) })) },
+  { method: 'POST', path: '/v1/sessions/{id}/questions/{qid}', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body().then((b) => {
+      const r = answerQuestion(c.params.qid, b.answers);
+      if (!r) return fail(c.res, 404, 'question_not_found', 'no such question request');
+      return json(c.res, 200, { question: { id: r.id, sid: r.sid, questions: r.questions, answers: r.answers, state: r.state } });
+    }).catch((e) => fail(c.res, 400, 'validation_failed', e.message))) },
+  // honest: no artifact producer in the conformance harness yet
+  { method: 'GET', path: '/v1/sessions/{id}/artifacts', handler: (c) =>
+    withSession(c.params.id, c.res, () => json(c.res, 200, { artifacts: [], next_cursor: null })) },
+];
+
+// A harness-named route answers harness_not_found for a harness that does not
+// exist — one check, one message, every route that takes a harness id.
+function withHarness(id, res, run) {
+  if (!manifestOf(id)) return fail(res, 404, 'harness_not_found', `no harness ${id}`);
+  return run();
+}
+
+// A session-named route answers unknown_session for an id nobody created —
+// never silently creates one, and never reports it as a route that is missing.
+function withSession(id, res, run) {
+  const s = sessions.get(id);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  return run(s);
+}
+
+// enable/disable exist twice: the catalogue route (/v1/harnesses/{id}/…, which
+// answers {ok,id,status}) and the registry route (/v1/hub/harnesses/{id}/…,
+// which answers with the registry row). Same effect, two shapes, so the caller
+// can tell which plane it spoke to. The shape is a property of the route, so it
+// is passed in rather than inferred from the path.
+function harnessToggle(id, enabled, res, registryShape) {
+  return withHarness(id, res, () => {
+    const row = updateHarness(id, { enabled });
+    if (registryShape) return json(res, 200, { harness: row });
+    return json(res, 200, { ok: true, id, status: row && row.enabled ? 'enabled' : 'disabled' });
+  });
+}
+
+// What this process answers, as data: the same table the router matches, the
+// event names it can emit, and the contract it claims to keep. A consumer — and
+// the boot self-check — compares this with the contract it holds.
+function surfaceValue() {
+  return {
+    contract: CONTRACT,
+    openapi: { file: OPENAPI.file, sha256: OPENAPI.sha256 },
+    routes: ROUTES.map((r) => ({ method: r.method, path: r.path, auth: r.auth !== false })),
+    events: SURFACE_EVENTS,
+  };
+}
+
+// Path matching: exact in segment count, first row wins. {name} captures one
+// segment; a trailing {name...} captures the rest. Values arrive decoded, once.
+function matchPath(pattern, pathname) {
+  const want = pattern.split('/').filter(Boolean);
+  const got = pathname.split('/').filter(Boolean);
+  const params = {};
+  for (let i = 0; i < want.length; i += 1) {
+    const w = want[i];
+    if (w.endsWith('...}')) {
+      params[w.slice(1, -4)] = got.slice(i).map(decodeURIComponent);
+      return params;
+    }
+    if (i >= got.length) return null;
+    if (w.startsWith('{') && w.endsWith('}')) { params[w.slice(1, -1)] = decodeURIComponent(got[i]); continue; }
+    if (w !== got[i]) return null;
+  }
+  return got.length === want.length ? params : null;
+}
+
+function route(req, res) {
+  const url = new URL(req.url, 'http://core');
+  const body = () => new Promise((resolve, reject) => {
+    let raw = '';
+    req.on('data', (d) => { raw += d; if (raw.length > 1_000_000) req.destroy(); });
+    req.on('end', () => { try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(Object.assign(new Error('bad json'), { code: 'validation_failed' })); } });
+  });
+
+  let matched = null;
+  let params = null;
+  for (const row of ROUTES) {
+    if (row.method !== req.method) continue;
+    const p = matchPath(row.path, url.pathname);
+    if (p) { matched = row; params = p; break; }
+  }
+  // No route: the path is not part of the surface (404 not_found, whatever the
+  // token). A route that exists but is not for this caller is 401 instead.
+  if (!matched) return fail(res, 404, 'not_found', `no route ${req.method} ${url.pathname}`);
+  if (matched.auth !== false && (req.headers.authorization || '') !== `Bearer ${token}`) {
+    return fail(res, 401, 'unauthorized', 'bad token');
+  }
+  try {
+    return matched.handler({ req, res, url, params, body });
+  } catch (e) {
+    return failError(res, e, 'internal_error');
+  }
+}
+
+// A provider's models are declared by the caller, in the same shape dsh uses for
+// a model's own statement: `reasoning.efforts` (the levels the model accepts,
+// their own names in their own order) and `reasoning.default` (which one applies
+// when nobody chooses). The core is the declaration source for the providers it
+// owns; it does not learn levels from an endpoint, because an endpoint's model
+// list does not carry them.
+//
+// Declarations are keyed by model id, validated here, and stored beside the
+// catalog so a refresh cannot drop them and a removed upstream model keeps its
+// declaration.
+function checkDeclarations(input) {
+  try { return checkDeclarationsInner(input); }
+  catch (e) { return { error: e && e.bad ? 'cost.tiers entries must be objects' : (e?.message || 'invalid declarations') }; }
+}
+function checkDeclarationsInner(input) {
+  if (input === null) return { value: null };
+  if (typeof input !== 'object' || Array.isArray(input)) return { error: 'declarations must be an object keyed by model id' };
+  const value = {};
+  for (const [modelId, decl] of Object.entries(input)) {
+    if (!modelId || typeof modelId !== 'string') return { error: 'declarations keys must be model ids' };
+    if (decl === null) { value[modelId] = null; continue; }
+    if (typeof decl !== 'object' || Array.isArray(decl)) return { error: `declaration for ${modelId} must be an object` };
+    const out = {};
+    if (decl.reasoning !== undefined) {
+      const r = decl.reasoning;
+      if (r === null) { out.reasoning = null; }
+      else if (typeof r !== 'object' || Array.isArray(r)) return { error: `reasoning for ${modelId} must be an object` };
+      else {
+        const efforts = r.efforts;
+        if (!Array.isArray(efforts) || efforts.some((e) => typeof e !== 'string' || !e)) return { error: `reasoning.efforts for ${modelId} must be an array of level names` };
+        out.reasoning = { efforts };
+        if (r.default !== undefined && r.default !== null) {
+          if (typeof r.default !== 'string' || !efforts.includes(r.default)) return { error: `reasoning.default for ${modelId} must be one of its efforts` };
+          out.reasoning.default = r.default;
+        }
+      }
+    }
+    if (decl.name !== undefined) {
+      if (typeof decl.name !== 'string' || !decl.name) return { error: `name for ${modelId} must be a non-empty string` };
+      out.name = decl.name;
+    }
+    if (decl.cost !== undefined) {
+      // What a model costs, in the shape the harnesses that track spend use.
+      // Harnesses that cannot carry it simply do not get it (see the adapters).
+      const c = decl.cost;
+      if (c === null) { out.cost = null; }
+      else if (typeof c !== 'object' || Array.isArray(c)) return { error: `cost for ${modelId} must be an object` };
+      else {
+        const money = {};
+        for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+          const v = c[key];
+          if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return { error: `cost.${key} for ${modelId} must be a non-negative number` };
+          money[key] = v;
+        }
+        if (c.tiers !== undefined) {
+          if (!Array.isArray(c.tiers)) return { error: `cost.tiers for ${modelId} must be an array` };
+          money.tiers = c.tiers.map((t) => {
+            if (!t || typeof t !== 'object') throw Object.assign(new Error('tier'), { bad: true });
+            return t;
+          });
+        }
+        out.cost = money;
+      }
+    }
+    if (decl.input !== undefined) {
+      // What the model takes, in the harness vocabulary ("text", "image"). A
+      // model that does not say is NOT assumed to take images: claiming a
+      // modality the model does not have turns into a dropped input at runtime.
+      const input = decl.input;
+      if (!Array.isArray(input) || !input.length || input.some((v) => typeof v !== 'string' || !v)) {
+        return { error: `input for ${modelId} must be a non-empty array of modality names` };
+      }
+      out.input = [...new Set(input)];
+    }
+    for (const key of ['contextWindow', 'maxTokens']) {
+      if (decl[key] === undefined) continue;
+      if (decl[key] === null) { out[key] = null; continue; }
+      if (!Number.isInteger(decl[key]) || decl[key] <= 0) return { error: `${key} for ${modelId} must be a positive integer` };
+      out[key] = decl[key];
+    }
+    value[modelId] = out;
+  }
+  return { value };
+}
+
+// Core-provider catalogs never use a harness catalog or a session grant.
+const catalogRequests = new Map();
+function isSelected(row, modelId) {
+  // No selection recorded = everything the provider serves is enabled; an array
+  // = exactly those.
+  return row.selection == null ? true : row.selection.includes(modelId);
+}
+function catalogView(row) {
+  const c = row.catalog;
+  const stale = !c || c.revision !== (row.endpointRevision || 0);
+  const decls = row.models || {};
+  return { providerId: row.id, fetchedAt: c?.fetchedAt || null, stale,
+    models: (c?.models || []).map((m) => {
+      const d = decls[m.id];
+      const declared = d && d.reasoning && Array.isArray(d.reasoning.efforts) && d.reasoning.efforts.length;
+      return { ...m, providerId: row.id, provider: `prts/${row.id}`, enabled: isSelected(row, m.id), available: m.available && !stale,
+        ...(declared ? { reasoning: d.reasoning, thinkingLevels: d.reasoning.efforts, thinkingLevelsSource: 'declared' } : {}),
+        ...(d && typeof d.name === 'string' ? { name: d.name } : {}),
+        ...(d && d.cost ? { cost: d.cost } : {}),
+        ...(d && Array.isArray(d.input) && d.input.length ? { input: d.input } : {}),
+        ...(d && d.contextWindow !== undefined && d.contextWindow !== null ? { contextWindow: d.contextWindow } : {}),
+        ...(d && d.maxTokens !== undefined && d.maxTokens !== null ? { maxTokens: d.maxTokens } : {}) };
+    }) };
+}
+async function refreshProviderCatalog(id) {
+  if (catalogRequests.has(id)) return catalogRequests.get(id);
+  const operation = fetchProviderCatalog(id);
+  catalogRequests.set(id, operation);
+  try { return await operation; }
+  finally { if (catalogRequests.get(id) === operation) catalogRequests.delete(id); }
+}
+async function fetchProviderCatalog(id) {
+  const error = (code, message) => Object.assign(new Error(message), { code });
+  const row = loadProviders().find((r) => r.id === id);
+  if (!row) throw error('provider_not_found', 'no such provider');
+  const revision = row.endpointRevision || 0;
+  const credential = getSecret(secretName(id));
+  if (!credential) throw error('provider_unauthorized', 'provider has no stored credential');
+  let url;
+  try {
+    url = new URL(row.endpoint?.url || '');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
+    url.pathname = url.pathname.replace(/\/$/, '') + '/models';
+    url.hash = '';
+  } catch { throw error('validation_failed', 'invalid provider endpoint'); }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let discovered;
+  try {
+    let response;
+    try { response = await fetch(url, { headers: { authorization: `Bearer ${credential}` }, redirect: 'error', signal: controller.signal }); }
+    catch { throw error('provider_catalog_failed', 'catalog connection failed or timed out'); }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw error('provider_catalog_failed', `catalog request returned HTTP ${response.status}`);
+    }
+    const reader = response.body.getReader();
+    const chunks = []; let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 8 * 1024 * 1024) { controller.abort(); throw error('provider_catalog_failed', 'catalog response exceeds size limit'); }
+        chunks.push(Buffer.from(value));
+      }
+    } catch { throw error('provider_catalog_failed', 'catalog response interrupted, timed out or exceeded size limit'); }
+    finally { reader.releaseLock(); }
+    let document;
+    try { document = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    catch { throw error('provider_catalog_failed', 'catalog response is not JSON'); }
+    const list = Array.isArray(document?.data) ? document.data : Array.isArray(document?.models) ? document.models : null;
+    if (!list) throw error('provider_catalog_failed', 'catalog response has no model array');
+    const unique = new Map();
+    for (const item of list) {
+      const modelId = typeof item === 'string' ? item : item?.id;
+      if (typeof modelId !== 'string' || !modelId.trim()) throw error('provider_catalog_failed', 'catalog contains an invalid model id');
+      unique.set(modelId, { id: modelId, name: typeof item?.name === 'string' ? item.name : modelId });
+    }
+    discovered = [...unique.values()];
+  } finally { clearTimeout(timer); }
+  // Re-read after I/O so concurrent selection edits survive. Endpoint/secret
+  // changes invalidate this response; a deleted provider must not be resurrected.
+  const rows = loadProviders();
+  const current = rows.find((r) => r.id === id);
+  if (!current || (current.endpointRevision || 0) !== revision || (current.endpoint?.url || null) !== (row.endpoint?.url || null) || current.createdAt !== row.createdAt) {
+    throw error('revision_conflict', 'provider changed during refresh; refresh again');
+  }
+  const previous = new Map((current.catalog?.models || []).map((m) => [m.id, m]));
+  const present = new Set(discovered.map((m) => m.id));
+  const models = discovered.map((m) => ({ ...m, available: true }));
+  for (const old of previous.values()) if (!present.has(old.id)) models.push({ ...old, available: false });
+  // Which models are selected lives on the provider, not inside the fetched
+  // catalog: a refresh must not change a caller's choice, and a model the
+  // provider starts serving is selected by default.
+  if (Array.isArray(current.selection)) {
+    const known = new Set(current.selection);
+    for (const m of discovered) known.add(m.id);
+    current.selection = [...known];
+  }
+  current.catalog = { revision, fetchedAt: new Date().toISOString(), models };
+  persistProviders(rows);
+  return catalogView(current);
+}
+function selectProviderModels(id, enabledModelIds, res) {
+  if (!Array.isArray(enabledModelIds) || enabledModelIds.some((id) => typeof id !== 'string')) return fail(res, 400, 'validation_failed', 'enabledModelIds must be an array of model IDs');
+  const rows = loadProviders();
+  const row = rows.find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  if (!row.catalog) return fail(res, 409, 'catalog_not_loaded', 'fetch the provider catalog first');
+  if (catalogView(row).stale) return fail(res, 409, 'catalog_stale', 'refresh after changing endpoint or credential');
+  const known = new Set(row.catalog.models.map((m) => m.id));
+  if (enabledModelIds.some((id) => !known.has(id))) return fail(res, 400, 'validation_failed', 'selection contains an unknown model ID');
+  row.selection = [...new Set(enabledModelIds)];
+  row.updatedAt = new Date().toISOString();
+  persistProviders(rows);
+  return json(res, 200, catalogView(row));
+}
+async function listManagedProviderModels() {
+  const catalogs = []; const failures = [];
+  for (const row of loadProviders()) {
+    let view = catalogView(row);
+    if (!row.catalog || view.stale) {
+      try { view = await refreshProviderCatalog(row.id); }
+      catch (e) { failures.push({ providerId: row.id, code: e.code || 'provider_catalog_failed', message: e.code ? e.message : 'catalog unavailable' }); }
+    }
+    catalogs.push(view);
+  }
+  return { models: catalogs.flatMap((c) => c.models), catalogs, failures };
+}
+
+// ---------------------------------------------------------------------------
+// provider domain (S2): templates + registry + SecretStore + distribution
+// ---------------------------------------------------------------------------
+// One provider, one file: `providers/<id>.json` is that provider's own
+// definition — where it lives, what it speaks, what its models accept, which of
+// them are selected — written so a person can read and edit it, and so moving a
+// provider between hubs is copying a file. The fetched catalog lives in the same
+// file under `catalog`; it is derived and can be refetched, but keeping it here
+// is what makes one file describe one provider completely.
+const PROVIDERS_DIR = path.join(DATA_DIR, 'providers');
+const LEGACY_PROVIDERS_FILE = path.join(DATA_DIR, 'providers.json');
+function providerFile(id) { return path.join(PROVIDERS_DIR, `${id}.json`); }
+function writeProviderFile(row) {
+  const temp = providerFile(row.id) + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    fs.writeFileSync(temp, JSON.stringify(row, null, 2) + NL, { mode: 0o600 });
+    fs.renameSync(temp, providerFile(row.id));
+  } finally { fs.rmSync(temp, { force: true }); }
+}
+// The old shape was one array holding every provider, with `url` at the top
+// level and per-model `enabled` flags inside the catalog. Fold it into files
+// once, then keep it out of the way rather than deleting it.
+function migrateLegacyProviders() {
+  if (!fs.existsSync(LEGACY_PROVIDERS_FILE)) return;
+  const rows = readJson(LEGACY_PROVIDERS_FILE, []);
+  fs.mkdirSync(PROVIDERS_DIR, { recursive: true });
+  if (Array.isArray(rows)) {
+    for (const old of rows) {
+      if (!old || typeof old.id !== 'string') continue;
+      const selection = Array.isArray(old.catalog?.models)
+        ? old.catalog.models.filter((m) => m && m.enabled !== false).map((m) => m.id)
+        : null;
+      writeProviderFile({
+        id: old.id,
+        label: old.label || '',
+        endpoint: { url: old.url || null, api: old.api || null },
+        models: old.declarations || null,
+        selection,
+        catalog: old.catalog ? {
+          revision: old.catalog.revision || 0,
+          fetchedAt: old.catalog.fetchedAt || null,
+          models: (old.catalog.models || []).map((m) => ({ id: m.id, name: m.name, available: m.available !== false })),
+        } : null,
+        endpointRevision: old.catalogRevision || 0,
+        createdAt: old.createdAt, updatedAt: old.updatedAt,
+      });
+    }
+  }
+  fs.renameSync(LEGACY_PROVIDERS_FILE, LEGACY_PROVIDERS_FILE + '.pre-file-layout');
+}
+// A provider file a person edited into invalid JSON is reported, never skipped:
+// dropping it silently would look like the provider disappeared, and the next
+// write would then delete the file for good. Nothing here removes a file it did
+// not just write; removal is `deleteProvider`, which knows the id.
+function brokenProviderFiles() {
+  if (!fs.existsSync(PROVIDERS_DIR)) return [];
+  const out = [];
+  for (const name of fs.readdirSync(PROVIDERS_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    const file = path.join(PROVIDERS_DIR, name);
+    let row = null;
+    try { row = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { out.push({ file: name, error: 'not valid JSON: ' + e.message }); continue; }
+    if (!row || typeof row.id !== 'string' || !row.id) out.push({ file: name, error: 'a provider file needs a non-empty "id"' });
+    else if (`${row.id}.json` !== name) out.push({ file: name, error: `"id" is ${row.id}, so this file must be named ${row.id}.json` });
+  }
+  return out;
+}
+function loadProviders() {
+  migrateLegacyProviders();
+  if (!fs.existsSync(PROVIDERS_DIR)) return [];
+  const rows = [];
+  for (const name of fs.readdirSync(PROVIDERS_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    const row = readJson(path.join(PROVIDERS_DIR, name), null);
+    if (row && typeof row.id === 'string' && row.id && `${row.id}.json` === name) rows.push(row);
+  }
+  rows.sort((a, b) => a.id.localeCompare(b.id));
+  return rows;
+}
+function persistProviders(rows) {
+  fs.mkdirSync(PROVIDERS_DIR, { recursive: true });
+  for (const row of rows) writeProviderFile(row);
+}
+// What a provider looks like on the wire: the endpoint, the model declarations,
+// the selection; never the token.
+function providerValueFree(row) {
+  return {
+    id: row.id,
+    label: row.label || '',
+    url: row.endpoint?.url || null,
+    api: row.endpoint?.api || null,
+    tokenConfigured: getSecret(secretName(row.id)) != null,
+    declarations: row.models || null,
+    selection: Array.isArray(row.selection) ? row.selection : null,
+    catalogRevision: row.endpointRevision || 0,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function secretName(providerId) { return `provider-${providerId}-token`; }
+
+// one-shot config-surface RPC against a provider-capable adapter (no session)
+function configRpc(harnessId, method, params) {
+  declareAdapterRequest(method);
+  return new Promise((resolve, reject) => {
+    const m = manifestOf(harnessId);
+    if (!m) return reject(Object.assign(new Error('no such harness'), { code: 'harness_not_found' }));
+    const caps = m.capabilities || [];
+    if (!caps.includes('providers') && !caps.includes('models')) {
+      return reject(Object.assign(new Error('harness has no provider surface'), { code: 'unsupported-for-provider' }));
+    }
+    const dir = path.join(PLUGINS_DIR, harnessId);
+    const [cmd, ...args] = m.command || [];
+    // Same runtime declaration as a session spawn: the manifest owns it and the
+    // config plane reads the same one, so a probe and a turn drive the same pin.
+    const runtimeArgv = Array.isArray(m.runtime && m.runtime.command) && m.runtime.command.length
+      ? m.runtime.command.map((part, i) => (i === 0 ? part : path.resolve(dir, part)))
+      : null;
+    // Same per-harness data dir as sessions (Rust: agent-data/<manifest.id>), so
+    // the config plane and sessions share one home and one settings/profile.
+    const agentDir = path.join(DATA_DIR, 'agents', harnessId);
+    fs.mkdirSync(agentDir, { recursive: true });
+    const proc = spawn(cmd, args, {
+    windowsHide: true,
+      cwd: dir,
+      env: { ...process.env, PRTS_AGENT_DATA_DIR: agentDir, PRTS_CWD: process.cwd(), PRTS_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, PRTS_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, PRTS_PRESETS_DIR: PRESETS_DIR, ...(runtimeArgv ? { PRTS_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    let buf = '';
+    let settled = false;
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (d) => {
+      buf += d;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line.trim()) continue;
+        let msg; try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.id === 1 && !settled) {
+          settled = true;
+          if (msg.error) reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
+          else resolve(msg.result);
+          proc.kill();
+        }
+      }
+    });
+    proc.on('exit', () => { if (!settled) { settled = true; reject(new Error('adapter exited before response')); } });
+    proc.on('error', (e) => { if (!settled) { settled = true; reject(e); } });
+    proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) + '\n');
+  });
+}
+
+// tools/list (H-6): the tool catalog is the data source for approvalDefault and
+// for disabledTools (A-3). Capability-gated: a harness that does not declare
+// `tools` has an unknown catalog — we say so, we never fake an empty one.
+// Honesty (A-3): partial and enabled are forwarded verbatim; core never
+// rewrites them to imply a block that did not happen.
+// --- model catalog (API 2: the harness's own models) ------------------------
+// Mirrors listTools: capability-gated; no `models` capability -> known:false,
+// never a fake empty list. Per PROTOCOL §6 (R-019): each entry keeps its real
+// providerId identity, one harness's failure must not pollute another's.
+async function listPresets(harnessId) {
+  const m = manifestOf(harnessId);
+  const caps = m.capabilities || [];
+  if (!caps.includes('presets')) {
+    return { harnessId, known: false, presets: [] };
+  }
+  const r = await configRpc(harnessId, 'presets/list', {});
+  const presets = (r && Array.isArray(r.presets) ? r.presets : []).map((p) => ({
+    id: p.id,
+    name: p.name != null ? p.name : null,
+    description: p.description != null ? p.description : null,
+    trust: p.trust === 'system' || p.trust === 'user' ? p.trust : null,
+    isDefault: p.isDefault === true,
+    broken: p.broken != null ? p.broken : null,
+  }));
+  return { harnessId, known: true, presets };
+}
+
+// The models a provider offers, with every fact already resolved: the declared
+// name wins, then the name the provider's own catalog carried, then the id. The
+// hub owns the catalog, so it is the one place that knows both halves — an
+// adapter given only the declaration would fall back to the id and lose the
+// name the provider published.
+function effectiveModels(row) {
+  const decls = row.models && typeof row.models === 'object' ? row.models : {};
+  const catalog = Array.isArray(row.catalog?.models) ? row.catalog.models : [];
+  const seen = new Map();
+  for (const m of catalog) {
+    if (!m || typeof m.id !== 'string' || !m.id) continue;
+    seen.set(m.id, { id: m.id, name: (typeof m.name === 'string' && m.name) || m.id });
+  }
+  for (const [id, d] of Object.entries(decls)) {
+    if (!seen.has(id)) seen.set(id, { id, name: id });
+    if (!d) continue;
+    if (typeof d.name === 'string' && d.name) seen.get(id).name = d.name;
+  }
+  for (const [id, d] of Object.entries(decls)) {
+    if (!d) continue;
+    const entry = seen.get(id);
+    for (const key of ['input', 'cost', 'contextWindow', 'maxTokens']) {
+      if (d[key] !== undefined && d[key] !== null) entry[key] = d[key];
+    }
+    if (d.reasoning) entry.reasoning = d.reasoning;
+  }
+  return [...seen.values()];
+}
+// What the core owns and a harness therefore cannot discover on its own: the
+// managed providers, each with the model declarations it was registered with.
+// The token is not here — a catalog is not a place to move a secret (§6.2); the
+// adapter needs the endpoint and the declared models, nothing more.
+function injectedProviderDeclarations() {
+  return loadProviders().map((row) => ({
+    id: row.id,
+    url: row.endpoint?.url || null,
+    models: effectiveModels(row),
+    // WHOSE fact is this? The credential's. A harness cannot answer it: for a
+    // core-managed provider the token lives in the hub's secret store and only
+    // reaches the harness at session start (credentials/grant). Without this the
+    // model picker said `needs-auth` for every managed model on dsh while pi and
+    // jouzu said available — the same provider, two answers, neither from the side
+    // that knew.
+    hasCredential: !!getSecret(secretName(row.id)),
+    credentialReachable: 'secret-store',
+  }));
+}
+// The models a harness can actually run. A harness's own catalog answers most of
+// it, but a core-managed provider lives in the core, not in the harness — so the
+// core hands over the providers it owns (id, url, declaration) and the adapter
+// reports them as part of this harness's catalog. That is the whole point of the
+// question the endpoint answers: what can this harness run right now. A caller
+// reads one list and does not merge two; a provider reachable in dsh's own
+// config and one injected at session start must not look different here.
+async function listModels(harnessId) {
+  const m = manifestOf(harnessId);
+  const caps = m.capabilities || [];
+  if (!caps.includes('models')) {
+    return { harnessId, known: false, models: [], failures: [] };
+  }
+  const r = await configRpc(harnessId, 'models/list', { providers: injectedProviderDeclarations() });
+  const models = (r && Array.isArray(r.models) ? r.models : []).map((x) => ({
+    id: x.id,
+    providerId: x.providerId != null ? x.providerId : (x.connectionId != null ? x.connectionId : null),
+    provider: x.provider || null,
+    name: x.name || x.id,
+    available: x.available !== false,
+    unavailableReason: x.unavailableReason || null,
+    // Thinking levels come from the harness exactly as reported — native names,
+    // no core vocabulary and no invented conversion. Absent array = the harness
+    // reported none; empty array = it reported that this model has none. The two
+    // are different answers and stay different.
+    // Reported verbatim: this harness's names, order and default. No core
+    // vocabulary and no conversion, so a caller shows exactly what the harness
+    // accepts. `null` = the harness did not report levels (absence is an answer);
+    // any array it does report is passed through, including ['off'] for a model
+    // that has nothing to turn off.
+    // Where the levels came from, as one field so a caller never has to guess:
+    //   'declared' — this harness reported a level list for this model; the
+    //                list below is that harness's own, verbatim.
+    //   'default'  — the model reasons, but this harness did not name its
+    //                levels. The harness has a default; the core does not know
+    //                it, so it is not invented here.
+    //   'none'     — the model does not reason; there is nothing to choose.
+    // Which level is currently in effect is the caller's question, not the
+    // core's: `appliedThinkingLevel` on the session is what a harness confirmed.
+    thinkingLevels: Array.isArray(x.thinkingLevels) ? x.thinkingLevels.filter((l) => typeof l === 'string' && l) : null,
+    thinkingLevelsSource: Array.isArray(x.thinkingLevels) && x.thinkingLevels.length
+      ? 'declared'
+      : (x.reasoning || x.thinkingLevelsSource === 'default' ? 'default' : 'none'),
+    reasoning: x.reasoning || null,
+    contextWindow: x.contextWindow != null ? x.contextWindow : null,
+    maxTokens: x.maxTokens != null ? x.maxTokens : null,
+  }));
+  const failures = (r && Array.isArray(r.failures) ? r.failures : []).map((f) => ({
+    providerId: f.providerId || null,
+    connectionId: f.connectionId || null,
+    message: f.message || '',
+  }));
+  return { harnessId, known: true, models, failures };
+}
+
+async function listTools(harnessId, mode) {
+  const m = manifestOf(harnessId);
+  const caps = m.capabilities || [];
+  if (!caps.includes('tools')) {
+    return { harnessId, known: false, tools: [], partial: false };
+  }
+  const r = await configRpc(harnessId, 'tools/list', mode ? { mode } : {});
+  const tools = (r && Array.isArray(r.tools) ? r.tools : []).map((t) => ({
+    name: t.name,
+    description: t.description || '',
+    kind: t.kind || 'other',
+    approvalDefault: t.approvalDefault || 'once',
+    enabled: t.enabled !== false,
+  }));
+  return { harnessId, known: true, tools, partial: r && r.partial === true };
+}
+
+// What this session's harness actually has, asked of the harness itself (pi/jouzu:
+// their own command list; dsh: its skill catalogue RPC). Read through, per session —
+// a catalogue depends on the session's directory. The hub never answers this from its
+// own install manifest: dsh drops a skill it does not like and says nothing, so the
+// only honest source for "what does it have" is the harness.
+function readHarnessSkills(sid, s, res) {
+  const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+  if (!caps.includes('skills')) {
+    return fail(res, 501, 'unsupported', `harness '${s.harnessId}' cannot report its skills`);
+  }
+  let conn = connFor(sid);
+  if (!conn) {
+    if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'adapter not running; session has no resume ref');
+    conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  }
+  return initAdapter(conn, s, {})
+    .then(() => rpc(conn, 'skills/list', { sid }, 60_000))
+    .then((r) => {
+      const skills = (r && Array.isArray(r.skills) ? r.skills : []).map((k) => ({
+        name: String(k.name),
+        ...(k.description ? { description: String(k.description) } : {}),
+        ...(k.whenToUse ? { whenToUse: String(k.whenToUse) } : {}),
+        ...(typeof k.modelInvocable === 'boolean' ? { modelInvocable: k.modelInvocable } : {}),
+      }));
+      json(res, 200, { sessionId: sid, source: 'harness', known: true, skills });
+    })
+    // A harness that cannot answer in time is UNKNOWN, not empty: an empty catalogue
+    // is a claim ("it has no skills") and a timeout is not evidence for it. jouzu, for
+    // instance, finishes its own startup lazily — measured once at 70s and once at 9s
+    // for the first call, then milliseconds. Calling again after it is warm works.
+    .catch((e) => json(res, 200, { sessionId: sid, source: 'harness', known: false, reason: e.message, skills: [] }));
+}
+
+function createProvider(b, res) {
+  if (rejectUnknownFields(res, b, ['id', 'label', 'url', 'api', 'token', 'declarations'], 'POST /v1/hub/providers')) return;
+  const rows = loadProviders();
+  const id = b.id || `p-${crypto.randomBytes(4).toString('hex')}`;
+  if (rows.some((r) => r.id === id)) return fail(res, 409, 'already_exists', 'provider id already exists');
+  if (!b.url) return fail(res, 400, 'validation_failed', 'url is required');
+  const now = new Date().toISOString();
+  const row = {
+    id, label: b.label || '',
+    // What this provider is: where it lives, and what it speaks. `api` is the
+    // harness vocabulary for the wire protocol (openai-completions,
+    // anthropic-messages, ...); the adapter that writes the harness's own
+    // provider entry is the one that validates it.
+    endpoint: { url: b.url, api: typeof b.api === 'string' && b.api ? b.api : null },
+    models: null, selection: null, catalog: null, endpointRevision: 0,
+    createdAt: now, updatedAt: now,
+  };
+  if (b.declarations !== undefined) {
+    const checked = checkDeclarations(b.declarations);
+    if (checked.error) return fail(res, 400, 'validation_failed', checked.error);
+    row.models = checked.value;
+  }
+  if (b.token) storeSecret(secretName(id), b.token);
+  rows.push(row);
+  persistProviders(rows);
+  json(res, 200, { provider: providerValueFree(row) });
+}
+
+function updateProvider(id, b, res) {
+  if (rejectUnknownFields(res, b, ['label', 'url', 'api', 'token', 'declarations'], 'PATCH /v1/hub/providers/{id}')) return;
+  const rows = loadProviders();
+  const row = rows.find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  if (b.label !== undefined) row.label = b.label;
+  if (b.declarations !== undefined) {
+    const checked = checkDeclarations(b.declarations);
+    if (checked.error) return fail(res, 400, 'validation_failed', checked.error);
+    row.models = checked.value;
+  }
+  if (b.api !== undefined) {
+    if (b.api !== null && (typeof b.api !== 'string' || !b.api)) return fail(res, 400, 'validation_failed', 'api must be a non-empty string or null');
+    if ((b.api || null) !== (row.endpoint?.api || null)) row.endpointRevision = (row.endpointRevision || 0) + 1;
+  }
+  if ((b.url !== undefined && b.url !== (row.endpoint?.url || null)) || b.token) row.endpointRevision = (row.endpointRevision || 0) + 1;
+  row.endpoint = {
+    url: b.url !== undefined ? b.url : (row.endpoint?.url || null),
+    api: b.api !== undefined ? (b.api || null) : (row.endpoint?.api || null),
+  };
+  if (b.token) storeSecret(secretName(id), b.token);
+  row.updatedAt = new Date().toISOString();
+  persistProviders(rows);
+  json(res, 200, { provider: providerValueFree(row) });
+}
+
+function deleteProvider(id, res) {
+  const rows = loadProviders();
+  const row = rows.find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  deleteSecret(secretName(id));
+  persistProviders(rows.filter((r) => r.id !== id));
+  fs.rmSync(providerFile(id), { force: true });   // the one place a provider file is removed
+  json(res, 200, { ok: true, id });
+}
+
+function logoutProvider(id, res) {
+  const rows = loadProviders();
+  const row = rows.find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  deleteSecret(secretName(id));   // drop the token, keep the provider
+  row.endpointRevision = (row.endpointRevision || 0) + 1;
+  row.updatedAt = new Date().toISOString();
+  persistProviders(rows);
+  json(res, 200, { provider: providerValueFree(row) });
+}
+
+// ---------------------------------------------------------------------------
+// skills domain (S4, core side): folder + byte-level round-trip; path escape
+// rejected at config time. Materialization to adapters happens in S4 adapter
+// work; here we own the truth and the UHP red lines.
+// ---------------------------------------------------------------------------
+const SKILLS_DIR = path.join(DATA_DIR, 'skills');
+
+// A skill id names a directory inside SKILLS_DIR, never a path. The `files`
+// branch checked for escape; the DELETE branch did not, so a request like
+// `/v1/hub/skills/..%2f..%2fvictim` removed a directory outside SKILLS_DIR.
+function skillDir(skillId) {
+  if (typeof skillId !== 'string' || !skillId || skillId === '.' || skillId === '..' || skillId.includes('/') || skillId.includes(String.fromCharCode(92)) || skillId.includes(':')) {
+    throw Object.assign(new Error('skill id must be a plain directory name'), { code: 'validation_failed' });
+  }
+  return path.join(SKILLS_DIR, skillId);
+}
+function skillPath(skillId, rel) {
+  const base = skillDir(skillId);
+  const target = path.normalize(path.join(base, rel || ''));
+  if (target !== base && !target.startsWith(base + path.sep)) {
+    throw Object.assign(new Error('path escape'), { code: 'validation_failed' });
+  }
+  return target;
+}
+function listSkills() {
+  if (!fs.existsSync(SKILLS_DIR)) return [];
+  return fs.readdirSync(SKILLS_DIR).map((id) => ({
+    id,
+    hasManifest: fs.existsSync(path.join(SKILLS_DIR, id, 'SKILL.md')),
+    files: fs.readdirSync(path.join(SKILLS_DIR, id)).length,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// materialization (S4). core is a courier, not an interpreter (A-4): it hands
+// the enabled skills (as byte-level content) and enabled connections (scheme +
+// endpoint + envName, credential delivered only via env — A-2/§6) to the adapter inside
+// config/set. The adapter translates them into its native dialect; the word
+// 'mcp' only lives inside an adapter. Disabled connections are omitted
+// (disable == cut-off == zero materialization).
+// ---------------------------------------------------------------------------
+function readBundle(baseDir, id) {
+  const base = path.join(baseDir, id);
+  const files = {};
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      if (fs.statSync(full).isDirectory()) walk(full);
+      else files[path.relative(base, full).split(path.sep).join('/')] = fs.readFileSync(full, 'utf8');
+    }
+  };
+  walk(base);
+  return files;
+}
+// What a session carries into its harness. The hub assembles it from its own
+// registries — the harness's installed extensions, its enabled skills, the
+// enabled connections — and hands it over whole; the adapter only places it
+// where its harness reads it. This is the hub's installing job: an adapter
+// never chooses what to install, so adding an extension to a harness is a
+// registry change, not a code change in three adapters.
+function copyTree(src, dst) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const name of fs.readdirSync(src)) {
+    const from = path.join(src, name);
+    const to = path.join(dst, name);
+    if (fs.statSync(from).isDirectory()) copyTree(from, to);
+    else fs.copyFileSync(from, to);
+  }
+}
+// The hub installs a harness's extensions: the registry says which, and the hub
+// writes exactly those extension directories into that harness's own data dir.
+// The set is exact each time — an extension removed from the registry is removed
+// from the install — and the adapter only places what it finds there into the
+// layout its harness reads.
+function installExtensions(harnessId) {
+  const dir = path.join(DATA_DIR, 'agents', harnessId, 'extensions');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const row = harnessRow(harnessId);
+  const wanted = row && Array.isArray(row.extensions) ? row.extensions : [];
+  const available = availableExtensions();
+  const installed = [];
+  for (const id of wanted.filter((e) => available.includes(e))) {
+    copyTree(path.join(EXTENSIONS_DIR, id), path.join(dir, id));
+    installed.push(id);
+  }
+  return { dir, installed };
+}
+// Skills are installed the same way extensions are: the registry says which, the hub
+// writes exactly those directories into that harness's own data dir, and the adapter
+// only points its harness at the result (pi/jouzu: --skill; dsh: DSH_AGENTS_HOME).
+// The set is exact each time — a skill removed from the registry is removed from the
+// install — and nothing is written near the user's own skill directories.
+function installSkills(harnessId) {
+  const dir = path.join(DATA_DIR, 'agents', harnessId, 'skills');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const held = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR) : [];
+  const row = harnessRow(harnessId);
+  const wanted = row && Array.isArray(row.skills) ? row.skills : held;   // null/absent = all
+  const installed = [];
+  for (const id of wanted.filter((s) => held.includes(s))) {
+    copyTree(path.join(SKILLS_DIR, id), path.join(dir, id));
+    installed.push(id);
+  }
+  return { dir, installed };
+}
+function buildMaterialization(harnessId) {
+  const connections = loadConnections()
+    .filter((c) => c.state !== 'disabled')
+    .map(({ id, name, scheme, endpoint, envName }) => ({ id, name, scheme, endpoint, envName }));
+  // Skills are NOT here: the hub installs them into the harness's own directory
+  // before its process starts (installSkills), exactly the way extensions travel.
+  // One path, one source — the alternative was two ways to be installed and a
+  // contract that could disagree with itself.
+  return { connections };
+}
+
+// ---------------------------------------------------------------------------
+// connection domain (S4, connection-only model). A connection is a managed
+// object: enable/disable/delete. disable == cut-off == zero materialization.
+// scheme is a free string (stdio/http/https/ws/wss/...), no whitelist.
+// ---------------------------------------------------------------------------
+const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
+function loadConnections() { return readStateJson(CONNECTIONS_FILE, []); }
+function persistConnections(rows) { writeJson(CONNECTIONS_FILE, rows); }
+function connectionValueFree(row) {
+  const { secretRef, ...rest } = row;
+  return { ...rest, credentialConfigured: Boolean(secretRef) };
+}
+
+// FD-4: the value to grant a session adapter, if any. The session's
+// connectionId names either a core connection row or a core provider row; its
+// token is what gets granted. Unknown / no token -> null (the harness's own
+// login is its business).
+// Returns the credential a session's model provider can be fed: {value, url}
+// plus the provider's model declarations, if it has any. value = the token; url =
+// the provider's endpoint (present only for a core provider row — a hub-managed
+// upstream). A provider row is url+token; both must reach the adapter for
+// injection to be possible. Unknown / no token -> null (the harness's own login
+// is its business). The declarations ride along because the core is their source:
+// a harness cannot learn levels from the endpoint, so the ones the core holds are
+// the ones the harness gets.
+function connectionCredential(harnessId, connectionId) {
+  if (!connectionId) return null;
+  const pv = getSecret(secretName(connectionId));
+  if (pv != null) {
+    const row = loadProviders().find((r) => r.id === connectionId);
+    return { value: pv, url: row ? (row.endpoint?.url || null) : null, api: row ? (row.endpoint?.api || null) : null, models: row ? effectiveModels(row) : null };
+  }
+  const c = loadConnections().find((r) => r.id === connectionId);
+  if (c && c.secretRef) { const v = getSecret(c.secretRef); if (v != null) return { value: v, url: null, declarations: null }; }
+  return null;
+}
+
+// §6: a connection's token reaches the adapter as an env var, never in the
+// config/set payload. Only enabled connections are injected (disabled == cut-off).
+function connectionEnv() {
+  const env = {};
+  for (const c of loadConnections()) {
+    if (c.state === 'disabled' || !c.envName || !c.secretRef) continue;
+    const value = getSecret(c.secretRef);
+    if (value != null) env[c.envName] = value;
+  }
+  return env;
+}
+
+function createConnection(b, res) {
+  const rows = loadConnections();
+  const id = b.id || `c-${crypto.randomBytes(4).toString('hex')}`;
+  if (rows.some((r) => r.id === id)) return fail(res, 409, 'already_exists', 'connection id already exists');
+  const now = new Date().toISOString();
+  // The token is stored in the SecretStore and handed to the adapter as an ENV
+  // VAR (never in the config/set payload — §6, keeps it out of conversation
+  // history). envName is what the adapter reads (e.g. MY_API_TOKEN).
+  let secretRef = null;
+  if (b.token) {
+    secretRef = `connection-${id}-token`;
+    storeSecret(secretRef, b.token);
+  }
+  const row = {
+    id, name: b.name || id, scheme: b.scheme || 'stdio', endpoint: b.endpoint || '',
+    envName: b.envName || null, secretRef,
+    state: b.state === 'disabled' ? 'disabled' : 'enabled',
+    managed: true, createdAt: now, updatedAt: now,
+  };
+  rows.push(row);
+  persistConnections(rows);
+  json(res, 200, { connection: connectionValueFree(row) });
+}
+
+function updateConnection(id, b, res) {
+  const rows = loadConnections();
+  const row = rows.find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'connection_not_found', 'no such connection');
+  if (b.name !== undefined) row.name = b.name;
+  if (b.scheme !== undefined) row.scheme = b.scheme;
+  if (b.endpoint !== undefined) row.endpoint = b.endpoint;
+  if (b.envName !== undefined) row.envName = b.envName;
+  if (b.state === 'enabled' || b.state === 'disabled') row.state = b.state;
+  if (b.token) {
+    row.secretRef = `connection-${id}-token`;
+    storeSecret(row.secretRef, b.token);
+  }
+  row.updatedAt = new Date().toISOString();
+  persistConnections(rows);
+  json(res, 200, { connection: connectionValueFree(row) });
+}
+
+function deleteConnection(id, res) {
+  const rows = loadConnections();
+  const row = rows.find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'connection_not_found', 'no such connection');
+  if (row.secretRef) deleteSecret(row.secretRef);
+  persistConnections(rows.filter((r) => r.id !== id));
+  json(res, 200, { ok: true, id });
+}
+
+// Session-process initialization (used at create AND at every respawn). Contract
+// order: session/start (or resume) -> credentials/grant (FD-4) -> config/set. A
+// process is only READY once all three succeed. The in-flight promise is shared
+// so concurrent callers never double-start or skip grant/config. Initialization
+// failure leaves the process unusable (caller must not prompt).
+function initAdapter(conn, s, { modelProviderId, modelId, presetId, plan, review, thinkingLevel, title = null, freshSession = false, fork = null } = {}) {
+  if (conn.ready) return Promise.resolve();
+  if (conn.initializing) return conn.initializing;   // share the in-flight init
+  // freshSession is only ever set by repair, for the case where the harness has
+  // no session artifact to resume (the cancelled turn never created one). It
+  // opens the session anew and REPLACES the ref, so the session continues as a
+  // clean thread rather than failing to open a file that was never written.
+  const resumeRef = freshSession ? null : (s.ref || null);
+  const strip = (/** @type {any} */ extra) => Object.assign(extra, buildMaterialization(s.harnessId));
+  // A forked session opens by FORKING: this process is the child, the hub tells it
+  // where to branch from, and the ref that comes back is the child's own. The
+  // source session is never touched, so no adapter of the source needs to be
+  // running — the child's process reads the source itself.
+  conn.initializing = (fork
+    ? rpc(conn, 'session/fork', { sid: s.id, from: fork.from, ...(fork.throughTurn !== undefined ? { throughTurn: fork.throughTurn } : {}) }, TURN_TIMEOUT)
+    : rpc(conn, 'session/start', { sid: s.id, ...(resumeRef ? { resume: resumeRef } : {}) }, TURN_TIMEOUT))
+    .then((r) => {
+      s.ref = r.ref;
+      // The harness's own answer on additionalDirectories: {requested, applied,
+      // supported, reason}. The core passes the roots through and records what
+      // the harness said it did with them — it does not assume they are active,
+      // and it does not decide for the harness whether they are supported.
+      if (r.additionalDirectories !== undefined) s.appliedAdditionalDirectories = r.additionalDirectories;
+      const cid = modelProviderId ?? s.modelProviderId;
+      // A hub-managed provider was named but its token is not available: this
+      // must fail, not fall through. Skipping the grant is what let a session run
+      // on the harness's native provider while the caller believed it had chosen
+      // one — a silent substitution, the same class as the T0 model-fallback
+      // guard.
+      //
+      // Only a MANAGED provider can be checked here. A harness's own native
+      // provider (the ids in its /models catalog) carries no hub credential by
+      // definition — the harness authenticates itself — so naming one is not a
+      // claim that the hub would fund it, and refusing it would break ordinary use.
+      const isManaged = cid != null && loadProviders().some((r) => r.id === cid);
+      if (isManaged && connectionCredential(s.harnessId, cid) == null) {
+        throw Object.assign(
+          new Error(`provider '${cid}' has no stored credential; refusing to fall back to the harness's own provider`),
+          { code: 'provider_unauthorized' },
+        );
+      }
+      const cred = connectionCredential(s.harnessId, cid);
+      const granted = cred == null
+        ? Promise.resolve()
+        : rpc(conn, 'credentials/grant', { connectionId: cid, value: cred.value, ...(cred.url ? { url: cred.url } : {}), ...(cred.api ? { api: cred.api } : {}), ...(cred.models ? { models: cred.models } : {}) }, TURN_TIMEOUT).then(() => {});
+      return granted.then(() => {
+        const cfg = {};
+        if (cid) cfg.connectionId = cid;
+        const mid = modelId ?? s.modelId;
+        if (mid) cfg.model = mid;
+        const pst = presetId ?? s.presetId;   // resume must keep the persisted preset
+        if (pst) cfg.presetId = pst;
+        const pln = plan ?? s.plan;   // resume must keep the persisted plan state
+        if (pln !== null && pln !== undefined) cfg.plan = pln;
+        const rvw = review ?? s.review;   // resume must keep the persisted review state
+        if (rvw !== null && rvw !== undefined) cfg.review = rvw;
+        const thl = thinkingLevel ?? s.thinkingLevel;   // resume must keep the persisted level
+        if (thl !== null && thl !== undefined && thl !== '') cfg.thinkingLevel = thl;
+        strip(cfg);
+        return rpc(conn, 'config/set', { sid: s.id, config: cfg }, TURN_TIMEOUT).then((applied) => {
+          // T0 guard: whatever the adapter reports as APPLIED must equal what we
+          // asked for. A silent fallback to another model/provider is the worst
+          // failure mode; it fails loudly here, never passes as success.
+          const a = applied && applied.applied;
+          if (mid && a && typeof a.model === 'string' && a.model !== mid) {
+            throw Object.assign(new Error(`model fallback: asked ${mid}, adapter applied ${a.model}`), { code: 'model_mismatch' });
+          }
+          if (a) {
+            s.appliedModel = a.model != null ? a.model : null;
+            s.appliedProviderId = a.connectionId != null ? a.connectionId : null;
+            if (a.preset !== undefined) s.appliedPreset = a.preset != null ? a.preset : null;
+            if (a.plan !== undefined) s.appliedPlan = a.plan != null ? a.plan : null;
+            if (a.review !== undefined) s.appliedReview = a.review != null ? a.review : null;
+            if (a.thinkingLevel !== undefined) s.appliedThinkingLevel = a.thinkingLevel != null ? String(a.thinkingLevel) : null;
+          } else {
+            s.appliedModel = null;
+            s.appliedProviderId = null;
+          }
+          // A title is a name the HARNESS shows in its own listings too, so it is
+          // pushed there when the session starts. A harness that cannot rename
+          // keeps the hub's title and says so in `warning` — the caller must not
+          // have to discover that the other side never heard the name.
+          const startTitle = title ?? s.title;
+          if (!startTitle) return undefined;
+          const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+          if (!caps.includes('rename')) {
+            s.warning = `harness '${s.harnessId}' declares no rename capability: the title stays in the hub`;
+            return undefined;
+          }
+          return rpc(conn, 'session/rename', { sid: s.id, title: startTitle }, TURN_TIMEOUT)
+            .then((r) => { s.appliedTitle = r && typeof r.title === 'string' ? r.title : null; })
+            .catch((e) => { s.appliedTitle = null; s.warning = `title not applied by the harness: ${e.message}`; });
+        });
+      });
+    })
+    .then(() => { conn.ready = true; conn.started = true; })
+    .catch((e) => {
+      // Not ready: drop the process, keep the session record (with its ref) for
+      // a later retry, and surface the error. Never leave a half-init process.
+      conn.ready = false;
+      conn.started = false;
+      if (adapters.get(s.id) === conn) adapters.delete(s.id);
+      try { conn.proc.kill(); } catch {}
+      throw e;
+    })
+    .finally(() => { conn.initializing = null; });
+  return conn.initializing;
+}
+
+// A session runs in one working directory. There is no core concept of a
+// "workspace": naming and grouping directories is the caller's business, and a
+// caller only has to hand us a cwd. The one thing that IS the core's job is that
+// a session always has a directory — so an omitted cwd gets one allocated here,
+// under the session's own id.
+
+
+// A request field nobody reads is a request that did not happen. Accepting an
+// unknown field means answering 200 to a caller whose knob was never set — the
+// same silent downgrade the hub refuses everywhere else. Every hand-written body
+// goes through here, and the message names what would have been accepted.
+function rejectUnknownFields(res, body, allowed, route) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const unknown = Object.keys(body).filter((k) => !allowed.includes(k));
+  if (!unknown.length) return false;
+  fail(res, 400, 'validation_failed',
+    `${route}: unknown field${unknown.length > 1 ? 's' : ''} ${unknown.map((k) => `'${k}'`).join(', ')}; accepts ${allowed.map((k) => `'${k}'`).join(', ')}`);
+  return true;
+}
+
+function createSession(b, res) {
+  if (rejectUnknownFields(res, b, ['harnessId', 'modelProviderId', 'connectionId', 'modelId', 'title', 'presetId', 'plan', 'review', 'thinkingLevel', 'cwd', 'additionalDirectories', ], 'POST /v1/sessions')) return;
+  const { harnessId, modelProviderId = null, connectionId = null, modelId = null, title = null, presetId = null, plan = null, review = null, thinkingLevel = null, cwd = null, additionalDirectories = null } = b;
+  // modelProviderId = which model provider (domain 3) feeds this session.
+  // Optional: null means "don't intervene" — the harness uses its own native
+  // config (never refused; S-1). `connectionId` is accepted as a legacy alias.
+  const mpid = canonicalProviderId(modelProviderId ?? connectionId ?? null);
+  if (!harnessId || !manifestOf(harnessId)) return fail(res, 404, 'harness_not_found', 'no such harness');
+  if (!isHarnessEnabled(harnessId)) return fail(res, 409, 'harness_disabled', `harness ${harnessId} is deactivated; activate it before use`);
+  const id = `s-${process.pid}-${sessions.size + 1}-${crypto.randomBytes(3).toString('hex')}`;
+  // Directory ownership belongs to core, independently of credential scope.
+  // Never run a directory-less UI session in the server/repository cwd.
+  if (cwd != null && typeof cwd !== 'string') return fail(res, 400, 'validation_failed', 'cwd must be a directory path');
+  let workingDirectory;
+  if (typeof cwd === 'string' && cwd.trim()) {
+    if (!path.isAbsolute(cwd)) return fail(res, 400, 'validation_failed', 'cwd must be an absolute directory path');
+    try {
+      workingDirectory = fs.realpathSync(cwd);
+      if (!fs.statSync(workingDirectory).isDirectory()) throw new Error('not a directory');
+    } catch { return fail(res, 400, 'validation_failed', 'cwd must be an existing directory'); }
+  } else {
+    // No cwd from the caller: a session must still have a directory, and it must
+    // never be the server/repo cwd. Allocate one under the session's own id.
+    workingDirectory = path.join(DATA_DIR, 'sessions', id);
+    fs.mkdirSync(workingDirectory, { recursive: true, mode: 0o700 });
+    workingDirectory = fs.realpathSync(workingDirectory);
+  }
+  // additionalDirectories are extra roots the harness MAY activate (ACP's field
+  // of that name; they expand the filesystem scope without changing cwd, which
+  // stays the base for relative paths). Whether a harness supports them is the
+  // harness's business — the core passes them through and does not refuse or
+  // silently drop them. Empty/absent means none.
+  let extraDirs = null;
+  if (additionalDirectories != null) {
+    if (!Array.isArray(additionalDirectories)) return fail(res, 400, 'validation_failed', 'additionalDirectories must be an array of absolute paths');
+    const cleaned = [];
+    for (const d of additionalDirectories) {
+      if (typeof d !== 'string' || !path.isAbsolute(d)) return fail(res, 400, 'validation_failed', 'additionalDirectories entries must be absolute paths');
+      try { cleaned.push(fs.realpathSync(d)); } catch { return fail(res, 400, 'validation_failed', `additionalDirectories entry does not exist: ${d}`); }
+    }
+    extraDirs = cleaned;
+  }
+  // The same rule as a mid-session switch: a provider and a model must come from
+  // the same place. A provider the core owns declares its models, so a model it
+  // does not offer is refused now rather than at the first turn.
+  if (mpid && modelId) {
+    const prov = loadProviders().find((p) => p.id === mpid);
+    const declared = prov && prov.declarations && typeof prov.declarations === 'object' ? Object.keys(prov.declarations) : null;
+    if (declared && declared.length && !declared.includes(modelId)) {
+      return fail(res, 400, 'validation_failed', `model '${modelId}' is not offered by provider '${mpid}'`);
+    }
+  }
+  const s = {
+    id, harnessId, modelProviderId: mpid, modelId, title, presetId, plan, review, thinkingLevel: typeof thinkingLevel === 'string' && thinkingLevel ? thinkingLevel : null, cwd: workingDirectory, additionalDirectories: extraDirs,
+    // Tool selection is a knob with an asked half and an applied half, like the
+    // others: disabledTools is the listed set, appliedTools the set the harness
+    // reported it actually has disabled. null = not asked / not observed.
+    disabledTools: Array.isArray(b.disabledTools) ? b.disabledTools : null,
+    appliedTools: null,
+    thinkingLevel: null,
+    appliedThinkingLevel: null,
+    // What the harness reported it did with additionalDirectories
+    // ({requested, applied, supported, reason}); null until the harness answers.
+    appliedAdditionalDirectories: null,
+    appliedModel: null,
+    appliedProviderId: null,
+    appliedPreset: null,
+    appliedPlan: null,
+    appliedReview: null,
+    status: 'active',
+    activeTurn: { state: 'idle', ended: null, cause: null, partialPersisted: false, partialItems: 0 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  sessions.set(id, s);
+
+  const conn = spawnAdapter(id, harnessId, s.cwd, s.additionalDirectories);
+  return initAdapter(conn, s, { modelProviderId: mpid, modelId, presetId, plan, review, thinkingLevel, title })
+    .then(() => {
+      persistSessions();
+      json(res, 200, { session: s });
+    })
+    .catch((e) => {
+      sessions.delete(id);
+      try { conn.proc.kill(); } catch {}
+      // A missing credential is the caller's problem to fix, not a harness that
+      // could not be reached. Keep the code distinct so it is actionable.
+      if (e && e.code === 'provider_unauthorized') return fail(res, 400, 'provider_unauthorized', e.message);
+      fail(res, 502, 'adapter_unreachable', e.message);
+    });
+}
+
+// Session statistics: tokens, cost, context-window occupancy — whatever the
+// harness reports, passed through unchanged (`source: 'harness'` states where it
+// came from). A number the harness does not report is ABSENT, never zero.
+//
+// Shape: one PULL route plus the same object riding the turn's own stream after
+// `turn.ended`, because that is the moment the numbers move and the caller is
+// already reading that stream. There is deliberately no stats stream: dsh pushes
+// projection updates, pi and jouzu push nothing, and a hub-made "live" stream on
+// them would be polling wearing a subscription's clothes.
+function readStats(sid, s, res) {
+  const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+  if (!caps.includes('stats')) {
+    return fail(res, 501, 'unsupported', `harness '${s.harnessId}' does not report session statistics`);
+  }
+  let conn = connFor(sid);
+  if (!conn) {
+    if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'adapter not running; session has no resume ref');
+    conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  }
+  return initAdapter(conn, s, {})
+    .then(() => rpc(conn, 'session/stats', { sid }, 15_000))
+    .then((stats) => json(res, 200, { sessionId: sid, source: 'harness', ...stats }))
+    .catch((e) => failError(res, e));
+}
+
+// Compaction: the harness rewrites its own conversation (summarise an old span
+// into one node) because its context is filling. The hub compacts nothing itself
+// and computes none of the numbers — it asks, and reports what the harness said
+// (`source: 'harness'`). Which numbers exist depends on the harness: pi counts
+// the replaced span and then ESTIMATES the rebuilt context; dsh counts the span
+// it replaced and reports no "after" — so tokensAfter is absent there rather
+// than a hub-made guess (a zero and an unmeasured value are different claims).
+//
+// Refused while a turn is running: pi's compact aborts the running turn, and a
+// maintenance call must not silently throw away in-flight work. And a harness
+// that cannot compact answers 501 — never a fake success.
+const COMPACT_TIMEOUT_MS = 300_000;
+function compactSession(sid, b, res) {
+  if (rejectUnknownFields(res, b, ['instructions'], 'POST /v1/sessions/{id}/compact')) return;
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  if (s.deleted || s.status === 'closed') return fail(res, 409, 'session_closed', 'reopen the session before compacting it');
+  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+    return fail(res, 409, 'session_busy', 'a running turn is left alone; compact after it ends');
+  }
+  if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'repair the session before compacting it');
+  const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+  if (!caps.includes('compact')) {
+    return fail(res, 501, 'unsupported', `harness '${s.harnessId}' cannot compact its conversation`);
+  }
+  let conn = connFor(sid);
+  if (!conn) {
+    if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'adapter not running; session has no resume ref');
+    conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  }
+  const instructions = b && typeof b.instructions === 'string' && b.instructions ? b.instructions : null;
+  return initAdapter(conn, s, {})
+    .then(() => rpc(conn, 'session/compact', instructions ? { sid, instructions } : { sid }, COMPACT_TIMEOUT_MS))
+    .then((r) => json(res, 200, { sessionId: sid, source: 'harness', ...r }))
+    .catch((e) => failError(res, e));
+}
+
+// Close a turn's stream: emit whatever the harness can say about the turn that
+// just ended, then end it. There are two natural closers — the adapter's
+// `turn_end` event and the reply to `session/prompt` — and both go through here,
+// memoised per turn, so the numbers are fetched once and neither closer can cut
+// the stream before they arrive (which is exactly what happened first: the prompt
+// reply ended the stream while the stats were still in flight).
+function closeTurnStream(sid, conn) {
+  const end = () => { if (conn && conn.streamRes && !conn.streamRes.writableEnded) conn.streamRes.end(); };
+  if (!conn) return Promise.resolve();
+  if (conn.turnClose) return conn.turnClose;
+  const s = sessions.get(sid);
+  const caps = s ? ((manifestOf(s.harnessId) || {}).capabilities || []) : [];
+  const stats = caps.includes('stats')
+    // Bounded and non-fatal: a harness that cannot answer in time must not hold a
+    // finished turn open.
+    ? rpc(conn, 'session/stats', { sid }, 5_000)
+      .then((v) => emitSessionEvent(sid, 'session.stats', { sessionId: sid, source: 'harness', ...v }))
+      .catch((e) => process.stderr.write(`[hub] stats after turn ${sid}: ${e.message}
+`))
+    : Promise.resolve();
+  conn.turnClose = stats.then(() => { conn.turnClose = null; end(); });
+  return conn.turnClose;
+}
+
+// A fork is a NEW session whose conversation ends where the caller says; the
+// source session is not changed (its log, its process and its ref stay as they
+// were — measured for both harnesses before this was written). The anchor is a
+// COMPLETED TURN: it is the only cut both harnesses can make exactly (pi forks
+// before a user message, dsh snaps to the end of a turn), and it is a thing the
+// hub already owns and shows a caller (/turns). Which native anchor that becomes
+// is the adapter's business — the hub never speaks entry ids or seq numbers.
+//
+// `fork` is a declared capability, not an assumption: a harness that cannot fork
+// gets `unsupported`, never a silently substituted empty conversation.
+function forkSession(sid, b, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  if (s.deleted || s.status === 'closed') return fail(res, 409, 'session_closed', 'reopen the session before forking it');
+  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+    // A fork into a running turn has no completed-turn boundary to cut at.
+    return fail(res, 409, 'session_busy', 'finish or cancel the current turn before forking');
+  }
+  if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'repair the session before forking it');
+  const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+  if (!caps.includes('fork')) {
+    return fail(res, 501, 'unsupported', `harness '${s.harnessId}' cannot fork a conversation`);
+  }
+  const afterTurnId = b && b.afterTurnId !== undefined && b.afterTurnId !== null ? b.afterTurnId : null;
+  let throughTurn;
+  if (afterTurnId !== null) {
+    const idx = (s.turns || []).findIndex((t) => t.turnId === afterTurnId);
+    if (idx < 0) return fail(res, 400, 'unknown_turn', `no completed turn '${afterTurnId}' in this session`);
+    throughTurn = idx + 1;
+  }
+  // The source session must have a native identity to branch from; a session that
+  // never ran has none.
+  if (!s.ref) return fail(res, 409, 'requires_new_session', 'this session has no native history to fork yet');
+  const now = new Date().toISOString();
+  const id = `s-${process.pid}-${sessions.size + 1}-${crypto.randomBytes(3).toString('hex')}`;
+  // The child starts where the parent is: same harness, provider, model,
+  // preset/plan/review/level and directory. Its turn log starts empty —
+  // the inherited turns belong to the harness, and the child's history is read
+  // back from there like any other session's.
+  const child = {
+    id,
+    harnessId: s.harnessId,
+    modelProviderId: s.modelProviderId,
+    modelId: s.modelId,
+    title: s.title,
+    presetId: s.presetId,
+    plan: s.plan,
+    review: s.review,
+    thinkingLevel: s.thinkingLevel,
+    disabledTools: s.disabledTools,
+    appliedTools: null,
+    appliedThinkingLevel: null,
+    cwd: s.cwd,
+    additionalDirectories: s.additionalDirectories,
+    appliedAdditionalDirectories: null,
+    ref: null,
+    status: 'active',
+    forkedFrom: { sessionId: sid, afterTurnId },
+    activeTurn: { state: 'idle', ended: null, cause: null, partialPersisted: false, partialItems: 0 },
+    createdAt: now,
+    updatedAt: now,
+  };
+  sessions.set(id, child);
+  const conn = spawnAdapter(id, s.harnessId, child.cwd, child.additionalDirectories);
+  return initAdapter(conn, child, {
+    modelProviderId: child.modelProviderId,
+    modelId: child.modelId,
+    presetId: child.presetId,
+    plan: child.plan,
+    review: child.review,
+    thinkingLevel: child.thinkingLevel,
+    fork: { from: s.ref, ...(throughTurn !== undefined ? { throughTurn } : {}) },
+  })
+    .then(() => {
+      persistSessions();
+      return json(res, 200, { session: Object.assign(child, buildMaterialization(child.harnessId)), forkedFrom: child.forkedFrom });
+    })
+    .catch((e) => {
+      sessions.delete(id);
+      try { conn.proc.kill(); } catch {}
+      if (e && e.code === 'provider_unauthorized') return fail(res, 400, 'provider_unauthorized', e.message);
+      return failError(res, e);
+    });
+}
+
+function sendTurn(sid, b, req, res) {
+  if (rejectUnknownFields(res, b, ['content', 'idempotencyKey', 'source', 'bridge'], 'POST /v1/sessions/{id}/turns')) return;
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
+  if (s.deleted === true) return fail(res, 409, 'session_deleted', 'session was deleted from the list');
+  if (s.status === 'closed') return fail(res, 409, 'session_closed', 'session is closed; reopen it before sending');
+  if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'orphaned tail requires repair before sending');
+  if (!isHarnessEnabled(s.harnessId)) return fail(res, 409, 'harness_disabled', `harness ${s.harnessId} is deactivated; activate it before use`);
+  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+    // C-9: refuse, do not queue; include the current turn state so the caller
+    // knows what it collided with.
+    return json(res, 409, errorBody('session_busy', 'session has a running turn; sending is refused, not queued', { turn: s.activeTurn }));
+  }
+  const content = Array.isArray(b.content) ? b.content : [];
+  const text = content.filter((c) => c && c.type === 'text').map((c) => c.text).join('');
+  const images = content.filter((c) => c && c.type === 'image' && typeof c.data === 'string' && c.data.length)
+    .map((c) => ({ mediaType: c.mediaType || 'image/png', data: c.data, ...(c.name ? { name: c.name } : {}) }));
+  // A turn is text and/or images; an image-only turn is legitimate.
+  if (!text && !images.length) return fail(res, 400, 'validation_failed', 'content must contain text or an image');
+  // Provenance: a bridge (client-side orchestrator) marks its injected turns so
+  // they are never mistaken for a human. Defaults to a plain user turn.
+  const source = b.source === 'bridge' ? 'bridge' : 'user';
+  const bridge = b.bridge || null;
+
+  let conn = connFor(sid);
+  if (!conn) {
+    // The adapter process is gone (restart/crash). Respawn and resume; config
+    // and credential are re-established by initAdapter, not just at creation.
+    if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'adapter not running; session has no resume ref');
+    conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  }
+  // Readiness is conn.ready@sid (start+grant+config all done). initAdapter shares
+  // any in-flight init so concurrent callers wait for the SAME result.
+  const ensureStarted = initAdapter(conn, s, {});
+
+  s.activeTurn = { state: 'admitted', ended: null, cause: null, partialPersisted: false, partialItems: 0 };
+  beginTurn(s);
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+  const sub = (ev) => sseWrite(res, ev);
+  conn.onEvent = sub;
+  conn.streamRes = res;
+  sseWrite(res, { event: 'turn.admitted', data: { turn: s.activeTurn } });
+
+  ensureStarted
+    .then(() => rpc(conn, 'session/prompt', { sid, message: text, ...(images.length ? { images } : {}), clientMessageId: b.idempotencyKey || `u-${crypto.randomUUID()}`, source, bridge }, TURN_TIMEOUT))
+    .then(() => {
+      // The adapter answers the prompt when the turn is over; the turn_end event
+      // usually arrived first. Either way the stream closes through the one place
+      // that also carries the closing numbers.
+      closeTurnStream(sid, conn);
+    })
+    .catch((e) => {
+      // If the adapter-crash handler already set a terminal state (interrupted),
+      // do not overwrite it with a generic model-error: the real cause was the
+      // process dying, not the model.
+      if (s.activeTurn.state === 'ended') {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+      s.activeTurn = { state: 'ended', ended: 'failed', cause: 'model-error', partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+      endTurn(s, 'failed', 'model-error');
+      if (!res.writableEnded) sseWrite(res, { event: 'turn.ended', data: { turn: s.activeTurn, error: e.message } });
+      if (!res.writableEnded) res.end();
+    });
+
+  req.on('close', () => {
+    conn.onEvent = null;
+    conn.streamRes = null;
+  });
+  return undefined; // SSE response handled above
+}
+
+// C-3: thin per-turn entries, core-owned (details fetched separately).
+function listTurns(sid, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  return json(res, 200, { turns: s.turns || [], next_cursor: null });
+}
+
+// Read-through native message history (adapter history/page). This is the
+// "details" C-3 refers to, exposed on its own path so /turns keeps its thin
+// contract shape. Reconnects after a core restart (C6). Paging (C5): beforeId
+// is the anchor (excluded from the page); an unknown anchor fails loudly with
+// invalid_cursor, never a silent rewind. next_cursor is the oldest id on the
+// page while more remain, else null.
+function readMessages(sid, res, query) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  const beforeId = query && query.get('beforeId') ? query.get('beforeId') : undefined;
+  const limit = Math.max(1, Number(query && query.get('limit')) || 100);
+  let conn = connFor(sid);
+  if (!conn) {
+    if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'session has no resume ref');
+    conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  }
+  // Readiness is conn.started (see initAdapter); a freshly spawned process has
+  // not run session/start yet. Reading history must fully re-init (grant +
+  // config), not leave a half-initialized process behind.
+  const ensureStarted = initAdapter(conn, s, {});
+  return ensureStarted
+    .then(() => rpc(conn, 'history/page', { sid, limit, beforeId }))
+    .then((r) => {
+      const messages = r.messages || [];
+      const next = r.hasMore ? (messages.length ? messages[0].id : null) : null;
+      json(res, 200, { messages, next_cursor: next });
+    })
+    .catch((e) => {
+      // adapter signals an unknown anchor; surface the contract's invalid_cursor.
+      if (/unknown beforeId/i.test(e.message || '')) return fail(res, 400, 'invalid_cursor', e.message);
+      return fail(res, 502, 'adapter_unreachable', e.message);
+    });
+}
+
+function cancelTurn(sid, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session');
+  if (s.activeTurn.state === 'ended' || s.activeTurn.state === 'unknown' || s.activeTurn.state === 'idle') {
+    return json(res, 200, { turn: s.activeTurn }); // idempotent
+  }
+  // A cancel already in flight: do not stack timers or re-send the abort.
+  if (s.activeTurn.state === 'cancelling') return json(res, 200, { turn: s.activeTurn });
+  const conn = connFor(sid);
+  if (!conn) return fail(res, 502, 'adapter_unreachable', 'adapter not running');
+  s.activeTurn = { ...s.activeTurn, state: 'cancelling' };
+  // The turn the user asked to stop. The deadline must be bound to THIS turn:
+  // a late turn_end from a previous turn, or from a repair, must not clear a
+  // timer that belongs to the one being cancelled now.
+  const cancellingTurnId = s.currentTurnId || null;
+  // Why we gave up, so `repair` can act on the real cause instead of guessing.
+  // 'unconfirmed' = the adapter accepted the abort but the turn never reported
+  // its end; 'abort-failed' = the adapter said the abort itself failed.
+  let cancelCause = 'unconfirmed';
+  const settleCancel = () => {
+    clearTimeout(timer);
+    conn.onEvent = original;
+  };
+  const timer = setTimeout(() => {
+    if (s.activeTurn.state !== 'cancelling') return;
+    if (s.currentTurnId !== cancellingTurnId && s.currentTurnId !== null) return;
+    // The harness never confirmed the stop. This is a REAL unknown: the
+    // underlying turn may still be running and its events may arrive later.
+    // Mark the session so sending is refused until repair has proven the old
+    // execution is over — but record what was cancelled and why, so repair can
+    // do that instead of only flipping the flag back.
+    s.activeTurn = { state: 'ended', ended: 'failed', cause: 'abandoned', partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    endTurn(s, 'failed', 'abandoned');
+    s.status = 'needs-repair';
+    s.repair = { reason: cancelCause, cancelledTurnId: cancellingTurnId, since: new Date().toISOString() };
+    persistSessions();
+    emitSessionEvent(sid, 'turn.ended', { turn: s.activeTurn });
+  }, CANCEL_TIMEOUT);
+  const original = conn.onEvent;
+  const waitEnd = (ev) => {
+    // The turn this cancel belongs to has reported its end — stop the deadline.
+    // handleAdapterEvent pushes the turn into s.turns before it emits, so a
+    // completed turn id here means the harness confirmed the stop.
+    if (ev.event !== 'turn.ended') return;
+    const done = !cancellingTurnId || (s.turns || []).some((t) => t.turnId === cancellingTurnId);
+    if (done || s.activeTurn.state !== 'cancelling') settleCancel();
+  };
+  conn.onEvent = (ev) => { if (original) original(ev); waitEnd(ev); };
+  // An abort the adapter could not even deliver is a different fact from one it
+  // accepted and never confirmed; keep them apart.
+  rpc(conn, 'session/abort', { sid }).catch(() => { cancelCause = 'abort-failed'; });
+  return json(res, 200, { turn: s.activeTurn });
+}
+
+// A managed provider is named two equivalent ways on the wire: the catalog
+// reports `prts-<id>` (the same spelling in every harness), and the bare id is
+// what the provider registry itself uses. A caller should not have to know which
+// endpoint wants which, so both are accepted and reduced to the registry id.
+function canonicalProviderId(value) {
+  if (typeof value !== 'string' || !value) return null;
+  if (value.startsWith('prts-')) return value.slice('prts-'.length) || null;
+  return value;
+}
+
+function switchModel(sid, b, res) {
+  if (rejectUnknownFields(res, b, ['modelProviderId', 'modelId', 'presetId', 'disabledTools', 'plan', 'review', 'thinkingLevel', 'title'], 'PATCH /v1/sessions/{id}')) return;
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session');
+  if (s.deleted || s.status === 'closed') return fail(res, 409, 'session_closed', 'reopen the session before changing configuration');
+  if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
+  // A configuration change while a turn is live cannot be honoured reliably: the
+  // harness is mid-run, its policy for that turn is already loaded, and dsh's own
+  // answer to a switch it did not apply is the PREVIOUS value — measured: PATCH
+  // {plan:false} during a turn answered 200 with applied.plan still true, which is
+  // a success report for a change that did not happen. Refuse instead (C-9:
+  // refuse, do not queue), for every knob, exactly as the provider path does.
+  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+    return fail(res, 409, 'session_busy', 'finish or cancel the current turn before changing configuration');
+  }
+  const changingProvider = b.modelProviderId !== undefined;
+  let providerGrant = null;
+  if (changingProvider) {
+    if (typeof b.modelProviderId !== 'string' || !b.modelProviderId) return fail(res, 400, 'validation_failed', 'modelProviderId must name a managed provider');
+    const providerId = canonicalProviderId(b.modelProviderId);
+    const provider = providerId ? loadProviders().find((p) => p.id === providerId) : null;
+    if (!provider) return fail(res, 404, 'provider_not_found', 'no such managed provider');
+    const value = getSecret(secretName(provider.id));
+    if (!value) return fail(res, 400, 'provider_unauthorized', 'provider has no stored credential');
+    if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before switching provider');
+    if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'recover the current execution before switching provider');
+    const model = b.modelId !== undefined ? b.modelId : s.modelId;
+    if (typeof model !== 'string' || !model) return fail(res, 400, 'validation_failed', 'modelId is required when the session has no selected model');
+    // The provider and the model must come from the same place. Carrying the
+    // session's existing model across a provider change is how a session ended
+    // up bound to prts/p-ad1fd09a while running deepseek-flash (a model of
+    // deepseek-official) — accepted here, and only failing mid-turn inside the
+    // harness. A declared provider knows its own models, so it can answer this
+    // now; a refused change leaves the session as it was.
+    const declared = provider.declarations && typeof provider.declarations === 'object' && Object.keys(provider.declarations).length
+      ? Object.keys(provider.declarations) : null;
+    if (declared && !declared.includes(model)) {
+      return fail(res, 400, 'validation_failed', `model '${model}' is not offered by provider '${provider.id}'`);
+    }
+    b = { ...b, modelId: model };
+    providerGrant = { connectionId: provider.id, url: provider.endpoint?.url || null, ...(provider.endpoint?.api ? { api: provider.endpoint.api } : {}), value };
+  }
+  let conn = connFor(sid);
+  if (!conn) conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  // Mid-session change = a config/set re-send, effective next turn (same path as
+  // model switch). model and presetId are both config knobs; disabledTools is
+  // the tools knob. Changing the preset means a different harness composition
+  // (dsh locks it once the agent has produced anything, reported by the adapter).
+  const patch = {};
+  if (changingProvider) patch.connectionId = canonicalProviderId(b.modelProviderId);
+  if (b.modelId !== undefined) patch.model = b.modelId;
+  if (b.presetId !== undefined) patch.presetId = b.presetId;
+  if (b.plan !== undefined) patch.plan = b.plan;
+  if (b.review !== undefined) patch.review = b.review;
+  if (b.thinkingLevel !== undefined) patch.thinkingLevel = b.thinkingLevel;
+  if (b.disabledTools !== undefined) patch.tools = { disabledTools: b.disabledTools };
+  // A rename is not a config knob: the harness has its own command for it, and
+  // its answer is the name IT accepted (dsh normalises and sanitises a title and
+  // refuses one that normalises to empty). The title is therefore pushed as its
+  // own request and recorded from that answer, never echoed back from here.
+  const wantTitle = b.title === undefined ? undefined : String(b.title).trim();
+  if (b.title !== undefined && !wantTitle) return fail(res, 400, 'validation_failed', 'title must be a non-empty string');
+  if (wantTitle !== undefined) {
+    const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+    if (!caps.includes('rename')) return fail(res, 501, 'unsupported', `harness '${s.harnessId}' cannot rename its sessions`);
+  }
+  if (!Object.keys(patch).length && wantTitle === undefined) return fail(res, 400, 'validation_failed', 'nothing to change');
+  // A harness that declares no plan capability cannot be asked for it. Report
+  // it as a warning and carry on (S-1: the front-end never refuses to run).
+  let warning = null;
+  if (b.plan !== undefined) {
+    const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+    if (!caps.includes('plan')) warning = `harness '${s.harnessId}' declares no plan capability`;
+  }
+  if (b.review !== undefined) {
+    const caps = (manifestOf(s.harnessId) || {}).capabilities || [];
+    if (!caps.includes('review')) warning = `harness '${s.harnessId}' declares no review capability`;
+  }
+  if (b.thinkingLevel !== undefined && (!(typeof b.thinkingLevel === 'string' && b.thinkingLevel) || b.thinkingLevel === null)) {
+    return fail(res, 400, 'validation_failed', 'thinkingLevel must be a non-empty string');
+  }
+  configuringSessions.add(sid);
+  let renamed = null;
+  // Resume the same native session; switching providers never creates a new conversation.
+  return initAdapter(conn, s)
+    .then(() => providerGrant ? rpc(conn, 'credentials/grant', providerGrant) : undefined)
+    .then(() => (Object.keys(patch).length ? rpc(conn, 'config/set', { sid, config: patch }, 45000) : undefined))
+    .then((applied) => (wantTitle === undefined
+      ? applied
+      : rpc(conn, 'session/rename', { sid, title: wantTitle }, 20000).then((r) => { renamed = r; return applied; })))
+    .then((applied) => {
+      // The adapter reports what it actually applied (proof, like T0). Record
+      // each knob from it so a harness that accepted the knob but stayed put is
+      // visible, instead of the request echoing back as if it took effect.
+      const a = applied && applied.applied;
+      if (changingProvider && (!a || a.modelProviderId !== b.modelProviderId || a.model !== b.modelId)) {
+        throw Object.assign(new Error('adapter did not confirm the requested provider and model'), { code: 'model_mismatch' });
+      }
+      if (changingProvider) s.modelProviderId = b.modelProviderId;
+      // T0 guard, same as the create path: a silent model fallback is the worst
+      // failure mode and must fail loudly here too, never pass as success.
+      if (b.modelId !== undefined && a && typeof a.model === 'string' && a.model !== b.modelId) {
+        throw Object.assign(new Error(`model fallback: asked ${b.modelId}, adapter applied ${a.model}`), { code: 'model_mismatch' });
+      }
+      if (a) {
+        // appliedModel/appliedProviderId are the proof the surface hands back;
+        // leaving them stale after a switch made a successful change look like
+        // it had not happened (and a not-applied one look like it had).
+        if (b.modelId !== undefined) {
+          s.modelId = b.modelId;
+          s.appliedModel = a.model != null ? a.model : null;
+          s.appliedProviderId = a.connectionId != null ? a.connectionId : null;
+        }
+        if (a.preset !== undefined) { s.presetId = a.preset; s.appliedPreset = a.preset != null ? a.preset : null; }
+        if (a.plan !== undefined) s.appliedPlan = a.plan != null ? a.plan : null;
+        if (a.review !== undefined) s.appliedReview = a.review != null ? a.review : null;
+        if (a.tools !== undefined && a.tools !== null && a.tools.disabledTools !== undefined) {
+          s.appliedTools = Array.isArray(a.tools.disabledTools) ? a.tools.disabledTools : null;
+        }
+      } else if (b.modelId !== undefined) {
+        // The adapter answered without an `applied` object: we cannot claim the
+        // model took effect, so report it as unconfirmed rather than echoing.
+        s.modelId = b.modelId;
+        s.appliedModel = null;
+        s.appliedProviderId = null;
+      }
+      if (b.plan !== undefined) {
+        s.plan = b.plan;
+        if (!a || a.plan === undefined) s.appliedPlan = null;
+      }
+      if (b.review !== undefined) {
+        s.review = b.review;
+        if (!a || a.review === undefined) s.appliedReview = null;
+      }
+      if (b.thinkingLevel !== undefined) {
+        s.thinkingLevel = b.thinkingLevel;
+        if (!a || a.thinkingLevel === undefined) s.appliedThinkingLevel = null;
+      }
+      if (b.disabledTools !== undefined) {
+        s.disabledTools = Array.isArray(b.disabledTools) ? b.disabledTools : null;
+        // Only a harness that reported back may be recorded as applied; an
+        // adapter that answered without it leaves appliedTools unconfirmed.
+        if (!(applied && applied.applied && applied.applied.tools)) s.appliedTools = null;
+      }
+      if (wantTitle !== undefined) {
+        s.title = wantTitle;
+        s.appliedTitle = renamed && typeof renamed.title === 'string' ? renamed.title : null;
+      }
+      // A knob that was asked for but not observed must be visible as a warning,
+      // not silently stored as null for the caller to discover.
+      const unconfirmed = [];
+      if (wantTitle !== undefined && s.appliedTitle == null) unconfirmed.push('title');
+      if (b.review !== undefined && s.appliedReview == null) unconfirmed.push('review');
+      if (b.thinkingLevel !== undefined && s.appliedThinkingLevel == null) unconfirmed.push('thinkingLevel');
+      if (b.plan !== undefined && s.appliedPlan == null) unconfirmed.push('plan');
+      if (b.modelId !== undefined && s.appliedModel == null) unconfirmed.push('model');
+      if (unconfirmed.length) {
+        const note = `could not confirm applied: ${unconfirmed.join(', ')}`;
+        warning = warning ? `${warning}; ${note}` : note;
+      }
+      s.updatedAt = new Date().toISOString();
+      persistSessions();
+      json(res, 200, { session: s, warning });
+    })
+    .catch((e) => {
+      if (changingProvider) {
+        // A grant may have replaced the child before configuration failed. Drop
+        // this process, retain the saved selection/ref, and re-grant on next use.
+        if (adapters.get(sid) === conn) adapters.delete(sid);
+        try { conn.proc.kill(); } catch {}
+      }
+      // An adapter refusal carries a machine code in error.data.code (§6.3).
+      // Keep it: a locked preset is not a missing model, and reporting it as
+      // model_not_found sends the caller looking in the wrong place.
+      const code = (e && e.data && e.data.code) || null;
+      if (code === 'agent-preset-locked') return fail(res, 409, 'agent_preset_locked', e.message);
+      // A level this model does not offer is the caller's input, not a missing
+      // model: do not send them looking for a model.
+      if (/unsupported thinking level|does not accept a thinking level|is not offered by/i.test(e.message || '')) return fail(res, 400, 'validation_failed', e.message);
+      if (code === 'model-not-applied' || (e && e.code === 'model_mismatch')) return fail(res, 502, 'model_not_applied', e.message);
+      return fail(res, 404, 'model_not_found', e.message);
+    }).finally(() => configuringSessions.delete(sid));
+}
+
+// A session whose cancelled turn never reported its end. The adapter that ran
+// that turn may still be streaming into the old SSE response, and its harness
+// may still be executing tools. Clearing the flag alone would let the next turn
+// run on top of a turn that never stopped — so recovery must first end that
+// execution for real, then re-attach the session on a fresh process.
+//
+// `preview` reports exactly what will happen; the real call does it and reports
+// what was proven. If the adapter cannot be re-established, the session STAYS
+// in needs-repair and says so — a repair we cannot prove is not a repair.
+// ---------------------------------------------------------------------------
+// Session lifecycle, aligned with ACP's session/close and session/delete.
+//
+// Neither one destroys anything. ACP defines close as: cancel any ongoing work
+// (as if session/cancel was called) and then free the resources associated with
+// the session — the session itself stays. delete is only "deleting an existing
+// session from session/list" — it leaves the list, it is not wiped.
+
+// session/close. Idempotent: closing a closed session is fine and changes
+// nothing. A running turn is cancelled first, exactly as ACP requires, so a
+// close never leaves a live execution behind.
+function closeSession(sid, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session');
+  if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
+  if (s.status === 'closed') return json(res, 200, { session: s });
+  const live = s.activeTurn.state === 'admitted' || s.activeTurn.state === 'running'
+    || s.activeTurn.state === 'awaiting_approval' || s.activeTurn.state === 'awaiting_question'
+    || s.activeTurn.state === 'cancelling';
+  const finish = () => {
+    // Free the resources: a closed session must not keep a harness process.
+    const conn = connFor(sid);
+    try { conn.proc.kill(); } catch {}
+    s.status = 'closed';
+    s.activeTurn = { state: 'idle', ended: null, cause: null, partialPersisted: false, partialItems: 0 };
+    s.updatedAt = new Date().toISOString();
+    persistSessions();
+    return json(res, 200, { session: s });
+  };
+  if (!live) return finish();
+  // There is work in flight. Ask it to stop and wait for the SAME settlement the
+  // cancel path uses, so a close cannot race a turn into a torn state.
+  s.activeTurn = { ...s.activeTurn, state: 'cancelling' };
+  const conn = connFor(sid);
+  if (!conn) return finish();
+  let done = false;
+  const settle = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    conn.onEvent = original;
+    finish();
+  };
+  const original = conn.onEvent;
+  conn.onEvent = (ev) => { if (original) original(ev); if (ev.event === 'turn.ended') settle(); };
+  const timer = setTimeout(settle, CANCEL_TIMEOUT);
+  rpc(conn, 'session/abort', { sid }).catch(() => {});
+  return undefined; // settle() answers
+}
+
+// session/delete. ACP's wording is exact: "deleting an existing session from
+// session/list" — it leaves the list. The record is kept, so nothing a caller
+// did is silently destroyed; the harness's own session file is never touched.
+function deleteSession(sid, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session');
+  if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
+  // Free the process first (a session that is gone from the list must not run).
+  const conn = connFor(sid);
+  try { conn.proc.kill(); } catch {}
+  const now = new Date().toISOString();
+  s.deleted = true;
+  if (s.status !== 'closed') s.status = 'closed';
+  s.updatedAt = now;
+  persistSessions();
+  return json(res, 200, { ok: true, id: sid });
+}
+
+// session/resume is how a closed session comes back: re-attach on the stored ref.
+function reopenSession(sid, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session');
+  if (s.deleted === true) return fail(res, 409, 'session_deleted', 'session was deleted from the list; it cannot be reopened');
+  if (s.status !== 'closed') return json(res, 200, { session: s }); // already open
+  if (!s.ref) return fail(res, 409, 'no_resume_ref', 'session has no stored ref to resume');
+  s.status = 'active';
+  s.updatedAt = new Date().toISOString();
+  persistSessions();
+  return json(res, 200, { session: s, reopened: true });
+}
+
+function repairSession(sid, b, res) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session');
+  if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
+  const mode = b.mode || 'tombstone';
+  const conn = connFor(sid);
+
+  const plan = [
+    'abort the unconfirmed turn again on the live adapter',
+    'replace the adapter process so no late events from the old turn can arrive',
+    're-attach the session through session/start (resume the same ref)',
+    'then clear needs-repair',
+  ];
+  if (b.preview) {
+    return json(res, 200, {
+      session: s,
+      preview: plan,
+      dropped: 0,
+      repair: s.repair || null,
+      recoverable: true,
+    });
+  }
+  // Only a session that actually needs repair (or the caller explicitly asking)
+  // is touched; this must not become a silent way to reset a live session.
+  if (s.status !== 'needs-repair' && b.confirm !== true) {
+    return fail(res, 409, 'not_needs_repair', `session status is '${s.status}', not needs-repair`);
+  }
+
+  const finish = (proven, recovered) => {
+    s.status = 'active';
+    s.activeTurn = { state: 'idle', ended: null, cause: null, partialPersisted: false, partialItems: 0 };
+    s.repair = null;
+    s.updatedAt = new Date().toISOString();
+    persistSessions();
+    return json(res, 200, { session: s, dropped: 0, preview: null, action: mode, proven, recovered });
+  };
+
+  // 1. Ask the live adapter to stop the turn again (best effort; it may be gone).
+  const askAbort = conn
+    ? rpc(conn, 'session/abort', { sid }).catch(() => {})
+    : Promise.resolve();
+  return askAbort.then(() => {
+    // 2. Drop the process that holds the old turn, so no late event or stale
+    //    stream can leak into the next turn.
+    if (conn) {
+      try { conn.proc.kill(); } catch {}
+      adapters.delete(sid);
+    }
+    // 3. Re-attach on a fresh adapter: session/start with the SAME ref proves
+    //    the session is openable again and gives the next turn a clean process.
+    //
+    //    A harness whose ref is a file IT creates on its first turn (jouzu
+    //    reports the path before its harness has written it) legitimately has
+    //    no such file when the cancelled turn never completed. That is not a
+    //    failed recovery — the turn to resume never finished, so there is
+    //    nothing to resume. Retry without the resume ref in that one case, and
+    //    say so in the result rather than silently changing what was recovered.
+    const fresh = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+    return initAdapter(fresh, s, {}).then(() => finish(true, 'resumed')).catch((e) => {
+      const refMissing = /session not found/i.test(e.message || '');
+      if (!refMissing || !s.ref) throw e;
+      const retry = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+      return initAdapter(retry, s, { freshSession: true }).then(() => finish(true, 'started-fresh'));
+    });
+  }).catch((e) => {
+    // Recovery could not be proven. Do not pretend: keep needs-repair.
+    s.status = 'needs-repair';
+    persistSessions();
+    return fail(res, 502, 'repair_failed', `could not re-establish the session: ${e.message}`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+function json(res, code, body) {
+  if (res.writableEnded) return;
+  const s = JSON.stringify(body);
+  res.writeHead(code, { 'content-type': 'application/json' });
+  res.end(s);
+}
+function fail(res, httpCode, code, message) {
+  json(res, httpCode, errorBody(code, message));
+}
+
+// An error carries its own status: contract/errors.json is the master table, so a
+// caught error is answered with the status its code declares there instead of a
+// default the table would disagree with. (The session routes used to flatten
+// every caught code to 400, so `needs_repair` came back 400 while the table said
+// 409 — the caller saw a status and a code that contradicted each other.)
+function failError(res, e, fallbackCode = 'validation_failed') {
+  const code = (e && e.code) || fallbackCode;
+  const declared = ERROR_STATUS[code];
+  return fail(res, declared || 400, code, (e && e.message) || 'request failed');
+}
+
+const server = http.createServer((req, res) => {
+  try { route(req, res); } catch (e) { fail(res, 500, 'internal_error', e.message); }
+});
+
+// The contract is enforced where it cannot be skipped: at boot. A hub that answers a
+// route the contract does not declare, that promises one it does not answer, that can
+// emit an event nobody declared, that can answer with an error code the table does
+// not carry — or that serves an OpenAPI document describing a different surface —
+// refuses to start, and prints the differences.
+//
+// This used to live in a separate trial that had to be remembered and run: minutes of
+// model-driven scenarios around a check that takes milliseconds, which is exactly the
+// wrong way round. A running hub is now always self-consistent, and there is nothing
+// to forget to run.
+function selfCheck() {
+  const problems = [];
+  const key = (m, p) => `${m} ${p}`;
+  const declared = new Set(CONTRACT_DOC.endpoints.map((e) => key(e.method, e.path)));
+  const implemented = new Set(ROUTES.map((r) => key(r.method, r.path)));
+  for (const r of implemented) if (!declared.has(r)) problems.push(`the hub answers ${r}, which the contract does not declare`);
+  for (const r of declared) if (!implemented.has(r)) problems.push(`the contract promises ${r}, which the hub does not answer`);
+
+  const declaredEvents = new Set((CONTRACT_DOC.events || []).map((e) => e.name));
+  for (const ev of SURFACE_EVENTS) if (!declaredEvents.has(ev)) problems.push(`the hub can emit ${ev}, which the contract does not declare`);
+  for (const ev of declaredEvents) if (!SURFACE_EVENT_SET.has(ev)) problems.push(`the contract declares event ${ev}, which the hub cannot emit`);
+  const reachable = new Set(CONTRACT_DOC.endpoints.flatMap((e) => e.events || []));
+  for (const ev of declaredEvents) if (!reachable.has(ev)) problems.push(`no endpoint says event ${ev} can arrive on it`);
+
+  // error codes: what the source can answer with vs the master table
+  const own = fs.readFileSync(path.join(HERE, 'server.mjs'), 'utf8');
+  const used = new Set([
+    ...[...own.matchAll(/fail(?:\(|Error\()\s*(?:c\.)?res,\s*(?:\d{3},\s*)?'([a-z_]+)'/g)].map((m) => m[1]),
+    ...[...own.matchAll(/errorBody\(\s*'([a-z_]+)'/g)].map((m) => m[1]),
+  ]);
+  for (const code of used) if (!ERROR_TABLE[code]) problems.push(`the hub can answer with error '${code}', which errors.json does not declare`);
+
+  // the projection must describe this surface, or it is a document about something else
+  // (OpenAPI path templates have no `{name...}` form, so the projection writes
+  // `{file}` for a path remainder: normalize BOTH sides before comparing)
+  const norm = (s) => s.replace(/\{(\w+)\.\.\.\}/g, '{$1}');
+  const inDoc = new Set(Object.entries(OPENAPI.doc.paths).flatMap(([p, item]) => Object.entries(item).map(([m]) => key(m.toUpperCase(), norm(p)))));
+  const declaredNorm = new Set([...declared].map(norm));
+  for (const r of inDoc) if (!declaredNorm.has(r)) problems.push(`the OpenAPI document describes ${r}, which the contract does not declare (regenerate: node scripts/emit-openapi.mjs)`);
+  for (const r of declaredNorm) if (!inDoc.has(r)) problems.push(`the contract declares ${r}, which the OpenAPI document does not describe (regenerate: node scripts/emit-openapi.mjs)`);
+
+  // the plugins: a manifest may only carry declared fields, its protocol must be the
+  // one this hub speaks, and every capability it declares must actually be handled in
+  // its adapter (and every capability it declares must exist in the contract). 
+  // Cheap source-level facts, checked once at boot instead of in a suite.
+  const adapterContract = readJson(path.join(HERE, 'contract', 'adapter-v1.json'), null);
+  if (!adapterContract) problems.push('contract/adapter-v1.json is missing or unparsable');
+  else {
+    const fields = new Set([...(adapterContract.manifest.required || []), ...(adapterContract.manifest.optional || [])]);
+    for (const name of Object.keys(adapterContract.manifest.fields || {})) {
+      if (!fields.has(name)) problems.push(`adapter-v1.json documents a manifest field '${name}' that required+optional does not list`);
+    }
+    const capValues = new Set(adapterContract.manifest.capabilityValues || []);
+    const capSurface = adapterContract.capabilitySurface || {};
+    for (const cap of capValues) if (!capSurface[cap]) problems.push(`capabilityValue '${cap}' has no capabilitySurface entry`);
+    for (const cap of Object.keys(capSurface)) if (cap !== 'note' && !capValues.has(cap)) problems.push(`capabilitySurface '${cap}' is not in capabilityValues`);
+    const declaredAdapterEvents = new Set(adapterContract.coreCompliance.events.map((e) => e.type));
+    const declaredRequests = new Set([
+      ...adapterContract.coreCompliance.requests.map((r) => r.method),
+      ...adapterContract.providerSurface.requests.map((r) => r.method),
+      ...(adapterContract.providerSurface.newInThisSlice || []).map((r) => r.method),
+    ]);
+    for (const m of ADAPTER_REQUESTS) if (!declaredRequests.has(m)) problems.push(`the hub sends adapter request '${m}', which adapter-v1.json does not declare`);
+    for (const id of fs.readdirSync(PLUGINS_DIR).filter((n) => fs.existsSync(path.join(PLUGINS_DIR, n, 'manifest.json')))) {
+      const dir = path.join(PLUGINS_DIR, id);
+      let m = null;
+      try { m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch (e) { problems.push(`${id}: manifest.json is not JSON`); continue; }
+      if (m.id !== id) problems.push(`${id}: manifest id '${m.id}' is not the plugin directory name`);
+      if (m.protocol !== ADAPTER_PROTOCOL) problems.push(`${id}: speaks adapter protocol ${m.protocol}, this hub speaks ${ADAPTER_PROTOCOL}`);
+      for (const req of adapterContract.manifest.required) if (m[req] === undefined) problems.push(`${id}: manifest is missing required field '${req}'`);
+      for (const k of Object.keys(m)) if (!fields.has(k)) problems.push(`${id}: manifest field '${k}' is not declared in adapter-v1.json`);
+      let src = '';
+      for (const f of fs.readdirSync(dir)) if (f.endsWith('-adapter.cjs')) src = fs.readFileSync(path.join(dir, f), 'utf8');
+      if (!src) continue;
+      const handled = new Set((src.match(/case\s+'([\w./]+)'\s*:/g) || []).map((s2) => s2.replace(/.*case\s+'|'\s*:/g, '')));
+      for (const cap of m.capabilities || []) {
+        if (!capSurface[cap]) { problems.push(`${id}: declares capability '${cap}', which adapter-v1.json does not define`); continue; }
+        for (const method of capSurface[cap].methods || []) {
+          if (!handled.has(method)) problems.push(`${id}: declares '${cap}' but its adapter does not handle '${method}'`);
+        }
+      }
+      const emitted = new Set([
+        ...(src.match(/emit\(\{\s*type:\s*'([\w.]+)'/g) || []).map((s2) => s2.replace(/.*'([\w.]+)'$/s, '$1')),
+        ...(src.match(/data:\s*\{\s*type:\s*'([\w.]+)'/g) || []).map((s2) => s2.replace(/.*'([\w.]+)'$/s, '$1')),
+      ]);
+      for (const ev of emitted) if (!declaredAdapterEvents.has(ev)) problems.push(`${id}: emits adapter event '${ev}', which adapter-v1.json does not declare`);
+    }
+  }
+
+  if (problems.length) {
+    console.error('the hub refuses to start: its surface and its contract disagree');
+    for (const p of problems) console.error(`  - ${p}`);
+    process.exit(1);
+  }
+}
+selfCheck();
+
+loadSessions();
+// remove a stale endpoint file before binding (see the note where it is declared)
+fs.rmSync(ENDPOINT, { force: true });
+server.listen(0, '127.0.0.1', () => {
+  // The client's connection material. Written atomically (temp + rename) so a
+  // reader never sees half a file, and 0600 so another account on the machine
+  // cannot read the token — it is the only thing standing between a local
+  // process and this hub. On Windows the mode is a no-op and %LOCALAPPDATA% is
+  // already per-user.
+  writeJson(ENDPOINT, { port: server.address().port, token, pid: process.pid, protocol: PROTOCOL, buildId: BUILD_ID, startedAt: STARTED_AT }, 0o600);
+  process.stdout.write(`agent-hub listening 127.0.0.1:${server.address().port}\n`);
+});
+const bye = () => { fs.rmSync(ENDPOINT, { force: true }); process.exit(0); };
+process.on('SIGTERM', bye);
+process.on('SIGINT', bye);

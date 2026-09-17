@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent hub /v1 error code master table",
+  "description": "Single source of truth for error codes. Every route failure MUST use one of these. retryable: true = safe to retry unchanged; false = must change something (state/input) before retry.",
+  "errors": {
+    "unauthorized": {
+      "http": 401,
+      "retryable": true,
+      "message": "missing or invalid bearer token"
+    },
+    "bad_token": {
+      "http": 401,
+      "retryable": true,
+      "message": "token format invalid"
+    },
+    "not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no such route"
+    },
+    "not_implemented": {
+      "http": 501,
+      "retryable": false,
+      "message": "endpoint not implemented; never faked"
+    },
+    "build_mismatch": {
+      "http": 409,
+      "retryable": false,
+      "message": "client and core build ids differ; upgrade or downgrade one side"
+    },
+    "harness_not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no harness with this id"
+    },
+    "harness_disabled": {
+      "http": 409,
+      "retryable": false,
+      "message": "harness is deactivated; activate before use"
+    },
+    "provider_not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no provider with this id"
+    },
+    "connection_not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no connection with this id"
+    },
+    "model_not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no model with this id on this harness"
+    },
+    "unknown_session": {
+      "http": 404,
+      "retryable": false,
+      "message": "no such session; never silently created"
+    },
+    "session_busy": {
+      "http": 409,
+      "retryable": false,
+      "message": "session has a running turn; sending is refused, not queued"
+    },
+    "requires_new_session": {
+      "http": 409,
+      "retryable": false,
+      "message": "connection or harness is bound at session creation; start a new session to change it"
+    },
+    "needs_repair": {
+      "http": 409,
+      "retryable": false,
+      "message": "orphaned tail requires repair before sending"
+    },
+    "approval_not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no such approval request"
+    },
+    "validation_failed": {
+      "http": 400,
+      "retryable": false,
+      "message": "request body does not match the contract"
+    },
+    "invalid_cursor": {
+      "http": 400,
+      "retryable": false,
+      "message": "cursor is invalid or expired"
+    },
+    "idempotency_conflict": {
+      "http": 409,
+      "retryable": false,
+      "message": "replay with the same Idempotency-Key produced a different body"
+    },
+    "adapter_unreachable": {
+      "http": 502,
+      "retryable": true,
+      "message": "harness adapter could not be reached"
+    },
+    "adapter_crash": {
+      "http": 502,
+      "retryable": false,
+      "message": "adapter crashed mid-turn; read-through native history to learn what persisted"
+    },
+    "upstream_blocked": {
+      "http": 503,
+      "retryable": true,
+      "message": "upstream provider failure; counted as BLOCKED, never FAIL"
+    },
+    "provider_catalog_failed": {
+      "http": 502,
+      "retryable": false,
+      "message": "provider catalog request failed; previous catalog retained"
+    },
+    "provider_unauthorized": {
+      "http": 400,
+      "retryable": false,
+      "message": "managed provider has no stored credential"
+    },
+    "revision_conflict": {
+      "http": 409,
+      "retryable": false,
+      "message": "provider changed during refresh"
+    },
+    "catalog_not_loaded": {
+      "http": 409,
+      "retryable": false,
+      "message": "fetch provider catalog first"
+    },
+    "catalog_stale": {
+      "http": 409,
+      "retryable": false,
+      "message": "refresh provider catalog after configuration change"
+    },
+    "harness_invalid": {
+      "http": 500,
+      "retryable": false,
+      "message": "the plugin manifest cannot be honoured (see the harness view's `invalid`), so no adapter was started"
+    },
+    "model_mismatch": {
+      "http": 502,
+      "retryable": true,
+      "message": "the harness applied a different model or provider than the one asked for; a silent substitution is refused, never accepted"
+    },
+    "session_closed": {
+      "http": 409,
+      "retryable": true,
+      "message": "session is closed; reopen it before using it"
+    },
+    "session_deleted": {
+      "http": 409,
+      "retryable": false,
+      "message": "session was removed from session/list; the record survives but cannot be reopened"
+    },
+    "no_resume_ref": {
+      "http": 409,
+      "retryable": false,
+      "message": "the session has no stored ref to resume, so there is nothing to reopen the harness with"
+    },
+    "not_needs_repair": {
+      "http": 409,
+      "retryable": true,
+      "message": "the session is not in a repairable state; repair is for an orphaned tail"
+    },
+    "repair_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "repair could not re-establish the session; the record is kept"
+    },
+    "model_not_applied": {
+      "http": 502,
+      "retryable": true,
+      "message": "the harness did not confirm the requested model; the turn is refused rather than run on another one"
+    },
+    "agent_preset_locked": {
+      "http": 409,
+      "retryable": false,
+      "message": "the preset is locked once the session has started; start a new session to change it"
+    },
+    "question_not_found": {
+      "http": 404,
+      "retryable": false,
+      "message": "no such question request"
+    },
+    "already_exists": {
+      "http": 409,
+      "retryable": false,
+      "message": "a record with this id already exists; nothing was changed"
+    },
+    "internal_error": {
+      "http": 500,
+      "retryable": true,
+      "message": "the hub failed while serving a request; the request is not at fault and nothing was partially applied"
+    },
+    "unsupported": {
+      "http": 501,
+      "retryable": false,
+      "message": "the harness does not support this operation; nothing was substituted for it"
+    },
+    "unknown_turn": {
+      "http": 400,
+      "retryable": false,
+      "message": "no such completed turn in this session; fork anchors on a turn that ended"
+    },
+    "fork_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "the harness could not start the new conversation; the source session is unchanged"
+    },
+    "compact_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "the harness ran compaction and it failed; the harness's own words are in the message"
+    }
+  }
+}

@@ -1,0 +1,2064 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent hub /v1 contract — single source of truth for hub<->consumer surface",
+  "protocol": "prts-shell",
+  "version": "2026-09-16",
+  "note": "Paths, request shapes, response shapes, SSE event objects and error codes live here, and this file is checked, not merely written down: the hub reports its own surface at GET /v1/hub/surface and tests/contract.mjs fails when the two disagree in either direction. So change this file when you change the surface — the check is what makes that instruction true instead of a hope. Adapter-facing surface lives in adapter-v1.json.",
+  "defs": {
+    "harness": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "base",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string",
+          "description": "opaque adapter base id; never enumerated"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "enum": [
+            "enabled",
+            "disabled"
+          ]
+        },
+        "presetId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "the preset the session was created with (opaque id); null = harness default"
+        },
+        "appliedPreset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "the preset the harness actually applied (proof, like appliedModel)"
+        },
+        "permissionModel": {
+          "enum": [
+            "native",
+            "extension-callback",
+            "none"
+          ]
+        },
+        "planMode": {
+          "enum": [
+            "native",
+            "composition",
+            "none"
+          ]
+        },
+        "repair": {
+          "enum": [
+            "native",
+            "truncate",
+            "tombstone-only",
+            "none"
+          ]
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "id",
+        "harnessId",
+        "modelProviderId",
+        "modelId",
+        "appliedModel",
+        "status",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "harnessId": {
+          "type": "string"
+        },
+        "modelProviderId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "which managed provider feeds this session; null = do not intervene, the harness uses its own native config. Accepts the catalog spelling `prts-<id>` or the bare `<id>`; the session reports the bare id. A model named without a provider must belong to the provider that is in effect — a model from elsewhere is refused (400 validation_failed), never accepted and left to fail mid-turn."
+        },
+        "modelId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appliedModel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "the model the adapter actually applied; compared against modelId (T0: a silent fallback fails loudly)"
+        },
+        "appliedProviderId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "the provider route the adapter actually applied (prts/<id> for an injected hub provider); proof the requested provider was used, not the harness's own"
+        },
+        "plan": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "the plan mode this session asked for; null = do not intervene, the harness keeps its own state"
+        },
+        "appliedPlan": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "the plan state the adapter actually applied (proof, like appliedModel); null = no plan capability, or not yet known"
+        },
+        "review": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "ask before every tool call (the review switch); null = do not intervene"
+        },
+        "appliedReview": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "the review state the adapter actually applied (proof, like appliedModel); null = no review capability, or not yet known"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Resolved working directory, passed to adapters as PRTS_CWD. On creation, omitted/null/empty cwd allocates a persistent core-managed directory under the existing data root. This is a working-directory boundary, not OS-level confinement."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "generated by our layer"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "needs-repair",
+            "readonly"
+          ]
+        },
+        "activeTurn": {
+          "$ref": "#/defs/turnState"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "additionalDirectories": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "extra roots the harness may activate, in addition to cwd; absolute paths. Passed through to the harness — whether a harness supports them is the harness's business, and the core neither refuses nor silently drops them. [] or null = none."
+        },
+        "appliedAdditionalDirectories": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "what the harness reported about additionalDirectories: {requested, applied, supported, reason}. The core passes the roots through and records the harness's own answer; it never assumes they became active.",
+          "properties": {
+            "requested": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "applied": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "supported": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "disabledTools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "the tool names the caller asked to disable; null = never asked"
+        },
+        "appliedTools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "the disabled set the harness reported it actually has; null = not observed. A switch that could not be confirmed must not read as success."
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "true once the session has been deleted from session/list (ACP session/delete). The record is kept; delete removes it from the list, it does not wipe it."
+        },
+        "thinkingLevel": {
+          "type": "string|null",
+          "description": "requested level"
+        },
+        "appliedThinkingLevel": {
+          "type": "string|null",
+          "description": "level the harness reported"
+        }
+      }
+    },
+    "turnEntry": {
+      "type": "object",
+      "required": [
+        "turnId",
+        "startedAt",
+        "ended",
+        "cause"
+      ],
+      "properties": {
+        "turnId": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "ended": {
+          "enum": [
+            "completed",
+            "cancelled",
+            "failed",
+            "interrupted"
+          ]
+        },
+        "cause": {
+          "enum": [
+            "user-cancel",
+            "approval-denied",
+            "approval-timeout",
+            "adapter-crash",
+            "model-error",
+            "abandoned",
+            null
+          ]
+        }
+      }
+    },
+    "turnState": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "idle",
+            "admitted",
+            "running",
+            "awaiting_approval",
+            "awaiting_question",
+            "cancelling",
+            "ended"
+          ]
+        },
+        "ended": {
+          "enum": [
+            "completed",
+            "cancelled",
+            "failed",
+            "interrupted"
+          ]
+        },
+        "cause": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "partialPersisted": {
+          "type": "boolean"
+        },
+        "partialItems": {
+          "type": "integer"
+        }
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": [
+        "id",
+        "role",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "adapter-native id; core never fabricates"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/contentPart"
+          }
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "user",
+            "assistant",
+            "bridge",
+            "system",
+            null
+          ]
+        },
+        "bridge": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "contentPart": {
+      "type": "object",
+      "description": "one part of a turn's content. text is plain. image carries base64 bytes — the media type is the harness-facing one (image/png, image/jpeg, image/webp, image/gif), data is raw base64 with NO data: prefix.",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "text",
+            "image"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "description": "type=text"
+        },
+        "mediaType": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif"
+          ],
+          "description": "type=image"
+        },
+        "data": {
+          "type": "string",
+          "description": "type=image: base64 bytes, no data: prefix"
+        },
+        "name": {
+          "type": "string",
+          "description": "type=image: optional file name"
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "id",
+        "sessionId",
+        "tool",
+        "args",
+        "requestedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string",
+          "description": "confirm | select — the kind of dialog the harness raised"
+        },
+        "args": {
+          "type": "object"
+        },
+        "options": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "for a select dialog: the choices the harness offered (e.g. Allow Once / Allow Always / Reject); decision echoes one of these"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "user-supplied rejection reason when the harness asked for one (codex denied.rejection; pi/jouzu Reject with Reason). null when the harness has no such concept (dsh) or the user gave none"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "allowed",
+            "denied",
+            "expired"
+          ]
+        }
+      }
+    },
+    "question": {
+      "type": "object",
+      "description": "A harness asking the user to decide something. Distinct from `approval`: an approval permits one action (allow/deny); a question asks for an answer, possibly with several options and supporting detail, and the answer is data the harness reads back",
+      "required": [
+        "id",
+        "sessionId",
+        "questions",
+        "requestedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "question"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "header": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "question": {
+                "type": "string"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "supporting text rendered with the question (e.g. the plan under review); never an option label"
+              },
+              "options": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "multiSelect": {
+                "type": "boolean"
+              },
+              "intent": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "presentation hint: what kind of decision this is. `{ kind: 'plan-review', approve: '<label>' }` says detail is a plan and names the approving label. Presentation only — the answer carries the same fields either way",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "approve": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "answers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "the user's answer, once given: one entry per asked question",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "selected": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "answered",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "requestedAt": {
+          "type": "string"
+        }
+      }
+    },
+    "preset": {
+      "type": "object",
+      "description": "A preset as the CLIENT sees it: an opaque id plus metadata. Content is NOT carried cross-wire (dsh-aligned; reading a composition is reconnaissance). The harness/adapter owns what a preset id means; core does not interpret it.",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "opaque preset id; the only thing needed to select it"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "display name published by the harness; falls back to id"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trust": {
+          "enum": [
+            "system",
+            "user",
+            null
+          ],
+          "description": "shipped with the deployment or locally authored (dsh: a user preset is exactly as privileged as the plugins it names)"
+        },
+        "isDefault": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "whether a session that names no preset gets this one"
+        },
+        "broken": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "why this preset cannot compose a session; absent when it can"
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "required": [
+        "name",
+        "description",
+        "kind",
+        "approvalDefault",
+        "enabled"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "adapter-native tool name"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "read",
+            "write",
+            "exec",
+            "network",
+            "other"
+          ]
+        },
+        "approvalDefault": {
+          "enum": [
+            "always",
+            "once",
+            "never"
+          ]
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "false = disabled; honest grading — adapter must not report a tool disabled unless it actually blocks it"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "size"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "diff",
+            "other"
+          ]
+        },
+        "size": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "must exist in errors.json"
+            },
+            "message": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean",
+              "description": "whether retrying the same request unchanged can succeed — straight from contract/errors.json, the same table that decides the status, so body, status and table cannot disagree. false means something must change first (the session is busy, the state needs repair, the input is invalid)."
+            }
+          }
+        },
+        "turn": {
+          "$ref": "#/defs/turnState",
+          "description": "C-9: present on session_busy so the caller sees the colliding turn state"
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "whether retrying the same request unchanged can succeed. It comes from contract/errors.json — the same table that decides the status — so the body, the status and the table cannot disagree. false means something must change first (the session is busy, the state needs repair, the input is invalid)."
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "whenToUse": {
+          "type": "string"
+        },
+        "modelInvocable": {
+          "type": "boolean",
+          "description": "whether the MODEL may load it; false means a human must invoke it"
+        }
+      }
+    }
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/v1/harnesses",
+      "auth": false,
+      "description": "the harnesses this hub has registered: a plugin that is present is registered on first sight, with its declared capabilities and status. `GET /v1/hub/harnesses` is the management view of the same registry (installed extensions, runtime, timestamps). This is the ONE route that answers without a token: discovery is open, everything else is 401 unauthorized.",
+      "response": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/harness"
+          }
+        },
+        "next_cursor": {
+          "type": "null",
+          "description": "reserved seat: no cursor is implemented, this is always null"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/harnesses/{id}/enable",
+      "response": {
+        "ok": true,
+        "id": {
+          "type": "string",
+          "description": "the id the request addressed"
+        },
+        "status": "'enabled'"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/harnesses/{id}/disable",
+      "response": {
+        "ok": true,
+        "id": {
+          "type": "string",
+          "description": "the id the request addressed"
+        },
+        "status": "'disabled'"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/harnesses/{id}/presets",
+      "description": "the harness's preset roster (opaque ids + metadata); capability-gated. known:false = harness declares no presets capability (never a fake empty list). Content is not carried.",
+      "response": {
+        "harnessId": {
+          "type": "string",
+          "description": "the id the request addressed"
+        },
+        "known": "boolean",
+        "presets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/preset"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/harnesses/{id}/models",
+      "description": "the models THIS HARNESS CAN RUN — the single authoritative source for model selection, and the only list a caller needs (do not merge it with API 1). One query: the harness's own catalog plus every core-managed provider the harness can reach during a session, so an entry means the same thing whichever harness answered and whichever way a provider got there (native config, like dsh, or injected at session start, like pi). An injected provider is named `prts-<coreProviderId>` in every harness — one spelling, no slash (pi splits a model reference on the first slash) — and `modelProviderId` accepts that spelling or the bare `<coreProviderId>`. capability-gated; known:false = harness declares no models capability (never faked as empty). Each entry keeps its real providerId. thinkingLevels is the levels for THAT model, verbatim and unconverted; a different model may offer a different list. thinkingLevelsSource says where it came from: 'declared' (stated), 'default' (the model reasons but declares none, so the set is not controllable), 'none' (the model does not reason). A model id is unique only with its providerId; (providerId, id) is the key.",
+      "response": {
+        "harnessId": {
+          "type": "string",
+          "description": "the id the request addressed"
+        },
+        "known": "boolean",
+        "models": {
+          "type": "array"
+        },
+        "failures": {
+          "type": "array"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/harnesses/{id}/tools",
+      "description": "tool catalog (H-6); capability-gated. known:false = harness declares no tools capability, catalog unknown (never faked as empty). approvalDefault is the data source for approval UI; enabled is the data source for disabledTools (A-3, honest grading).",
+      "response": {
+        "harnessId": {
+          "type": "string",
+          "description": "the id the request addressed"
+        },
+        "known": "boolean",
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/tool"
+          }
+        },
+        "partial": "boolean"
+      },
+      "query": {
+        "mode": {
+          "type": "string",
+          "description": "what the caller is asking about; passed through to the harness"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/connections",
+      "description": "The connections the hub manages, credential-free: {id, name, scheme, endpoint, envName, state, credentialConfigured}. A connection is enable/disable/delete only; disable means cut-off, which means zero materialization.",
+      "request": {},
+      "response": {
+        "connections": {
+          "type": "array",
+          "items": "object"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/connections",
+      "description": "Register a connection. scheme is a free string (stdio/http/https/ws/wss/...), no whitelist; the token is stored in the secret store and reaches the adapter as an environment variable, never in config/set.",
+      "request": {
+        "id": "string?",
+        "name": "string?",
+        "scheme": "string?",
+        "endpoint": "string?",
+        "envName": "string?",
+        "token": "string?",
+        "state": "string?"
+      },
+      "response": {
+        "connection": "object"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/hub/connections/{id}",
+      "description": "Change a connection. A new token replaces the stored one; the credential is never returned.",
+      "request": {
+        "name": "string?",
+        "scheme": "string?",
+        "endpoint": "string?",
+        "envName": "string?",
+        "token": "string?",
+        "state": "string?"
+      },
+      "response": {
+        "connection": "object"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/hub/connections/{id}",
+      "description": "Remove a connection and its stored credential.",
+      "request": {},
+      "response": {
+        "ok": "boolean",
+        "id": "string"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/harnesses",
+      "description": "the hub's harness registry. The hub manages harnesses, not just lists them: for each one it holds whether it is enabled and which extensions and skills are installed for it. A plugin present under plugins/ is registered on first sight, carrying the extensions its manifest ships; a plugin that is gone keeps its row marked missing. `availableExtensions` is the catalogue the hub can install from. Extensions are installed BY the hub: before a harness runs, the hub writes that harness's selected extension directories into its data dir, and the adapter places them where its harness reads them.",
+      "response": {
+        "harnesses": "array",
+        "availableExtensions": "string[]"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/surface",
+      "description": "The surface this process actually implements, as data: the route table the router matches, the SSE event names it can emit, and the identity of the contract it claims to keep. contract.sha256 is the hash of contract/v1.json; a consumer compares it with the contract it holds, and tests/contract.mjs compares both directions on every run.",
+      "response": {
+        "contract": {
+          "file": "string",
+          "protocol": "string",
+          "version": "string",
+          "sha256": "string"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "method": "string",
+            "path": "string",
+            "auth": "boolean"
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": "string"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/openapi.json",
+      "description": "The OpenAPI 3.1 document for this surface, byte for byte as scripts/emit-openapi.mjs generated it from contract/v1.json + contract/errors.json. It is a PROJECTION for tools (client generators, Swagger UI, validators), never a second source: edit the contract and regenerate. The adapter protocol is not HTTP and is not here — it lives in contract/adapter-v1.json and is checked against every manifest, every request the hub sends, every event an adapter emits and every event the hub handles. GET /v1/hub/surface reports this document's sha256, so a client can prove which one it is reading.",
+      "response": {
+        "openapi": {
+          "type": "string",
+          "description": "the version of the specification this document follows (3.1.0)"
+        },
+        "info": "object",
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "paths": {
+          "type": "object"
+        },
+        "components": "object"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/hub/harnesses/{id}",
+      "description": "change what the hub installs for one harness: `extensions` (names from availableExtensions; unknown names are refused with the list), `skills` (null = every skill the hub holds, or an array of skill ids), `enabled`. An extension removed here is removed from the harness's next install.",
+      "request": {
+        "extensions": "string[]?",
+        "skills": "string[]|null?",
+        "enabled": "boolean?"
+      },
+      "response": {
+        "harness": "object"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/harnesses/{id}/enable",
+      "description": "enable a registered harness (the hub twin of POST /v1/harnesses/{id}/enable).",
+      "response": {
+        "harness": "object"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/harnesses/{id}/disable",
+      "description": "disable a registered harness; session creation and turns are refused 409 harness_disabled.",
+      "response": {
+        "harness": "object"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions",
+      "request": {
+        "harnessId": "string",
+        "modelProviderId": "string|null",
+        "modelId": "string|null",
+        "title": "string|null",
+        "presetId": "string|null",
+        "plan": "boolean|null",
+        "review": "boolean|null",
+        "cwd": {
+          "type": "string",
+          "description": "absolute path; omitted -> the hub allocates a directory under its own data dir (a session must never run in the server's cwd)"
+        },
+        "additionalDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "absolute; extra roots the harness MAY activate"
+        }
+      },
+      "response": {
+        "session": {
+          "$ref": "#/defs/session"
+        }
+      },
+      "description": " A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and — worst — let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions",
+      "response": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/session"
+          }
+        },
+        "next_cursor": "string|null"
+      },
+      "description": "List sessions. Deleted sessions are never listed (ACP session/list). Closed sessions are listed unless ?excludeClosed=true.",
+      "query": {
+        "includeClosed": {
+          "type": "boolean",
+          "description": "default false: a closed session is still readable by id but not listed"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}",
+      "response": {
+        "session": {
+          "$ref": "#/defs/session"
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/sessions/{id}",
+      "response": {
+        "ok": true,
+        "id": {
+          "type": "string",
+          "description": "the id the request addressed"
+        },
+        "exported": false
+      },
+      "description": "ACP session/delete: remove the session from session/list. The record is kept (deleted:true), the harness's own session file is untouched, and the adapter process is stopped."
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/sessions/{id}",
+      "description": "Change session configuration. modelProviderId selects another core-managed provider in the same conversation; credentials/grant precedes config/set. Supply modelId or retain the currently selected model. Provider switching requires an idle turn and is serialized against turn admission and lifecycle mutations. Session id and native ref are preserved. Missing credentials/unknown provider fail before injection. Failed application retains saved selection and drops the changed adapter so next use restores saved configuration. Applied provider/model must be confirmed by the adapter. thinkingLevel sets the harness-native thinking level for this session; unconfirmed application is reported as null plus a warning, never as the requested value. A level the model does not offer is 400 validation_failed. `title` renames the session in the HARNESS as well (the hub is not the only place a name is shown): the adapter answers with the title the harness accepted, which may differ from the one asked for (dsh normalizes and sanitises), and the session reports both — `title` what was asked, `appliedTitle` what the harness holds. Requires the harness capability `rename` (501 unsupported otherwise). A title the harness did not accept is an error, never a hub-only rename that looks applied. Refused with 409 session_busy while a turn is running, like every other PATCH knob.",
+      "request": {
+        "modelId": "string?",
+        "presetId": "string?",
+        "disabledTools": "string[]?",
+        "plan": "boolean?",
+        "review": "boolean?",
+        "modelProviderId": "string?",
+        "thinkingLevel": "string?",
+        "title": "string?"
+      },
+      "response": {
+        "session": {
+          "$ref": "#/defs/session"
+        },
+        "warning": "string|null"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/turns",
+      "description": "C-3 thin per-turn entries {turnId,startedAt,ended,cause}, core-owned; details are fetched from /messages",
+      "response": {
+        "turns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/turnEntry"
+          }
+        },
+        "next_cursor": "string|null"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/messages",
+      "description": "read-through native message history (adapter history/page); the details C-3 refers to. query: beforeId (anchor, excluded; unknown -> invalid_cursor), limit. next_cursor = oldest id on page while more remain, else null",
+      "query": {
+        "beforeId": {
+          "type": "string",
+          "description": "page backwards from this message id (invalid cursor -> 400 invalid_cursor)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "page size, default 100, at least 1"
+        }
+      },
+      "response": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/message"
+          }
+        },
+        "next_cursor": "string|null"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/turns",
+      "description": "send a user message; SSE stream follows; native assistant id is a MUST. source defaults to 'user'; a client-side bridge (e.g. debate.mjs) sends another harness's output with source:'bridge' + bridge provenance so it is never mistaken for a human turn.",
+      "request": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/contentPart"
+          },
+          "description": "text and/or image parts; an image part is forwarded to the harness as an image input"
+        },
+        "idempotencyKey": "string",
+        "source": "'user'|'bridge'?",
+        "bridge": "object?"
+      },
+      "response": {
+        "turn": {
+          "$ref": "#/defs/turnState"
+        }
+      },
+      "events": [
+        "turn.admitted",
+        "turn.running",
+        "message.delta",
+        "message.completed",
+        "tool.started",
+        "tool.ended",
+        "approval.requested",
+        "question.requested",
+        "question.cancelled",
+        "plan.changed",
+        "turn.ended",
+        "session.stats",
+        "session.compacting",
+        "session.compacted",
+        "session.renamed",
+        "approval.resolved"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/cancel",
+      "description": "idempotent; terminal state returns current state without error",
+      "response": {
+        "turn": {
+          "$ref": "#/defs/turnState"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/repair",
+      "request": {
+        "mode": "'native'|'truncate'|'tombstone'",
+        "confirm": "boolean",
+        "preview": "boolean"
+      },
+      "response": {
+        "session": {
+          "$ref": "#/defs/session"
+        },
+        "dropped": "integer|null",
+        "preview": "array|null",
+        "repair": "object|null",
+        "proven": "boolean?",
+        "recoverable": "boolean?"
+      },
+      "description": "Recover a session whose cancelled turn never confirmed its end. preview:true returns the exact steps and leaves state untouched. The real call re-aborts, replaces the adapter process so no late events from the old turn can arrive, then re-attaches via session/start(resume). If the session cannot be re-established it STAYS needs-repair with repair_failed; a repair that cannot be proven is not reported as one. response.proven is true only when the re-attach succeeded."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/approvals",
+      "response": {
+        "approvals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/approval"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/approvals/{aid}",
+      "description": "Answer a pending approval. decision is 'allow'|'deny'|'always' (binary dialogs) or one of the request's `options` (select dialogs, e.g. 'Allow Once').",
+      "request": {
+        "decision": "string"
+      },
+      "response": {
+        "approval": {
+          "$ref": "#/defs/approval"
+        }
+      },
+      "events": [
+        "approval.resolved"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/questions",
+      "description": "questions the harness has asked this session (a question is an answer-seeking request, not an action permission — see defs/question)",
+      "response": {
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/question"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/questions/{qid}",
+      "description": "Answer a pending question. answers is one entry per asked question: {id, selected[], custom?}. selected echoes the offered labels; custom carries free text (it overrides selected for a single-select, supplements it for a multi-select).",
+      "request": {
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "selected": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom": {
+                "type": "string?"
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "question": {
+          "$ref": "#/defs/question"
+        }
+      },
+      "events": [
+        "question.answered"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/artifacts",
+      "response": {
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/artifact"
+          }
+        },
+        "next_cursor": {
+          "type": "null",
+          "description": "reserved seat: no cursor is implemented, this is always null"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/status",
+      "response": {
+        "pid": {
+          "type": "integer",
+          "description": "the hub process id — compare it with the process you spawned"
+        },
+        "port": {
+          "type": "integer",
+          "description": "the loopback port it is listening on"
+        },
+        "startedAt": {
+          "type": "string",
+          "description": "ISO timestamp of this boot"
+        },
+        "buildId": "string",
+        "protocol": {
+          "type": "object",
+          "description": "{name, version} of the wire protocol"
+        },
+        "contract": {
+          "type": "object",
+          "description": "{file, protocol, version, sha256} — the contract this hub was built against"
+        },
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/harness"
+          }
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "value-free provider rows (tokenConfigured, never the token) — the same shape GET /v1/hub/providers returns"
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "value-free connection rows (no credential) — the same shape GET /v1/hub/connections returns"
+        },
+        "sessionCount": "integer",
+        "activeTurns": {
+          "type": "integer",
+          "description": "sessions with a turn admitted, running, awaiting an answer, or being cancelled"
+        }
+      },
+      "description": "Core status: identity, what the hub is managing right now, and the contract it was built against. Identity first, because a client that spawned a hub must be able to prove it is talking to ITS child: compare `pid` with the process you spawned, and `buildId`/`startedAt`/`port` with what you launched. `providers` and `connections` are the same value-free shapes the list routes return — a provider shows whether a token is configured, never the token; a connection shows its materialization fields, never the credential."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/shutdown",
+      "response": {
+        "ok": true
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/skills",
+      "description": "The skills THIS session's harness actually has, read from the harness itself (pi/jouzu: their own command list; dsh: its skill catalogue RPC) — not a list of what the hub installed. It is per SESSION, not per harness, because a catalogue depends on the session's own directory: dsh resolves the project root from the session header, and the pi family also reads the project's `.pi/skills`. The difference between installed and seen is the point: the hub writes a skill's bytes into the harness's own skills directory before its process starts, and a harness may still refuse one silently (dsh drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level `<id>/SKILL.md` bundle). Requires the harness capability `skills` (501 unsupported otherwise). A harness that does not answer in time is reported as `known:false` with a `reason` — never as an empty catalogue: an empty list is a claim ('it has no skills') and a timeout is not evidence for it. (jouzu finishes its own startup lazily: its first answer measured 9s once and 70s once, its second 24ms.)",
+      "response": {
+        "sessionId": {
+          "type": "string"
+        },
+        "source": {
+          "const": "harness"
+        },
+        "known": {
+          "type": "boolean",
+          "description": "false when this harness cannot report a catalogue at all"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/skill"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "description": "why the catalogue is unknown (present only when known is false)"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/stats",
+      "description": "Session statistics as the harness reports them: {sessionId, source:'harness', tokens?, cost?, context?, turns?, messages?}. Read-through: the hub starts the session's process if it is not running and asks the harness; nothing is cached and nothing is invented. A field the harness does not report is absent (a zero and an unmeasured value are different claims). The same object also arrives as a `session.stats` event on the turn stream, immediately after `turn.ended`. Requires the harness capability `stats` (501 unsupported otherwise).",
+      "response": {
+        "sessionId": "string",
+        "source": "'harness'",
+        "tokens": {
+          "input": "integer",
+          "output": "integer",
+          "cacheRead": "integer?",
+          "cacheWrite": "integer?",
+          "reasoning": "integer?",
+          "total": "integer"
+        },
+        "cost": "number?",
+        "context": {
+          "tokens": "integer|null",
+          "window": "integer|null",
+          "percent": "number|null"
+        },
+        "turns": "integer?",
+        "messages": {
+          "user": "integer",
+          "assistant": "integer",
+          "toolCalls": "integer"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/fork",
+      "description": "Start a NEW session whose conversation ends at a completed turn of this one. The source session is not changed: same log, same ref, still usable, and it does not even need a live process. Anchor = a completed turn (the only cut every harness can make exactly; harness-native anchors — pi entry ids, dsh seq numbers — never leave the adapter). Omit afterTurnId to inherit the whole conversation. Requires the harness capability `fork`; a harness that cannot fork answers 501 unsupported rather than substituting an empty conversation. The new session carries the source's harness, provider, model, preset, plan, review, thinking level, directory and scope, and is opened by its own process forking the source — so it is usable immediately and refuses (fork_failed) rather than reporting a fork it did not get.",
+      "request": {
+        "afterTurnId": "string?"
+      },
+      "response": {
+        "session": "object",
+        "forkedFrom": {
+          "sessionId": "string",
+          "afterTurnId": "string|null"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/close",
+      "description": "ACP session/close: cancel any ongoing work (as if session/cancel was called) and free the session's resources. The session is kept with status='closed' and can be reopened. Idempotent.",
+      "request": {},
+      "response": {
+        "session": {
+          "$ref": "#/defs/session"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/reopen",
+      "description": "Bring a closed session back: clear status and let the next turn re-attach on the stored ref (ACP session/resume). Refuses a deleted session (409 session_deleted) and one with no ref.",
+      "request": {},
+      "response": {
+        "session": {
+          "$ref": "#/defs/session"
+        },
+        "reopened": "boolean?"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/providers",
+      "description": "the providers the hub manages. One provider is one file in the hub's data dir (`providers/<id>.json`): the endpoint it lives at, the protocol it speaks, the declarations for its models, the selection, and the catalog it last served. A provider is reported as `{id, label, url, api, scope, tokenConfigured, declarations, selection, catalogRevision, createdAt, updatedAt}`; the token itself is never returned.",
+      "response": {
+        "providers": "array",
+        "broken": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "file",
+              "error"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "description": "provider files the hub could not load"
+          }
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/providers",
+      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id — what that model accepts (thinking levels, window, limits) — because a provider's model list does not carry any of it. A declaration may also carry `input` — the modalities the model takes (\"text\", \"image\") — because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers).",
+      "request": {
+        "id": "string?",
+        "label": "string?",
+        "url": "string",
+        "api": "string?",
+        "token": "string?",
+        "declarations": "object?"
+      },
+      "response": {
+        "provider": "object"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/providers/{id}",
+      "description": "read one provider by id.",
+      "response": {
+        "provider": "object"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/hub/providers/{id}",
+      "description": "change a provider: `label`, `scope`, `url`, `api`, `token`, `declarations`. Changing the url, the api or the credential bumps the provider's revision, so the cached catalog reports `stale: true` until it is refreshed.",
+      "request": {
+        "label": "string?",
+        "url": "string?",
+        "api": "string?",
+        "token": "string?",
+        "declarations": "object?"
+      },
+      "response": {
+        "provider": "object"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/hub/providers/{id}",
+      "description": "remove a provider and its stored credential.",
+      "response": {
+        "ok": true,
+        "id": "string"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/providers/{id}/logout",
+      "description": "drop a provider's stored credential and keep the row: the provider stays registered (its catalog, its declarations, its selection) but has no token until one is supplied again. Requests that need the credential then fail as `provider_unauthorized` instead of running on something else.",
+      "response": {
+        "provider": "object"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/skills",
+      "description": "The skills the hub holds: one directory per skill under <DATA_DIR>/skills, listed as {id, hasManifest, files}. A skill is a directory, not a record; its id is the directory name.",
+      "response": {
+        "skills": {
+          "type": "array",
+          "items": {
+            "id": "string",
+            "hasManifest": "boolean",
+            "files": "integer"
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/hub/skills/{id}",
+      "description": "Remove one skill directory, whole. The id must stay inside the skills dir (a path that escapes it is refused, not sanitised).",
+      "response": {
+        "ok": "boolean",
+        "id": "string"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/hub/skills/{id}/files/{file...}",
+      "description": "Write one file of a skill, creating directories as needed. The hub is a courier: it stores bytes, it does not interpret them.",
+      "request": {
+        "content": "string"
+      },
+      "response": {
+        "skillId": "string",
+        "path": "string",
+        "bytes": "integer"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/skills/{id}/files/{file...}",
+      "description": "Read one file of a skill, byte for byte. {file...} is the path inside the skill directory and may contain slashes.",
+      "request": {},
+      "response": {
+        "skillId": "string",
+        "path": "string",
+        "content": "string"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/providers/models/list",
+      "description": "API 1: the core-managed providers' catalogs — what the core owns and what it can inject, independent of any harness or session. This is NOT the model-selection source: a model can only be run where a harness reaches it, so selection reads API 2 (/v1/harnesses/{id}/models), which already includes these providers. Use API 1 to manage a provider's catalog and its enabled selection, not to pick a model for a session. Core queries its registered provider endpoint with its own credential; no credential is handed to a harness for this operation. Missing/stale catalogs are fetched; cached catalogs are reused. Each model has enabled and available flags. Failures are per provider and never replace a previous catalog with an empty one.",
+      "response": {
+        "models": {
+          "type": "array",
+          "description": "[{id,name,providerId,provider,enabled,available}]"
+        },
+        "failures": {
+          "type": "array",
+          "description": "[{providerId, message}]"
+        },
+        "catalogs": {
+          "type": "array",
+          "description": "[{providerId,fetchedAt,stale,models}]"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/providers/{id}/models",
+      "description": "the cached catalog without touching the network. Each entry is `{id, name, enabled, available}` plus whatever its declaration states (`reasoning`/`thinkingLevels`/`thinkingLevelsSource`, `input`, `contextWindow`, `maxTokens`). `stale` is true when the endpoint or credential changed since the fetch; a stale catalog reports every model unavailable.",
+      "response": {
+        "providerId": "string",
+        "fetchedAt": "string|null",
+        "stale": "boolean",
+        "models": "array"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/providers/{id}/models/refresh",
+      "description": "Refresh core-provider catalog. First/new models enabled; previous choices preserved; removed models retained as unavailable. Endpoint/credential changes invalidate the catalog. Failure returns error and previous catalog without replacing it.",
+      "response": {
+        "providerId": "string",
+        "fetchedAt": "string|null",
+        "stale": "boolean",
+        "models": "array"
+      },
+      "request": {}
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/hub/providers/{id}/models",
+      "description": "replace the enabled selection (`{enabledModelIds}`; `[]` disables all, unknown ids are refused). The selection is stored on the provider, not in the fetched catalog, so a refresh never changes it and a model the provider starts serving is selected by default.",
+      "response": {
+        "providerId": "string",
+        "fetchedAt": "string|null",
+        "stale": "boolean",
+        "models": "array"
+      },
+      "request": {
+        "enabledModelIds": "string[]"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/compact",
+      "description": "Ask the harness to compact the session's own conversation. The hub does not compact anything itself and does not compute the numbers: it reports what the harness says (source:'harness'). Fields a harness does not report are ABSENT, never zero — pi counts the replaced span and then estimates the rebuilt context, dsh counts the replaced span only. A harness with nothing worth compacting answers compacted:false with its own words in `detail`; a compaction that failed answers compact_failed. Refused (409 session_busy) while a turn is running, because pi's compact aborts the running turn and a hub must not throw away work to run a maintenance call. Requires the harness capability `compact` (501 unsupported otherwise). The same facts also arrive on the turn stream as `session.compacting` then `session.compacted` — including for a compaction the harness performed on its own (a full context compacts mid-turn), which nobody asked for.",
+      "request": {
+        "instructions": "string?"
+      },
+      "response": {
+        "sessionId": "string",
+        "source": "'harness'",
+        "compacted": "boolean",
+        "reason": "'manual'|string?",
+        "tokensBefore": "integer?",
+        "tokensAfter": "integer?",
+        "summary": "string?",
+        "usage": "object?",
+        "detail": "string?"
+      },
+      "events": [
+        "session.compacting",
+        "session.compacted"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "turn.admitted",
+      "payload": {
+        "type": "object",
+        "required": [
+          "turn"
+        ],
+        "properties": {
+          "turn": {
+            "$ref": "#/defs/turnState"
+          }
+        }
+      },
+      "description": "the turn is accepted and the stream is open"
+    },
+    {
+      "name": "turn.running",
+      "payload": {
+        "type": "object",
+        "required": [
+          "turn"
+        ],
+        "properties": {
+          "turn": {
+            "$ref": "#/defs/turnState"
+          }
+        }
+      }
+    },
+    {
+      "name": "message.delta",
+      "payload": {
+        "type": "object",
+        "required": [
+          "messageId",
+          "text",
+          "kind"
+        ],
+        "properties": {
+          "messageId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "reasoning"
+            ]
+          }
+        }
+      },
+      "description": "one delta of the streaming answer; kind says whether it is text or the model thinking out loud"
+    },
+    {
+      "name": "message.completed",
+      "payload": {
+        "type": "object",
+        "required": [
+          "messageId",
+          "role",
+          "text"
+        ],
+        "properties": {
+          "messageId": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "tool.started",
+      "payload": {
+        "type": "object",
+        "required": [
+          "tool"
+        ],
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "tool.ended",
+      "payload": {
+        "type": "object",
+        "required": [
+          "tool"
+        ],
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "approval.requested",
+      "payload": {
+        "type": "object",
+        "required": [
+          "approvalId",
+          "state"
+        ],
+        "properties": {
+          "approvalId": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "const": "pending"
+          }
+        }
+      }
+    },
+    {
+      "name": "approval.resolved",
+      "payload": {
+        "type": "object",
+        "required": [
+          "approvalId",
+          "approved",
+          "state"
+        ],
+        "properties": {
+          "approvalId": {
+            "type": "string"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "question.requested",
+      "payload": {
+        "type": "object",
+        "required": [
+          "questionId",
+          "state"
+        ],
+        "properties": {
+          "questionId": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "state": {
+            "const": "pending"
+          }
+        }
+      },
+      "description": "question is not approval: this wants an ANSWER, not permission"
+    },
+    {
+      "name": "question.answered",
+      "payload": {
+        "type": "object",
+        "required": [
+          "questionId",
+          "state"
+        ],
+        "properties": {
+          "questionId": {
+            "type": "string"
+          },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "question.cancelled",
+      "payload": {
+        "type": "object",
+        "required": [
+          "questionId",
+          "state"
+        ],
+        "properties": {
+          "questionId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "plan.changed",
+      "payload": {
+        "type": "object",
+        "required": [
+          "plan"
+        ],
+        "properties": {
+          "plan": {
+            "type": "boolean"
+          }
+        }
+      },
+      "description": "plan mode changed — possibly because the HARNESS changed it (a model leaving plan when its plan is approved), which is why the hub reports it instead of assuming its own last request held"
+    },
+    {
+      "name": "turn.ended",
+      "payload": {
+        "type": "object",
+        "required": [
+          "turn"
+        ],
+        "properties": {
+          "turn": {
+            "$ref": "#/defs/turnState"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "session.stats",
+      "payload": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "source"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "source": {
+            "const": "harness"
+          }
+        },
+        "description": "plus whatever the harness reports about this session: tokens?, cost?, context?, turns?, messages? — a field it does not report is absent"
+      }
+    },
+    {
+      "name": "session.compacting",
+      "payload": {
+        "type": "object",
+        "required": [
+          "sessionId"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "description": "the harness is rewriting its own context right now, whether or not this session asked for it"
+    },
+    {
+      "name": "session.compacted",
+      "payload": {
+        "type": "object",
+        "required": [
+          "sessionId"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "aborted": {
+            "type": "boolean"
+          },
+          "tokensBefore": {
+            "type": "integer"
+          },
+          "tokensAfter": {
+            "type": "integer"
+          },
+          "willRetry": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "object"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "the same facts the compact route answers with, for a compaction the harness performed on its own"
+    },
+    {
+      "name": "session.renamed",
+      "payload": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "title"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appliedBy": {
+            "const": "harness"
+          }
+        }
+      },
+      "description": "the HARNESS named or renamed the session (dsh titles a session from its first prompt); the hub follows instead of keeping a title only it believes in"
+    }
+  ]
+}
