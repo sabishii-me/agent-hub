@@ -80,7 +80,7 @@ Every route needs `Authorization: Bearer <token>` except `GET /v1/harnesses`.
 |---|---|
 | `AGENT_HUB_DATA_DIR` | state dir (default `~/.sabishii-me/agent-hub`): endpoint file, sessions, secrets, per-harness homes |
 | `AGENT_HUB_PLUGINS_DIR` | a directory of harness plugins the hub may READ. Not required: the hub searches the roots listed under [Installing a harness](#installing-a-harness), and prints them at startup. The root it WRITES to is always `<AGENT_HUB_DATA_DIR>/plugins` |
-| `AGENT_HUB_APPROVAL_TIMEOUT_MS` | approval deadline (default 120000) |
+| `AGENT_HUB_APPROVAL_TIMEOUT_MS` | approval deadline (default 0 = unlimited) |
 | `AGENT_HUB_CANCEL_TIMEOUT_MS` | cancel deadline (default 15000) |
 | `AGENT_HUB_TURN_TIMEOUT_MS` | turn deadline (default 0 = unbounded) |
 

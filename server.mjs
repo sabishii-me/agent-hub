@@ -1,3 +1,4 @@
+import { listSkillResources, readSkillResource } from "./resources.mjs";
 // Agent hub — multi-harness management server.
 // Transport: localhost HTTP + SSE. Zero runtime dependencies: node built-ins.
 //
@@ -73,10 +74,10 @@ const ENDPOINT = path.join(DATA_DIR, 'endpoint.json');
 const HARNESSES_FILE = path.join(DATA_DIR, 'harnesses.json');
 const LEGACY_DISABLED = path.join(DATA_DIR, 'disabled.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
-const APPROVAL_TIMEOUT = Number(process.env.AGENT_HUB_APPROVAL_TIMEOUT_MS) || 120_000;
-// A question is a decision about work, not a permission to act, so it gets a
-// longer window before the harness is unblocked by cancellation.
-const QUESTION_TIMEOUT = Number(process.env.AGENT_HUB_QUESTION_TIMEOUT_MS) || 300_000;
+const APPROVAL_TIMEOUT = Math.max(0, Number(process.env.AGENT_HUB_APPROVAL_TIMEOUT_MS) || 0);
+// Human decisions have no default deadline. Positive operator overrides are
+// optional; neither approval nor question waiting consumes prompt execution time.
+const QUESTION_TIMEOUT = Math.max(0, Number(process.env.AGENT_HUB_QUESTION_TIMEOUT_MS) || 0);
 const CANCEL_TIMEOUT = Number(process.env.AGENT_HUB_CANCEL_TIMEOUT_MS) || 15_000;
 // A turn may legitimately run for a long time (a slow/free model can take minutes
 // to emit a large artefact). There is NO default wall-clock cap on a turn: the
@@ -606,6 +607,25 @@ function declareAdapterRequest(method) {
   }
 }
 
+// Several parallel tool approvals share one execution budget. Resume only after
+// the last human decision is resolved; retries must not replenish the budget.
+function hasHumanWait(conn, sid) {
+  return [...approvals.values(), ...questions.values()].some(r => r.conn === conn && r.sid === sid && r.state === 'pending');
+}
+function updateHumanWait(conn, sid) {
+  const waiting = hasHumanWait(conn, sid);
+  for (const pending of conn.pending.values()) {
+    if (pending.executionBudget && pending.sid === sid) {
+      if (waiting) pending.pause(); else if (pending.paused) pending.resume();
+    }
+  }
+  const s = sessions.get(sid);
+  if (s && ['running', 'awaiting_approval', 'awaiting_question'].includes(s.activeTurn.state)) {
+    const approval = [...approvals.values()].some(r => r.conn === conn && r.sid === sid && r.state === 'pending');
+    s.activeTurn.state = approval ? 'awaiting_approval' : waiting ? 'awaiting_question' : 'running';
+  }
+}
+
 function rpc(conn, method, params, timeoutMs = 30_000) {
   declareAdapterRequest(method);
   return new Promise((resolve, reject) => {
@@ -613,11 +633,28 @@ function rpc(conn, method, params, timeoutMs = 30_000) {
     // timeoutMs <= 0 means no wall-clock bound: the call settles only when the
     // adapter answers (or crashes). Used for session/prompt, whose duration is
     // the model's business, not ours.
-    const timer = timeoutMs > 0 ? setTimeout(() => {
-      conn.pending.delete(id);
-      reject(new Error(`${method} timed out`));
-    }, timeoutMs) : null;
-    conn.pending.set(id, { resolve, reject, timer });
+    const pending = { resolve, reject, timer: null, remaining: timeoutMs,
+      started: 0, paused: false, sid: params.sid || conn.sid,
+      executionBudget: method === 'session/prompt' };
+    pending.resume = () => {
+      if (timeoutMs <= 0 || pending.timer) return;
+      pending.paused = false;
+      pending.started = performance.now();
+      pending.timer = setTimeout(() => {
+        conn.pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, Math.max(0, pending.remaining));
+    };
+    pending.pause = () => {
+      if (pending.timer) {
+        clearTimeout(pending.timer); pending.timer = null;
+        pending.remaining = Math.max(0, pending.remaining - (performance.now() - pending.started));
+      }
+      pending.paused = true;
+    };
+    conn.pending.set(id, pending);
+    if (pending.executionBudget && hasHumanWait(conn, pending.sid)) pending.pause();
+    else pending.resume();
     conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
 }
@@ -788,23 +825,30 @@ function handleApprovalRequest(conn, msg) {
   const sid = params.sid || conn.sid;
   const s = sessions.get(sid);
   const aid = `appr-${crypto.randomUUID()}`;
-  const record = { id: aid, sid, tool: params.kind || 'confirm', args: { detail: params.detail }, options: Array.isArray(params.options) ? params.options : null, state: 'pending', adapterRequestId: msg.id, conn, timer: null };
+  const record = { id: aid, sid, tool: typeof params.tool === 'string' ? params.tool : params.kind || 'confirm', args: params.args && typeof params.args === 'object' && !Array.isArray(params.args) ? params.args : { detail: params.detail }, options: Array.isArray(params.options) ? params.options : null, state: 'pending', requestedAt: new Date().toISOString(), expiresAt: APPROVAL_TIMEOUT > 0 ? new Date(Date.now() + APPROVAL_TIMEOUT).toISOString() : null, adapterRequestId: msg.id, conn, timer: null };
   const failClosed = (approved, choice) => {
+    if (record.state !== 'pending') return;
     conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { approved, reason: approved ? 'allowed' : 'timeout', ...(choice !== undefined ? { choice } : {}) } }) + '\n');
     if (approved) record.state = 'allowed';
     else record.state = 'expired';
+    record.resolvedAt = new Date().toISOString(); record.resolutionSource = 'timeout';
     if (s) s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    updateHumanWait(conn, sid);
     emitSessionEvent(sid, 'approval.resolved', { approvalId: aid, approved, state: record.state });
   };
-  record.timer = setTimeout(() => failClosed(false), APPROVAL_TIMEOUT);
+  record.timer = APPROVAL_TIMEOUT > 0 ? setTimeout(() => failClosed(false), APPROVAL_TIMEOUT) : null;
   approvals.set(aid, record);
+  updateHumanWait(conn, sid);
   if (s) s.activeTurn = { state: 'awaiting_approval', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
   emitSessionEvent(sid, 'approval.requested', { approvalId: aid, tool: record.tool, args: record.args, options: record.options, state: 'pending' });
 }
 
-function decideApproval(aid, decision, reason) {
+function decideApproval(aid, decision, reason, sid) {
   const r = approvals.get(aid);
-  if (!r) return null;
+  if (!r || r.sid !== sid) return null;
+  if (r.state !== 'pending') throw new Error('approval is no longer pending');
+  const accepted = r.options && r.options.length ? r.options : ['allow', 'deny', 'always'];
+  if (!accepted.includes(decision)) throw new Error('decision must be one of the offered approval choices');
   clearTimeout(r.timer);
   // Two answer shapes: a binary allow/deny (confirm dialogs) or a choice from
   // the request's options (select dialogs, e.g. Allow Once / Allow Always /
@@ -820,14 +864,16 @@ function decideApproval(aid, decision, reason) {
   const comment = (!approved && typeof reason === 'string' && reason.length) ? reason : undefined;
   r.reason = comment !== undefined ? comment : null;
   r.state = approved ? 'allowed' : 'denied';
+  r.resolvedAt = new Date().toISOString(); r.resolutionSource = 'client'; r.decision = decision;
   r.conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: r.adapterRequestId, result: { approved, reason: approved ? 'allowed' : 'denied', ...(comment !== undefined ? { comment } : {}), ...(choice !== undefined ? { choice } : {}) } }) + '\n');
   const s = sessions.get(r.sid);
   if (s) {
     s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
-    if (!approved) s.activeTurn = { state: 'ended', ended: 'failed', cause: 'approval-denied', partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    // A denied tool is not a terminal agent turn. The harness settles the turn.
   }
+  updateHumanWait(r.conn, r.sid);
   emitSessionEvent(r.sid, 'approval.resolved', { approvalId: aid, approved, state: r.state, ...(r.reason ? { reason: r.reason } : {}) });
-  if (!approved) emitSessionEvent(r.sid, 'turn.ended', { turn: sessions.get(r.sid).activeTurn });
+
   return r;
 }
 
@@ -865,13 +911,16 @@ function handleQuestionRequest(conn, msg) {
   // the honest outcome: the harness unblocks and the model is told no answer
   // came, rather than being fed an invented one.
   const cancelQuestion = () => {
+    if (record.state !== 'pending') return;
     conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { cancelled: true } }) + '\n');
     record.state = 'cancelled';
     if (s) s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+    updateHumanWait(conn, sid);
     emitSessionEvent(sid, 'question.cancelled', { questionId: qid, state: record.state });
   };
-  record.timer = setTimeout(cancelQuestion, QUESTION_TIMEOUT);
+  record.timer = QUESTION_TIMEOUT > 0 ? setTimeout(cancelQuestion, QUESTION_TIMEOUT) : null;
   questions.set(qid, record);
+  updateHumanWait(conn, sid);
   if (s) s.activeTurn = { state: 'awaiting_question', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
   emitSessionEvent(sid, 'question.requested', { questionId: qid, questions: record.questions, state: 'pending' });
 }
@@ -894,6 +943,7 @@ function answerQuestion(qid, answers) {
   r.conn.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: r.adapterRequestId, result: { answers: normalised } }) + '\n');
   const s = sessions.get(r.sid);
   if (s) s.activeTurn = { state: 'running', ended: null, cause: null, partialPersisted: s.activeTurn.partialPersisted, partialItems: 0 };
+  updateHumanWait(r.conn, r.sid);
   emitSessionEvent(r.sid, 'question.answered', { questionId: qid, answers: normalised, state: r.state });
   return r;
 }
@@ -1042,6 +1092,17 @@ const ROUTES = [
       return json(res, status, { ...errorBody(e.code || 'provider_catalog_failed', e.code ? e.message : 'catalog unavailable'), catalog: row ? catalogView(row) : null });
     }) },
 
+  { method: 'GET', path: '/v1/sessions/{id}/resources', handler: (c) =>
+    withSession(c.params.id, c.res, () => {
+      const s = sessions.get(c.params.id);
+      return json(c.res, 200, { resources: listSkillResources(SKILLS_DIR, harnessRow(s.harnessId)?.skills) });
+    }) },
+  { method: 'POST', path: '/v1/sessions/{id}/resources/read', handler: (c) =>
+    withSession(c.params.id, c.res, () => c.body().then(b => {
+      if (rejectUnknownFields(c.res, b, ['uri'], 'POST /v1/sessions/{id}/resources/read')) return;
+      const s = sessions.get(c.params.id);
+      return json(c.res, 200, readSkillResource(SKILLS_DIR, harnessRow(s.harnessId)?.skills, b.uri));
+    }).catch(e => failError(c.res, e))) },
   // ---- skills: a directory per skill, round-tripped byte for byte ----------
   { method: 'GET', path: '/v1/hub/skills', handler: ({ res }) =>
     json(res, 200, { skills: listSkills() }) },
@@ -1161,7 +1222,7 @@ const ROUTES = [
       json(c.res, 200, { approvals: [...approvals.values()].filter((a) => a.sid === c.params.id).map(({ conn: _c, timer: _t, adapterRequestId: _r, ...a }) => a) })) },
   { method: 'POST', path: '/v1/sessions/{id}/approvals/{aid}', handler: (c) =>
     withSession(c.params.id, c.res, () => c.body().then((b) => {
-      const r = decideApproval(c.params.aid, b.decision, b.reason);
+      const r = decideApproval(c.params.aid, b.decision, b.reason, c.params.id);
       if (!r) return fail(c.res, 404, 'approval_not_found', 'no such approval request');
       return json(c.res, 200, { approval: { id: r.id, sid: r.sid, tool: r.tool, args: r.args, state: r.state } });
     }).catch((e) => fail(c.res, 400, 'validation_failed', e.message))) },
@@ -2845,7 +2906,8 @@ function switchModel(sid, b, res) {
   // {plan:false} during a turn answered 200 with applied.plan still true, which is
   // a success report for a change that did not happen. Refuse instead (C-9:
   // refuse, do not queue), for every knob, exactly as the provider path does.
-  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+  const livePolicyChange = Object.keys(b).length > 0 && Object.keys(b).every(key => key === 'plan' || key === 'review');
+  if (s.activeTurn.state === 'cancelling' || (['admitted', 'running', 'awaiting_approval', 'awaiting_question'].includes(s.activeTurn.state) && !livePolicyChange)) {
     return fail(res, 409, 'session_busy', 'finish or cancel the current turn before changing configuration');
   }
   const changingProvider = b.modelProviderId !== undefined;
@@ -2876,6 +2938,7 @@ function switchModel(sid, b, res) {
     providerGrant = { connectionId: provider.id, url: provider.endpoint?.url || null, ...(provider.endpoint?.api ? { api: provider.endpoint.api } : {}), value };
   }
   let conn = connFor(sid);
+  if (livePolicyChange && ['running', 'awaiting_approval', 'awaiting_question'].includes(s.activeTurn.state) && !conn?.ready) return fail(res, 409, 'session_busy', 'live policy change requires a ready session');
   if (!conn) conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
   // Mid-session change = a config/set re-send, effective next turn (same path as
   // model switch). model and presetId are both config knobs; disabledTools is
@@ -2969,7 +3032,7 @@ function switchModel(sid, b, res) {
       }
       if (b.thinkingLevel !== undefined) {
         s.thinkingLevel = b.thinkingLevel;
-        if (!a || a.thinkingLevel === undefined) s.appliedThinkingLevel = null;
+        s.appliedThinkingLevel = a && typeof a.thinkingLevel === 'string' ? a.thinkingLevel : null;
       }
       if (b.disabledTools !== undefined) {
         s.disabledTools = Array.isArray(b.disabledTools) ? b.disabledTools : null;

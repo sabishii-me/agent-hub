@@ -222,8 +222,9 @@
         "approved",
         "reason"
       ],
-      "timeoutSeconds": 120,
-      "timeoutBehaviour": "fail-closed approved:false"
+      "timeoutSeconds": 0,
+      "timeoutBehaviour": "No default deadline. Explicit operator timeout is fail-closed; human wait pauses session/prompt execution budget.",
+      "context": "Optional params.tool names the actual tool; params.args is structured review context passed unchanged into /v1 approval.args. Legacy params.detail remains supported. Context describes proposed work, not executed results."
     },
     "question": {
       "method": "question_need",

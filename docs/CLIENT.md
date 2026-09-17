@@ -154,3 +154,25 @@ desktop                          hub
 
 A `SIGTERM` (or `SIGINT`) makes the hub delete the file and exit; a hard kill leaves
 it, which the `pid` check catches.
+
+## Logical skill resources (initial read-only surface)
+
+`GET /v1/sessions/{id}/resources` lists logical `skills://<id>/SKILL.md`
+resources from the session harness's selected skill set. It does not enumerate
+arbitrary host files or expose installation locations. Existing registry semantics
+apply: `skills: null` permits the installed set; an explicit list restricts it.
+
+`POST /v1/sessions/{id}/resources/read` with `{ "uri": "skills://id/SKILL.md" }`
+returns `{uri,mimeType,version,content}`. Version is a content SHA-256. The endpoint
+is read-only, accepts UTF-8 text up to 512 KiB, and does not execute resource scripts.
+It rejects traversal, encoded separators, alternate streams and symlinks/junctions.
+Failures return logical resource errors, not filesystem error paths.
+
+This is NOT an execution sandbox or a model integration yet. Native skill loading
+still exposes native paths until adapters are integrated. Content may itself name
+host paths; URI indirection alone does not sanitize it. The parser and resolver
+reject static link escapes, but the check/open sequence is not a claim of race-free
+confinement against hostile concurrent directory replacement. Such attackers need
+OS confinement or handle-relative traversal. The HTTP caller still has the hub
+bearer token; this is not a least-privilege credential suitable for giving to an
+agent. Do not expose the management token to read resources.
