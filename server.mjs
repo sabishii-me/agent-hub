@@ -17,8 +17,10 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getBuildId } from './build-id.mjs';
+import { extractZipTo } from './zip.mjs';
+import { installRuntime, platformKey, runtimeMarker, sourcesDigest } from './runtime.mjs';
 import { storeSecret, getSecret, deleteSecret, listSecretNames } from './secret-store.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +45,22 @@ const PLUGINS_FILE = path.join(HUB_PLUGINS_DIR, 'installed.json');
 // (3) only when this hub really sits inside a deployment: <deployment>/apps/<hub>
 const DEPLOYMENT_PLUGINS_DIR =
   path.basename(path.dirname(HERE)) === 'apps' ? path.resolve(HERE, '..', '..', 'plugins') : null;
-const pluginRoots = () => [...new Set([GIVEN_PLUGINS_DIR, path.resolve(HERE, 'plugins'), DEPLOYMENT_PLUGINS_DIR, HUB_PLUGINS_DIR].filter(Boolean))];
+// One directory is one root, however it was written down: the same path
+// spelled with forward slashes and with backslashes used to read as two roots,
+// and the boot check then refused every plugin in it as a duplicate. Resolve
+// each candidate, and compare case-insensitively where the filesystem does.
+const pluginRoots = () => {
+  const out = [];
+  const seen = new Set();
+  for (const raw of [GIVEN_PLUGINS_DIR, path.resolve(HERE, 'plugins'), DEPLOYMENT_PLUGINS_DIR, HUB_PLUGINS_DIR].filter(Boolean)) {
+    const resolved = path.resolve(raw);
+    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(resolved);
+  }
+  return out;
+};
 // Everything harness-specific lives under that root, inside the plugin that owns it:
 // `<plugin>/extensions/<id>/` is an extension the plugin's manifest declares, and
 // `<plugin>/presets/` is the preset definitions that plugin lists. The hub reads what
@@ -226,6 +243,71 @@ function installedPlugins() {
   return [...ids].sort();
 }
 
+// A harness plugin declares an adapter (command + protocol); a hub provider
+// plugin declares a provider module. Both are plugins living in the same roots;
+// neither is built into the hub.
+function harnessPlugins() {
+  return installedPlugins().filter((id) => Array.isArray((manifestOf(id) || {}).command));
+}
+
+// --- hub provider plugins ----------------------------------------------------
+// A provider type is whatever a plugin ships: the hub imports the module a
+// manifest declares and keeps the descriptor. With no such plugin installed,
+// a provider record that names that type stays readable but unusable — there is
+// no built-in fallback and no generic guess about what a vendor accepts.
+const PROVIDER_TYPE_INDEX = new Map();   // `${descriptor.id}@${descriptor.version}` -> module (+ pluginId)
+const PROVIDER_PLUGIN_FAULTS = [];       // modules that were declared but could not load
+function providerModuleEntry(pluginId) {
+  const m = manifestOf(pluginId) || {};
+  const decl = m.provider;
+  if (!decl || typeof decl !== 'object') return null;
+  if (decl.apiVersion !== 1) return { error: `provider.apiVersion ${JSON.stringify(decl.apiVersion)} is not supported (1)` };
+  if (typeof decl.module !== 'string' || !decl.module) return { error: 'provider.module must be a module path inside the plugin' };
+  const dir = path.resolve(pluginDir(pluginId));
+  const modulePath = path.resolve(dir, decl.module);
+  if (modulePath !== dir && !modulePath.startsWith(dir + path.sep)) return { error: 'provider.module must stay inside the plugin directory' };
+  if (!fs.existsSync(modulePath)) return { error: `provider.module not found: ${decl.module}` };
+  return { modulePath };
+}
+async function loadProviderPlugins() {
+  for (const pluginId of installedPlugins()) {
+    const entry = providerModuleEntry(pluginId);
+    if (!entry) continue;
+    if (entry.error) { PROVIDER_PLUGIN_FAULTS.push({ plugin: pluginId, error: entry.error }); continue; }
+    try {
+      const { default: mod } = await import(pathToFileURL(entry.modulePath).href);
+      const d = mod && mod.descriptor;
+      if (mod?.apiVersion !== 1 || !d || typeof d.id !== 'string' || !d.id || !Number.isInteger(d.version) || d.version < 1 || typeof mod.configure !== 'function' || typeof mod.fetchCatalog !== 'function') {
+        throw new Error('a provider module needs apiVersion 1, descriptor {id,version,...}, configure() and fetchCatalog()');
+      }
+      const key = `${d.id}@${d.version}`;
+      if (PROVIDER_TYPE_INDEX.has(key)) throw new Error(`duplicate provider type ${key}`);
+      PROVIDER_TYPE_INDEX.set(key, Object.assign(Object.create(mod), { pluginId }));
+    } catch (e) {
+      PROVIDER_PLUGIN_FAULTS.push({ plugin: pluginId, error: e && e.message ? e.message : String(e) });
+      process.stderr.write(`[hub] provider plugin '${pluginId}' could not be loaded: ${e && e.message ? e.message : e}
+`);
+    }
+  }
+}
+const providerTypeIdentity = (row) => ({
+  providerType: row.providerType === undefined ? 'custom-compatible' : row.providerType,
+  providerTypeVersion: row.providerTypeVersion === undefined ? 1 : row.providerTypeVersion,
+});
+function findProviderType(row) {
+  const identity = providerTypeIdentity(row);
+  return PROVIDER_TYPE_INDEX.get(`${identity.providerType}@${identity.providerTypeVersion}`) || undefined;
+}
+function requireProviderType(row) {
+  const plugin = findProviderType(row);
+  if (!plugin) throw Object.assign(new Error('provider type or version is unavailable'), { code: 'unsupported' });
+  return plugin;
+}
+const providerTypes = () => ({
+  types: [...PROVIDER_TYPE_INDEX.values()].map((mod) => ({ ...mod.descriptor, plugin: mod.pluginId })),
+  broken: PROVIDER_PLUGIN_FAULTS.slice(),
+});
+
 // Where the runtime the manifest pins should land: the manifest's command, resolved
 // the same way the hub resolves it for the adapter, minus the program itself. The hub
 // only ever CHECKS this path — materialising it is the plugin's own job.
@@ -273,6 +355,15 @@ function manifestFault(id) {
   const m = manifestOf(id);
   if (!m) return 'no manifest.json';
   if (m.id !== id) return `manifest id '${m.id}' is not the plugin directory '${id}'`;
+  const isHarness = m.command !== undefined || m.protocol !== undefined || m.runtime !== undefined || m.capabilities !== undefined || m.extensions !== undefined;
+  if (m.provider !== undefined) {
+    const entry = providerModuleEntry(id);
+    if (entry && entry.error) return entry.error;
+  }
+  if (!isHarness && m.provider === undefined) {
+    return 'a plugin declares either command (harness adapter) or provider (hub provider module)';
+  }
+  if (!isHarness) return null;   // a provider-only plugin has no adapter to validate
   if (!Number.isInteger(m.protocol)) return 'protocol must be an integer (the adapter protocol it speaks)';
   if (m.protocol !== ADAPTER_PROTOCOL) return `protocol ${m.protocol} is not the adapter protocol this hub speaks (${ADAPTER_PROTOCOL})`;
   if (!Array.isArray(m.command) || m.command.length === 0 || m.command.some((c) => typeof c !== 'string')) {
@@ -314,7 +405,7 @@ function availableExtensions(id) {
 function reconcileHarnesses() {
   const rows = loadHarnessRows();
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const onDisk = installedPlugins();
+  const onDisk = harnessPlugins();
   let changed = false;
   // one-time carry-over from the old shape (a bare array of disabled ids)
   const legacy = readJson(LEGACY_DISABLED, null);
@@ -477,6 +568,13 @@ function endTurn(s, ended, cause) {
   s.currentTurnStarted = null;
 }
 
+// The SecretStore master key belongs to the hub, never to harnesses/tools.
+function adapterEnvironment() {
+  const env = { ...process.env };
+  delete env.AGENT_HUB_SECRET_KEY;
+  return env;
+}
+
 // --- adapter process (one process per session, §6 topology) ------------------
 function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
   const m = manifestOf(harnessId);
@@ -513,7 +611,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
     windowsHide: true,
     cwd: dir,
     // (inherit the terminal's own login/upstream). private = isolated home.
-    env: { ...process.env, AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { AGENT_HUB_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), AGENT_HUB_SESSION_ID: sid, AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
+    env: { ...adapterEnvironment(), AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { AGENT_HUB_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), AGENT_HUB_SESSION_ID: sid, AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
     // stderr is CAPTURED as well as echoed: when an adapter dies before it can
     // answer, its own last words are the only useful part of the error, and a
     // caller who forgot to materialise the runtime should be told that instead of
@@ -542,7 +640,9 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
       if (!line.trim()) continue;
       process.stderr.write(line + NL);
       conn.tail.push(line.trim());
-      if (conn.tail.length > 6) conn.tail.shift();
+      // Keep enough of it to be a reason: six lines of a Node stack trace is the top of
+      // the stack, and the line that says what actually happened is at the bottom.
+      if (conn.tail.length > 20) { conn.tail.shift(); conn.tailDropped = (conn.tailDropped || 0) + 1; }
     }
   });
   proc.on('error', (e) => {
@@ -567,7 +667,12 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
       emitSessionEvent(sid, 'turn.ended', { turn: s.activeTurn });
       // read-through truth: the adapter's transcript holds whatever persisted.
     }
-    for (const [, p] of conn.pending) { clearTimeout(p.timer); p.reject(new Error(`adapter exited code=${code}${conn.tail.length ? ` — it said: ${conn.tail[conn.tail.length - 1]}` : ''}`)); }
+    // The whole tail, not its last line: the last line is usually the adapter saying
+    // "the harness exited", and the harness's own reason is a few lines above it.
+    const said = conn.tail.length
+      ? `${conn.tailDropped ? `(${conn.tailDropped} earlier line(s) omitted)${NL}` : ""}${conn.tail.join(NL)}`
+      : "";
+    for (const [, p] of conn.pending) { clearTimeout(p.timer); p.reject(new Error(`adapter exited code=${code}${said ? ` — it said:${NL}${said}` : ""}`)); }
     conn.pending.clear();
     if (adapters.get(connKey) === conn) adapters.delete(connKey);
   });
@@ -588,6 +693,7 @@ const ADAPTER_REQUESTS = [
   'session/prompt',
   'session/abort',
   'history/page',
+  'history/read',
   'credentials/grant',
   'models/list',
   'presets/list',
@@ -598,6 +704,16 @@ const ADAPTER_REQUESTS = [
   'session/rename',
   'skills/list',
   'runtime/prepare',
+  // harness-private connections (capability: providers) — the harness's own
+  // provider surface, forwarded only for a harness that declares it.
+  'connections/schema',
+  'connections/list',
+  'connections/validate',
+  'connections/save',
+  'connections/delete',
+  'auth/start',
+  'auth/status',
+  'auth/cancel',
 ];
 const ADAPTER_REQUEST_SET = new Set(ADAPTER_REQUESTS);
 
@@ -754,6 +870,12 @@ function handleAdapterEvent(sid, data) {
       closeTurnStream(sid, connFor(sid));
       break;
     }
+    case 'notification':
+      if (typeof data.message === 'string') emitSessionEvent(sid, 'session.notification', {
+        sessionId: sid, message: data.message.slice(0, 32768),
+        level: ['info', 'warning', 'error'].includes(data.level) ? data.level : 'info',
+      });
+      break;
     case 'adapter_dialog_auto_cancelled':
       // The adapter cancelled a harness dialog nobody rendered, so the agent
       // does not hang waiting for a window that is not there. Nothing in the hub
@@ -787,6 +909,7 @@ const SURFACE_EVENTS = [
   'question.cancelled',
   'plan.changed',
   'turn.ended',
+  'session.notification',
   'session.stats',
   'session.compacting',
   'session.compacted',
@@ -1005,6 +1128,48 @@ const ROUTES = [
   { method: 'GET', path: '/v1/harnesses/{id}/models', handler: ({ res, params }) =>
     withHarness(params.id, res, () => listModels(params.id)
       .then((r) => json(res, 200, r)).catch((e) => fail(res, 502, 'adapter_unreachable', e.message))) },
+  // ---- harness-private connections ------------------------------------------
+  // What this harness itself lets a person connect: its own providers, its own
+  // fields, its own auth kinds and its own stored credential. Declared before
+  // the /connections route so the literal segment wins for /schema.
+  { method: 'GET', path: '/v1/harnesses/{id}/connections/schema', handler: ({ res, params }) =>
+    withHarness(params.id, res, () => privateConnectionRpc(params.id, 'connections/schema', {})
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
+  { method: 'GET', path: '/v1/harnesses/{id}/connections', handler: ({ res, params }) =>
+    withHarness(params.id, res, () => privateConnectionRpc(params.id, 'connections/list', {})
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
+  { method: 'POST', path: '/v1/harnesses/{id}/connections/validate', handler: ({ res, params, body }) =>
+    withHarness(params.id, res, () => body()
+      .then((b) => privateConnectionRpc(params.id, 'connections/validate', { draft: b.draft !== undefined ? b.draft : b }))
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
+  { method: 'POST', path: '/v1/harnesses/{id}/connections', handler: ({ res, params, body }) =>
+    withHarness(params.id, res, () => body()
+      .then((b) => privateConnectionRpc(params.id, 'connections/save', {
+        ...(b.id !== undefined ? { id: b.id } : {}),
+        providerId: b.providerId,
+        ...(b.label !== undefined ? { label: b.label } : {}),
+        fields: b.fields && typeof b.fields === 'object' && !Array.isArray(b.fields) ? b.fields : {},
+        ...(b.secretPolicy !== undefined ? { secretPolicy: b.secretPolicy } : {}),
+        ...(b.expectedRevision !== undefined ? { expectedRevision: b.expectedRevision } : {}),
+      }))
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
+  { method: 'DELETE', path: '/v1/harnesses/{id}/connections/{cid}', handler: ({ res, params, body }) =>
+    withHarness(params.id, res, () => body()
+      .then((b) => privateConnectionRpc(params.id, 'connections/delete', { id: params.cid, ...(b && b.expectedRevision !== undefined ? { expectedRevision: b.expectedRevision } : {}) }))
+      .then(() => json(res, 200, { ok: true, id: params.cid })).catch((e) => connectionFailure(res, e))) },
+  // Auth operations ride the same capability. A harness that implements none
+  // answers with its own machine code and that answer is what a caller sees —
+  // the hub never fabricates an authorization step or a token.
+  { method: 'POST', path: '/v1/harnesses/{id}/auth', handler: ({ res, params, body }) =>
+    withHarness(params.id, res, () => body()
+      .then((b) => privateConnectionRpc(params.id, 'auth/start', { providerId: b.providerId }))
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
+  { method: 'GET', path: '/v1/harnesses/{id}/auth/{op}', handler: ({ res, params }) =>
+    withHarness(params.id, res, () => privateConnectionRpc(params.id, 'auth/status', { operationId: params.op })
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
+  { method: 'POST', path: '/v1/harnesses/{id}/auth/{op}/cancel', handler: ({ res, params }) =>
+    withHarness(params.id, res, () => privateConnectionRpc(params.id, 'auth/cancel', { operationId: params.op })
+      .then((r) => json(res, 200, r)).catch((e) => connectionFailure(res, e))) },
   { method: 'GET', path: '/v1/harnesses/{id}/tools', handler: ({ res, params, url }) =>
     withHarness(params.id, res, () => listTools(params.id, url.searchParams.get('mode') || undefined)
       .then((r) => json(res, 200, r)).catch((e) => fail(res, 502, 'adapter_unreachable', e.message))) },
@@ -1031,15 +1196,19 @@ const ROUTES = [
     json(res, 200, { plugins: installedPlugins().map(pluginValue), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR, searched: pluginRoots() } }) },
   { method: 'POST', path: '/v1/hub/plugins', handler: ({ res, body }) =>
     body().then((b) => installPlugin(b, res)).catch((e) => failError(res, e)) },
+  { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
+    json(res, 200, catalogValue()) },
+  { method: 'DELETE', path: '/v1/hub/plugins/{id}', handler: ({ res, params }) =>
+    removePlugin(params.id, res) },
   { method: 'POST', path: '/v1/hub/plugins/{id}/prepare', handler: ({ res, params }) => {
     if (!manifestOf(params.id)) return fail(res, 404, 'harness_not_found', `no plugin '${params.id}'`);
     const caps = (manifestOf(params.id) || {}).capabilities || [];
     if (!caps.includes('runtime')) {
       return fail(res, 501, 'unsupported', `plugin '${params.id}' does not declare the runtime capability: it brings its own runtime, or it materialises nothing`);
     }
-    prepareRuntime(params.id)
+    ensureRuntimeFor(params.id)
       .then((r) => json(res, 200, { harnessId: params.id, runtimeReady: runtimeReady(params.id), ...r }))
-      .catch((e) => fail(res, e.code === 'runtime_prepare_failed' ? 502 : 500, e.code || 'runtime_prepare_failed', e.message));
+      .catch((e) => failError(res, e));
   } },
   { method: 'PATCH', path: '/v1/hub/harnesses/{id}', handler: ({ res, params, body }) =>
     body().then((b) => updateHarness(params.id, b, res))
@@ -1048,6 +1217,9 @@ const ROUTES = [
     harnessToggle(params.id, true, res, true) },
   { method: 'POST', path: '/v1/hub/harnesses/{id}/disable', handler: ({ res, params }) =>
     harnessToggle(params.id, false, res, true) },
+
+  { method: 'GET', path: '/v1/hub/provider-types', handler: ({ res }) =>
+    json(res, 200, providerTypes()) },
 
   // ---- providers: one provider is one file ---------------------------------
   { method: 'GET', path: '/v1/hub/providers', handler: ({ res }) =>
@@ -1074,6 +1246,16 @@ const ROUTES = [
     deleteProvider(params.id, res) },
   { method: 'POST', path: '/v1/hub/providers/{id}/logout', handler: ({ res, params }) =>
     logoutProvider(params.id, res) },
+  // Hub-level authorization: the flow runs in THIS process (the provider plugin
+  // owns it), the credential lands in the hub secret store, and the existing
+  // credentials/grant path then reaches every compatible harness. The caller
+  // gets declared steps to render; it hosts nothing.
+  { method: 'POST', path: '/v1/hub/providers/{id}/auth', handler: ({ res, params, body }) =>
+    body().then(() => startProviderAuth(params.id, res)).catch((e) => failError(res, e)) },
+  { method: 'GET', path: '/v1/hub/providers/{id}/auth/{op}', handler: ({ res, params }) =>
+    providerAuthStatus(params.id, params.op, res) },
+  { method: 'POST', path: '/v1/hub/providers/{id}/auth/{op}/cancel', handler: ({ res, params }) =>
+    providerAuthCancel(params.id, params.op, res) },
   { method: 'GET', path: '/v1/hub/providers/{id}/models', handler: ({ res, params }) => {
     const row = loadProviders().find((p) => p.id === params.id);
     if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
@@ -1087,7 +1269,7 @@ const ROUTES = [
       .catch((e) => fail(res, 400, 'validation_failed', e.message)) },
   { method: 'POST', path: '/v1/hub/providers/{id}/models/refresh', handler: ({ res, params }) =>
     refreshProviderCatalog(params.id).then((r) => json(res, 200, r)).catch((e) => {
-      const status = e.code === 'provider_not_found' ? 404 : e.code === 'revision_conflict' ? 409 : e.code === 'provider_unauthorized' || e.code === 'validation_failed' ? 400 : 502;
+      const status = e.code === 'unsupported' ? 501 : e.code === 'provider_not_found' ? 404 : e.code === 'revision_conflict' ? 409 : e.code === 'provider_unauthorized' || e.code === 'validation_failed' ? 400 : 502;
       const row = loadProviders().find((p) => p.id === params.id);
       return json(res, status, { ...errorBody(e.code || 'provider_catalog_failed', e.code ? e.message : 'catalog unavailable'), catalog: row ? catalogView(row) : null });
     }) },
@@ -1327,89 +1509,35 @@ function route(req, res) {
   }
 }
 
-// A provider's models are declared by the caller, in the same shape dsh uses for
-// a model's own statement: `reasoning.efforts` (the levels the model accepts,
-// their own names in their own order) and `reasoning.default` (which one applies
-// when nobody chooses). The core is the declaration source for the providers it
-// owns; it does not learn levels from an endpoint, because an endpoint's model
-// list does not carry them.
-//
-// Declarations are keyed by model id, validated here, and stored beside the
-// catalog so a refresh cannot drop them and a removed upstream model keeps its
-// declaration.
+// A provider's models are declared by the caller and stored as declared: the
+// core is the road the declaration travels on, not a judge of it. A declaration
+// is data written by the user or by the provider plugin — name, thinking levels,
+// limits, cost. Whoever wrote a value owns it: a wrong one reaches the harness
+// and fails there, under a message about the thing that is actually wrong,
+// instead of a verdict invented here. The only shape checked is the one that
+// makes storage mean anything: an object keyed by model id.
 function checkDeclarations(input) {
-  try { return checkDeclarationsInner(input); }
-  catch (e) { return { error: e && e.bad ? 'cost.tiers entries must be objects' : (e?.message || 'invalid declarations') }; }
-}
-function checkDeclarationsInner(input) {
   if (input === null) return { value: null };
   if (typeof input !== 'object' || Array.isArray(input)) return { error: 'declarations must be an object keyed by model id' };
   const value = {};
   for (const [modelId, decl] of Object.entries(input)) {
-    if (!modelId || typeof modelId !== 'string') return { error: 'declarations keys must be model ids' };
+    if (!modelId) return { error: 'declarations keys must be model ids' };
     if (decl === null) { value[modelId] = null; continue; }
     if (typeof decl !== 'object' || Array.isArray(decl)) return { error: `declaration for ${modelId} must be an object` };
-    const out = {};
-    if (decl.reasoning !== undefined) {
-      const r = decl.reasoning;
-      if (r === null) { out.reasoning = null; }
-      else if (typeof r !== 'object' || Array.isArray(r)) return { error: `reasoning for ${modelId} must be an object` };
-      else {
-        const efforts = r.efforts;
-        if (!Array.isArray(efforts) || efforts.some((e) => typeof e !== 'string' || !e)) return { error: `reasoning.efforts for ${modelId} must be an array of level names` };
-        out.reasoning = { efforts };
-        if (r.default !== undefined && r.default !== null) {
-          if (typeof r.default !== 'string' || !efforts.includes(r.default)) return { error: `reasoning.default for ${modelId} must be one of its efforts` };
-          out.reasoning.default = r.default;
-        }
-      }
-    }
-    if (decl.name !== undefined) {
-      if (typeof decl.name !== 'string' || !decl.name) return { error: `name for ${modelId} must be a non-empty string` };
-      out.name = decl.name;
-    }
-    if (decl.cost !== undefined) {
-      // What a model costs, in the shape the harnesses that track spend use.
-      // Harnesses that cannot carry it simply do not get it (see the adapters).
-      const c = decl.cost;
-      if (c === null) { out.cost = null; }
-      else if (typeof c !== 'object' || Array.isArray(c)) return { error: `cost for ${modelId} must be an object` };
-      else {
-        const money = {};
-        for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) {
-          const v = c[key];
-          if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return { error: `cost.${key} for ${modelId} must be a non-negative number` };
-          money[key] = v;
-        }
-        if (c.tiers !== undefined) {
-          if (!Array.isArray(c.tiers)) return { error: `cost.tiers for ${modelId} must be an array` };
-          money.tiers = c.tiers.map((t) => {
-            if (!t || typeof t !== 'object') throw Object.assign(new Error('tier'), { bad: true });
-            return t;
-          });
-        }
-        out.cost = money;
-      }
-    }
-    if (decl.input !== undefined) {
-      // What the model takes, in the harness vocabulary ("text", "image"). A
-      // model that does not say is NOT assumed to take images: claiming a
-      // modality the model does not have turns into a dropped input at runtime.
-      const input = decl.input;
-      if (!Array.isArray(input) || !input.length || input.some((v) => typeof v !== 'string' || !v)) {
-        return { error: `input for ${modelId} must be a non-empty array of modality names` };
-      }
-      out.input = [...new Set(input)];
-    }
-    for (const key of ['contextWindow', 'maxTokens']) {
-      if (decl[key] === undefined) continue;
-      if (decl[key] === null) { out[key] = null; continue; }
-      if (!Number.isInteger(decl[key]) || decl[key] <= 0) return { error: `${key} for ${modelId} must be a positive integer` };
-      out[key] = decl[key];
-    }
-    value[modelId] = out;
+    value[modelId] = { ...decl };
   }
   return { value };
+}
+
+// The thinking levels an entry states, read as data: the `thinkingLevels` list
+// now, or the `reasoning.efforts` field older declarations and catalogs used.
+// null = the entry says nothing about levels (which is not the same as an empty
+// list: an empty list is an explicit "none").
+function levelsOf(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (Array.isArray(entry.thinkingLevels)) return entry.thinkingLevels.filter((l) => typeof l === 'string' && l);
+  if (Array.isArray(entry.reasoning?.efforts)) return entry.reasoning.efforts.filter((l) => typeof l === 'string' && l);
+  return null;
 }
 
 // Core-provider catalogs never use a harness catalog or a session grant.
@@ -1421,19 +1549,34 @@ function isSelected(row, modelId) {
 }
 function catalogView(row) {
   const c = row.catalog;
-  const stale = !c || c.revision !== (row.endpointRevision || 0);
+  const stale = !findProviderType(row) || !c || c.revision !== (row.endpointRevision || 0);
   const decls = row.models || {};
-  return { providerId: row.id, fetchedAt: c?.fetchedAt || null, stale,
+  // A model's entries come from two owners: the declaration (the person, or the
+  // provider's registered configuration) and the provider plugin's catalog. Both
+  // are data; the declaration's word wins per field, and the catalog fills what
+  // it does not say. Nothing is derived from either: the levels shown are the
+  // levels stated.
+  return { providerId: row.id, fetchedAt: c?.fetchedAt || null, stale, ...(c?.note ? { note: c.note } : {}),
     models: (c?.models || []).map((m) => {
-      const d = decls[m.id];
-      const declared = d && d.reasoning && Array.isArray(d.reasoning.efforts) && d.reasoning.efforts.length;
-      return { ...m, providerId: row.id, provider: `hub/${row.id}`, enabled: isSelected(row, m.id), available: m.available && !stale,
-        ...(declared ? { reasoning: d.reasoning, thinkingLevels: d.reasoning.efforts, thinkingLevelsSource: 'declared' } : {}),
-        ...(d && typeof d.name === 'string' ? { name: d.name } : {}),
-        ...(d && d.cost ? { cost: d.cost } : {}),
-        ...(d && Array.isArray(d.input) && d.input.length ? { input: d.input } : {}),
-        ...(d && d.contextWindow !== undefined && d.contextWindow !== null ? { contextWindow: d.contextWindow } : {}),
-        ...(d && d.maxTokens !== undefined && d.maxTokens !== null ? { maxTokens: d.maxTokens } : {}) };
+      const d = decls[m.id] || null;
+      const merged = (key) => (d && d[key] !== undefined && d[key] !== null ? d[key] : (m[key] !== undefined && m[key] !== null ? m[key] : undefined));
+      const declared = d ? levelsOf(d) : null;
+      const levels = declared ?? levelsOf(m);
+      const name = merged('name');
+      const cost = merged('cost');
+      const input = merged('input');
+      const contextWindow = merged('contextWindow');
+      const maxTokens = merged('maxTokens');
+      // `reasoning`/`thinkingLevelsSource` were this core's own bookkeeping; they
+      // are not part of a model entry any more and are not passed on.
+      const { reasoning: _r, thinkingLevelsSource: _s, ...rest } = m;
+      return { ...rest, providerId: row.id, provider: `hub/${row.id}`, enabled: isSelected(row, m.id), available: m.available && !stale,
+        ...(levels ? { thinkingLevels: levels } : {}),
+        ...(typeof name === 'string' && name ? { name } : {}),
+        ...(cost ? { cost } : {}),
+        ...(Array.isArray(input) && input.length ? { input } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}) };
     }) };
 }
 async function refreshProviderCatalog(id) {
@@ -1450,49 +1593,11 @@ async function fetchProviderCatalog(id) {
   const revision = row.endpointRevision || 0;
   const credential = getSecret(secretName(id));
   if (!credential) throw error('provider_unauthorized', 'provider has no stored credential');
-  let url;
-  try {
-    url = new URL(row.endpoint?.url || '');
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
-    url.pathname = url.pathname.replace(/\/$/, '') + '/models';
-    url.hash = '';
-  } catch { throw error('validation_failed', 'invalid provider endpoint'); }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  let discovered;
-  try {
-    let response;
-    try { response = await fetch(url, { headers: { authorization: `Bearer ${credential}` }, redirect: 'error', signal: controller.signal }); }
-    catch { throw error('provider_catalog_failed', 'catalog connection failed or timed out'); }
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw error('provider_catalog_failed', `catalog request returned HTTP ${response.status}`);
-    }
-    const reader = response.body.getReader();
-    const chunks = []; let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > 8 * 1024 * 1024) { controller.abort(); throw error('provider_catalog_failed', 'catalog response exceeds size limit'); }
-        chunks.push(Buffer.from(value));
-      }
-    } catch { throw error('provider_catalog_failed', 'catalog response interrupted, timed out or exceeded size limit'); }
-    finally { reader.releaseLock(); }
-    let document;
-    try { document = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-    catch { throw error('provider_catalog_failed', 'catalog response is not JSON'); }
-    const list = Array.isArray(document?.data) ? document.data : Array.isArray(document?.models) ? document.models : null;
-    if (!list) throw error('provider_catalog_failed', 'catalog response has no model array');
-    const unique = new Map();
-    for (const item of list) {
-      const modelId = typeof item === 'string' ? item : item?.id;
-      if (typeof modelId !== 'string' || !modelId.trim()) throw error('provider_catalog_failed', 'catalog contains an invalid model id');
-      unique.set(modelId, { id: modelId, name: typeof item?.name === 'string' ? item.name : modelId });
-    }
-    discovered = [...unique.values()];
-  } finally { clearTimeout(timer); }
+  const fetched = await requireProviderType(row).fetchCatalog({ endpoint: row.endpoint, credential, catalogUrl: row.catalogUrl || null });
+  const discovered = Array.isArray(fetched) ? fetched : fetched && Array.isArray(fetched.models) ? fetched.models : null;
+  if (!discovered) throw error('provider_catalog_failed', 'the provider module returned no model list');
+  const catalogNote = !Array.isArray(fetched) && fetched && typeof fetched.note === 'string' && fetched.note ? fetched.note : null;
+  const usedCatalogUrl = !Array.isArray(fetched) && fetched && typeof fetched.catalogUrl === 'string' && fetched.catalogUrl ? fetched.catalogUrl : null;
   // Re-read after I/O so concurrent selection edits survive. Endpoint/secret
   // changes invalidate this response; a deleted provider must not be resurrected.
   const rows = loadProviders();
@@ -1512,7 +1617,10 @@ async function fetchProviderCatalog(id) {
     for (const m of discovered) known.add(m.id);
     current.selection = [...known];
   }
-  current.catalog = { revision, fetchedAt: new Date().toISOString(), models };
+  // Record which catalog the refresh actually read, so the provider file names
+  // its official source instead of re-deriving it every time.
+  if (usedCatalogUrl) current.catalogUrl = usedCatalogUrl;
+  current.catalog = { revision, fetchedAt: new Date().toISOString(), models, ...(catalogNote ? { note: catalogNote } : {}) };
   persistProviders(rows);
   return catalogView(current);
 }
@@ -1631,11 +1739,14 @@ function persistProviders(rows) {
 function providerValueFree(row) {
   return {
     id: row.id,
+    ...providerTypeIdentity(row),
+    providerTypeAvailable: !!findProviderType(row),
     label: row.label || '',
     url: row.endpoint?.url || null,
     api: row.endpoint?.api || null,
     tokenConfigured: getSecret(secretName(row.id)) != null,
     declarations: row.models || null,
+    catalogUrl: row.catalogUrl || null,
     selection: Array.isArray(row.selection) ? row.selection : null,
     catalogRevision: row.endpointRevision || 0,
     createdAt: row.createdAt,
@@ -1653,15 +1764,32 @@ function pluginValue(id) {
   const installed = readJson(PLUGINS_FILE, {}) || {};
   const rec = installed[id] || null;
   const prep = runtimePrepare.get(id) || null;
+  const providerEntry = providerModuleEntry(id);
   return {
     id,
+    kind: Array.isArray(m.command) ? 'harness' : providerEntry ? 'provider' : 'invalid',
+    provider: m.provider ? { apiVersion: m.provider.apiVersion, module: m.provider.module, types: [...PROVIDER_TYPE_INDEX.values()].filter((x) => x.pluginId === id).map((x) => `${x.descriptor.id}@${x.descriptor.version}`), fault: providerEntry && providerEntry.error ? providerEntry.error : null } : null,
     origin: pluginOrigin(id),
     path: pluginDir(id),
     source: rec ? rec.source : null,
     ref: rec ? rec.ref : null,
     commit: rec ? rec.commit : null,
+    // Which release artifact this plugin was installed from, verbatim as the
+    // install named it. A client comparing that with a catalog entry is how it
+    // knows an update exists; the hub itself does not compare anything.
+    artifact: rec && rec.artifact ? { id: rec.artifact.id, version: rec.artifact.version, url: rec.artifact.url, sha256: rec.artifact.sha256, size: rec.artifact.size ?? null } : null,
     installedAt: rec ? rec.installedAt : null,
+    // The plugin's own version (what a release publishes) and the runtime it pins are
+    // two facts: an adapter fix keeps the runtime and still gets a new version.
+    version: typeof m.version === 'string' ? m.version : null,
     runtime: m.runtime ? { package: m.runtime.package, version: m.runtime.version, target: runtimeTarget(id) } : null,
+    // Where the runtime is being installed from: the catalog's recorded official sources
+    // for a registry install, the adapter itself for a development entry.
+    runtimeSource: (runtimePrepare.get(id) || {}).source ?? null,
+    // Sources the recorded runtime left out on this machine (another platform, or an
+    // optional one that could not be fetched). Named, because a runtime quietly missing
+    // a piece is worse than one that says what it left out.
+    runtimeSkip: ((runtimePrepare.get(id) || {}).result || {}).skipped ?? null,
     runtimeReady: runtimeReady(id),
     prepare: prep ? { state: prep.state, detail: prep.detail, startedAt: prep.startedAt, finishedAt: prep.finishedAt } : null,
     invalid: manifestFault(id),
@@ -1672,9 +1800,49 @@ function pluginValue(id) {
 // id its manifest declares. The hub reads the id out of the clone and refuses a
 // manifest that would step outside that root; everything else about the plugin is the
 // plugin's business.
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+const ARTIFACT_LIMIT = Number(process.env.AGENT_HUB_ARTIFACT_LIMIT || 4 * 1024 * 1024 * 1024);
+const ARTIFACT_TIMEOUT = Number(process.env.AGENT_HUB_ARTIFACT_TIMEOUT_MS || 900_000);
+
+// The catalog is DATA, not a service: a registry file this hub was shipped with (or
+// was pointed at) restating where first-party plugins are released. The hub does not
+// resolve, rank or rewrite it — whoever writes the file answers for it, exactly as
+// with every other declaration the hub stores. It is also not a source of what gets
+// downloaded: an install names the artifact it wants (url + sha256), so the digest in
+// the request is what is verified, and a catalog that lies about its own artifact
+// fails the same way a hand-typed URL does.
+const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(HERE, 'registry.json');
+function catalogValue() {
+  if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [] };
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); }
+  catch (e) { return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.plugins)) {
+    return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: 'the registry file has no plugins array' };
+  }
+  return { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: REGISTRY_FILE, note: raw.note ?? null, plugins: raw.plugins };
+}
+
+// Installing a plugin. Two sources, one landing rule: what lands is a directory with
+// a manifest, under the id that manifest declares, in the hub's OWN plugins root.
+//   {source:{url, ref?}}                        — git clones it (a URL or a local path)
+//   {source:{artifact:{url, sha256, id, ...}}}  — a release zip, digest verified
+// An id the hub already installed is REPLACED: that is what updating is, and the two
+// paths share it because the only difference is whether a directory was already
+// there. An id living in a root the hub does not own (a deployment's checkout) is
+// refused: that tree is somebody else's.
 function installPlugin(body, res) {
   const source = body && body.source;
-  if (!source || typeof source.url !== 'string' || !source.url.trim()) {
+  if (!source || typeof source !== 'object') {
+    return fail(res, 400, 'validation_failed', 'source is required: {url, ref?} for a git checkout, or {artifact:{url, sha256, id, version}} for a release artifact');
+  }
+  if (source.artifact !== undefined) {
+    if (source.url !== undefined || source.ref !== undefined) {
+      return fail(res, 400, 'validation_failed', 'source names both a git url and an artifact: say one');
+    }
+    return installArtifact(source.artifact, res);
+  }
+  if (typeof source.url !== 'string' || !source.url.trim()) {
     return fail(res, 400, 'validation_failed', 'source.url is required (a git URL or a local path)');
   }
   if (source.ref !== undefined && typeof source.ref !== 'string') {
@@ -1696,29 +1864,302 @@ function installPlugin(body, res) {
     return fail(res, 502, 'plugin_install_failed', 'the repository has no manifest.json at its root, so it is not a plugin');
   }
   const m = readJson(mf, null) || {};
-  if (typeof m.id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(m.id)) {
+  if (typeof m.id !== 'string' || !PLUGIN_ID_RE.test(m.id)) {
     fs.rmSync(staging, { recursive: true, force: true });
     return fail(res, 502, 'plugin_install_failed', `the manifest declares an unusable id (${JSON.stringify(m.id)})`);
   }
-  const dest = path.join(HUB_PLUGINS_DIR, m.id);
-  if (fs.existsSync(dest)) {
-    fs.rmSync(staging, { recursive: true, force: true });
-    return fail(res, 409, 'conflict', `plugin '${m.id}' is already installed at ${dest}`);
-  }
-  fs.renameSync(staging, dest);
   let commit = null;
   try {
-    commit = execFileSync('git', ['-C', dest, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true }).trim();
+    commit = execFileSync('git', ['-C', staging, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true }).trim();
   } catch { /* a plugin without git metadata is still a plugin */ }
-  const record = readJson(PLUGINS_FILE, {}) || {};
-  record[m.id] = { source: source.url, ref: source.ref || null, commit, installedAt: new Date().toISOString() };
-  writeJson(PLUGINS_FILE, record);
+  return landPlugin(staging, m.id, { source: source.url, ref: source.ref || null, commit, artifact: null }, res);
+}
+
+// One download, verified before anything is unpacked: the bytes are hashed as they
+// arrive, and the digest the caller named is what they are compared against. A
+// mismatch removes the download and says both digests, because "the artifact is not
+// what the registry says it is" is the whole fact and a retry must not hide it.
+async function downloadArtifact(url, destFile) {
+  const answer = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
+  if (!answer.ok || !answer.body) throw new Error(`the artifact URL answered ${answer.status}${answer.statusText ? ` ${answer.statusText}` : ''}`);
+  const hash = crypto.createHash('sha256');
+  const out = fs.createWriteStream(destFile);
+  let bytes = 0;
+  try {
+    for await (const chunk of answer.body) {
+      bytes += chunk.length;
+      if (bytes > ARTIFACT_LIMIT) throw new Error(`the download passed ${ARTIFACT_LIMIT} bytes`);
+      hash.update(chunk);
+      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
+    }
+  } finally {
+    await new Promise((r) => out.end(r));
+  }
+  return { sha256: hash.digest('hex'), bytes };
+}
+
+async function installArtifact(a, res) {
+  if (!a || typeof a !== 'object') return fail(res, 400, 'validation_failed', 'source.artifact must be an object');
+  if (typeof a.url !== 'string' || !/^https?:[/][/]/i.test(a.url)) {
+    return fail(res, 400, 'validation_failed', 'source.artifact.url must be an http(s) URL');
+  }
+  if (typeof a.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(a.sha256)) {
+    return fail(res, 400, 'validation_failed', 'source.artifact.sha256 must be 64 hex characters: an artifact without a digest is not verifiable');
+  }
+  if (typeof a.id !== 'string' || !PLUGIN_ID_RE.test(a.id)) {
+    return fail(res, 400, 'validation_failed', `source.artifact.id must be a plugin id (got ${JSON.stringify(a.id)})`);
+  }
+  if (typeof a.version !== 'string' || !a.version.trim()) {
+    return fail(res, 400, 'validation_failed', 'source.artifact.version is required: which release this artifact is');
+  }
+  if (a.size !== undefined && (!Number.isInteger(a.size) || a.size <= 0)) {
+    return fail(res, 400, 'validation_failed', `source.artifact.size must be a positive integer of bytes (got ${JSON.stringify(a.size)})`);
+  }
+  fs.mkdirSync(HUB_PLUGINS_DIR, { recursive: true });
+  const work = fs.mkdtempSync(path.join(HUB_PLUGINS_DIR, '.download-'));
+  const file = path.join(work, 'artifact.zip');
+  try {
+    let got;
+    try {
+      got = await downloadArtifact(a.url, file);
+    } catch (e) {
+      return fail(res, 502, 'artifact_download_failed', `${a.url}: ${e.message}`);
+    }
+    if (a.size !== undefined && got.bytes !== a.size) {
+      return fail(res, 502, 'artifact_digest_mismatch', `the artifact says ${a.size} bytes, this download is ${got.bytes}: it is not the release it claims to be`);
+    }
+    if (got.sha256 !== a.sha256.toLowerCase()) {
+      return fail(res, 502, 'artifact_digest_mismatch', `sha256 mismatch: the artifact says ${a.sha256}, this download hashes to ${got.sha256}`);
+    }
+    const staging = path.join(HUB_PLUGINS_DIR, `.staging-${process.pid}-${Date.now()}`);
+    try {
+      extractZipTo(file, staging);
+    } catch (e) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 502, 'plugin_archive_invalid', e.message);
+    }
+    const mf = path.join(staging, 'manifest.json');
+    if (!fs.existsSync(mf)) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 502, 'plugin_archive_invalid', 'the archive has no manifest.json at its root, so it is not a plugin');
+    }
+    const m = readJson(mf, null) || {};
+    if (typeof m.id !== 'string' || !PLUGIN_ID_RE.test(m.id)) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 502, 'plugin_archive_invalid', `the manifest declares an unusable id (${JSON.stringify(m.id)})`);
+    }
+    if (m.id !== a.id) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 502, 'plugin_archive_invalid', `the archive declares id '${m.id}' but the artifact was for '${a.id}'`);
+    }
+    if (m.version !== a.version) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 502, 'plugin_archive_invalid', `manifest version '${m.version}' does not match artifact '${a.version}'`);
+    }
+    return landPlugin(staging, m.id, { source: a.url, ref: null, commit: null, artifact: { id: a.id, version: a.version, url: a.url, sha256: a.sha256.toLowerCase(), size: a.size ?? null } }, res);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+// A checked staging directory goes into place, and the answer says what that did.
+// Replacing moves the old copy aside first and removes it only after the new one is
+// in place, so a failure at any step leaves the previous plugin exactly where it was.
+function landPlugin(staging, id, record, res) {
+  const dest = path.join(HUB_PLUGINS_DIR, id);
+  const owner = pluginRootOf(id);
+  if (owner && owner !== HUB_PLUGINS_DIR) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    return fail(res, 409, 'conflict', `plugin '${id}' is already installed in a directory this hub does not own (${owner}): replacing a deployment's plugin is that deployment's business`);
+  }
+  const replacing = owner === HUB_PLUGINS_DIR;
+  // A runtime is not part of the plugin release: it is an install of official sources,
+  // keyed by the pin the manifest declares. Replacing the plugin must CARRY it over —
+  // otherwise every adapter fix deletes a runtime it has no quarrel with and fetches
+  // hundreds of megabytes again to arrive at the same directory.
+  let carriedRuntime = null;
+  if (replacing) {
+    const previousRuntime = path.join(dest, 'runtime');
+    if (fs.existsSync(previousRuntime) && !fs.existsSync(path.join(staging, 'runtime'))) {
+      carriedRuntime = path.join(HUB_PLUGINS_DIR, `.runtime-carry-${process.pid}-${Date.now()}`);
+    }
+  }
+  if (replacing) {
+    // Replacing a plugin a running session is using would pull the files out from
+    // under that process — and on Windows the rename simply fails, with a message
+    // nobody can act on. Refused here, by name, exactly like removal.
+    const live = openSessions(id);
+    if (live.length) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
+    }
+  }
+  const aside = replacing ? path.join(HUB_PLUGINS_DIR, `.outgoing-${process.pid}-${Date.now()}`) : null;
+  try {
+    if (carriedRuntime) fs.renameSync(path.join(dest, 'runtime'), carriedRuntime);
+    if (replacing) fs.renameSync(dest, aside);
+    fs.renameSync(staging, dest);
+    if (carriedRuntime) fs.renameSync(carriedRuntime, path.join(dest, 'runtime'));
+  } catch (e) {
+    // Restore the old plugin BEFORE returning its runtime. Creating dest first
+    // would prevent the old directory from being restored after a failed rename.
+    try {
+      if (aside && fs.existsSync(aside)) {
+        if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+        fs.renameSync(aside, dest);
+      }
+      if (carriedRuntime && fs.existsSync(carriedRuntime)) {
+        fs.renameSync(carriedRuntime, path.join(dest, 'runtime'));
+      }
+    } catch (restoreError) {
+      e.message += `; rollback failed: ${restoreError.message}; retained old plugin: ${aside}; runtime: ${carriedRuntime}`;
+    }
+    fs.rmSync(staging, { recursive: true, force: true });
+    return fail(res, 502, 'plugin_install_failed', `the plugin could not be put in place: ${e.message}`);
+  }
+  if (aside) {
+    // Same Windows reality: the outgoing copy's files may be a moment from being released.
+    const failed = rmRetrying(aside);
+    if (failed) console.error(`plugin '${id}': the previous copy at ${aside} could not be removed yet (${failed.message})`);
+  }
+  const records = readJson(PLUGINS_FILE, {}) || {};
+  records[id] = { ...record, installedAt: new Date().toISOString() };
+  writeJson(PLUGINS_FILE, records);
   reconcileHarnesses();
-  // The runtime is prepared in the background: it is a network install, and the client
-  // that asked for the plugin gets an answer it can act on immediately. Its progress is
-  // visible on GET /v1/hub/plugins, and the first session waits for it (ensureRuntime).
-  prepareRuntime(m.id).catch(() => {});
-  json(res, 201, { plugin: pluginValue(m.id) });
+  ensureRuntimeFor(id).catch(() => {});
+  json(res, replacing ? 200 : 201, { plugin: pluginValue(id), updated: replacing });
+}
+
+// The sessions a harness would be pulled out from under, in the order they were
+// opened. Both replacing and removing a plugin ask this first.
+function openSessions(harnessId) {
+  return [...sessions.values()].filter((s) => s.harnessId === harnessId && s.status !== 'closed');
+}
+
+// Removing a plugin removes what the HUB installed, and nothing else. A directory a
+// deployment put on the search path is read-only to the hub, and a harness with open
+// sessions is refused rather than yanked out from under them: both refusals name the
+// thing that has to change first.
+function removePlugin(id, res) {
+  const dir = pluginDir(id);
+  if (!dir || !fs.existsSync(dir) || !manifestOf(id)) return fail(res, 404, 'not_found', `no plugin '${id}'`);
+  if (pluginOrigin(id) !== 'hub') {
+    return fail(res, 409, 'conflict', `plugin '${id}' is in a directory this hub does not own (${dir}): removing it is that deployment's business`);
+  }
+  const live = openSessions(id);
+  if (live.length) {
+    return fail(res, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
+  }
+  const failed = rmRetrying(dir);
+  if (failed) {
+    return fail(res, 500, 'plugin_remove_failed', `${dir}: ${failed.message} — a harness process may still be exiting; removing again is safe`);
+  }
+  const records = readJson(PLUGINS_FILE, {}) || {};
+  if (records[id]) { delete records[id]; writeJson(PLUGINS_FILE, records); }
+  reconcileHarnesses();
+  json(res, 200, { ok: true, id, plugins: installedPlugins().map(pluginValue) });
+}
+
+// --- the runtime a REGISTRY install carries -------------------------------------
+// A registry artifact is the plugin; its runtime is the plugin's official distribution,
+// recorded in the catalog as the vendor's own tarballs with the vendor's own integrity.
+// The hub fetches and unpacks them itself. No package manager runs on this machine —
+// that is the point of the artifacts: a clean machine installs a harness, not a build
+// job. The adapter's own runtime/prepare stays what it always was for a DEVELOPMENT
+// entry (a git checkout), and is never used for something installed from the registry.
+function catalogEntry(id) {
+  const catalog = catalogValue();
+  return (catalog.plugins || []).find((entry) => entry && entry.id === id) || null;
+}
+
+function runtimeDeclaration(entry) {
+  const runtime = entry && entry.runtime;
+  if (!runtime || !Array.isArray(runtime.sources) || !runtime.sources.length) return null;
+  return runtime;
+}
+
+function installCatalogRuntime(id) {
+  const held = runtimePrepare.get(id);
+  if (held && held.inFlight) return held.inFlight;
+  const entry = catalogEntry(id);
+  const manifest = manifestOf(id) || {};
+  const declared = !!(manifest.runtime && Array.isArray(manifest.capabilities) && manifest.capabilities.includes('runtime'));
+  const state = { state: 'running', detail: null, startedAt: new Date().toISOString(), finishedAt: null, source: 'catalog' };
+  runtimePrepare.set(id, state);
+  const installedVersion = manifest.version;
+  const release = entry?.versions?.find(v => v.version === installedVersion);
+  // Legacy entries may have only a top-level runtime. Accept it only when its
+  // exact pin agrees with this installed plugin, never silently install latest.
+  const runtime = runtimeDeclaration({ runtime: release?.runtime ?? entry?.runtime });
+  // Where the runtime goes: the directory the catalog names, resolved inside THIS
+  // plugin's own directory. The manifest's command points at a file inside it, so the
+  // record states the directory instead of having anything derive it by guessing.
+  const pluginRoot = path.resolve(pluginDir(id));
+  const target = path.resolve(pluginRoot, (runtime && runtime.target) || 'runtime');
+  if (target !== pluginRoot && !target.startsWith(pluginRoot + path.sep)) {
+    throw Object.assign(new Error(`the catalog's runtime target (${target}) is outside the plugin directory`), { code: 'runtime_unavailable' });
+  }
+  const inFlight = Promise.resolve()
+    .then(() => {
+      if (!declared) {
+        state.state = 'ready';
+        state.detail = 'this plugin declares no runtime';
+        state.finishedAt = new Date().toISOString();
+        return { ready: true, detail: state.detail };
+      }
+      if (!runtime) {
+        const why = entry
+          ? `the catalog entry for '${id}' names no runtime sources: the hub does not run a package manager, so a plugin that needs a runtime must come with one published for ${platformKey()}`
+          : `'${id}' is not in the catalog, so no runtime is recorded for it`;
+        throw Object.assign(new Error(why), { code: 'runtime_unavailable' });
+      }
+      if (runtime.package !== manifest.runtime.package || runtime.version !== manifest.runtime.version) {
+        throw Object.assign(new Error(`runtime pin does not match plugin ${id}@${installedVersion}`), { code: 'runtime_unavailable' });
+      }
+      // Already on disk from the same pin? Then this is not a runtime install: an adapter
+      // update keeps its runtime, and re-fetching hundreds of tarballs to arrive at the
+      // same directory would be busy-work with a network bill.
+      const held = runtimeMarker(target);
+      if (held && held.package === runtime.package && held.version === runtime.version && held.sourcesDigest === sourcesDigest(runtime.sources) && runtimeReady(id)) {
+        state.state = 'ready';
+        state.detail = `already installed from ${runtime.package}@${runtime.version}`;
+        state.finishedAt = new Date().toISOString();
+        state.result = { package: runtime.package, version: runtime.version, sources: 0, skipped: held.skipped || [], bytes: 0, already: true };
+        return { ready: true, ...state.result };
+      }
+      return installRuntime(runtime, target, { record: { package: runtime.package, version: runtime.version },
+        onProgress: (progress) => { state.detail = `${progress.phase} ${progress.index}/${progress.total} ${progress.detail ?? ''}`.trim(); },
+        log: (line) => { state.detail = line; },
+      }).then((result) => {
+        state.detail = result.skipped.length
+          ? `installed ${result.installed}/${result.installed + result.skipped.length} sources; skipped: ${result.skipped.map((s) => `${s.path} (${s.reason})`).join('; ')}`
+          : `installed ${result.installed} official source(s)`;
+        state.result = { package: runtime.package ?? null, version: runtime.version ?? null, sources: result.installed, skipped: result.skipped, bytes: result.bytes };
+        return { ready: true, ...state.result };
+      });
+    })
+    .then((result) => {
+      state.state = 'ready';
+      state.finishedAt = new Date().toISOString();
+      return result;
+    })
+    .catch((e) => {
+      state.state = 'failed';
+      state.detail = e.message;
+      state.finishedAt = new Date().toISOString();
+      throw Object.assign(new Error(e.message), { code: e.code || 'runtime_install_failed' });
+    })
+    .finally(() => { state.inFlight = null; });
+  state.inFlight = inFlight;
+  return inFlight;
+}
+
+// What a client asks for when it wants a runtime to exist: the catalog's official
+// sources for a plugin that came from an artifact, the adapter's own prepare for one
+// that was developed in place.
+function ensureRuntimeFor(id) {
+  const record = (readJson(PLUGINS_FILE, {}) || {})[id] || null;
+  return record && record.artifact ? installCatalogRuntime(id) : prepareRuntime(id);
 }
 
 // runtime/prepare: the plugin materialises the runtime its manifest pins. The hub
@@ -1784,13 +2225,24 @@ function withTimeout(promise, ms, message) {
 }
 
 // one-shot config-surface RPC against a provider-capable adapter (no session)
-function configRpc(harnessId, method, params) {
+function configRpc(harnessId, method, params, { prepared = false } = {}) {
   declareAdapterRequest(method);
+  // The adapter for a runtime-backed harness needs its runtime on disk before it is
+  // spawned: started early, it exits with "runtime script not found" and the caller
+  // reads that as a broken harness. So the config plane prepares first, exactly like a
+  // session does — except when the caller IS the preparation.
+  if (!prepared && method !== 'runtime/prepare') {
+    const manifest = manifestOf(harnessId) || {};
+    const wantsRuntime = !!(manifest.runtime && Array.isArray(manifest.capabilities) && manifest.capabilities.includes('runtime'));
+    if (wantsRuntime && !runtimeReady(harnessId)) {
+      return ensureRuntimeFor(harnessId).then(() => configRpc(harnessId, method, params, { prepared: true }));
+    }
+  }
   return new Promise((resolve, reject) => {
     const m = manifestOf(harnessId);
     if (!m) return reject(Object.assign(new Error('no such harness'), { code: 'harness_not_found' }));
     const caps = m.capabilities || [];
-    if (!caps.includes('providers') && !caps.includes('models')) {
+    if (!caps.includes('providers') && !caps.includes('models') && !(method === 'history/read' && caps.includes('history-readonly'))) {
       return reject(Object.assign(new Error('harness has no provider surface'), { code: 'unsupported-for-provider' }));
     }
     const dir = pluginDir(harnessId);
@@ -1800,6 +2252,7 @@ function configRpc(harnessId, method, params) {
     const runtimeArgv = Array.isArray(m.runtime && m.runtime.command) && m.runtime.command.length
       ? m.runtime.command.map((part, i) => (i === 0 ? part : path.resolve(dir, part)))
       : null;
+    const historyOnly = method === 'history/read';
     // Same per-harness data dir as sessions (Rust: agent-data/<manifest.id>), so
     // the config plane and sessions share one home and one settings/profile.
     const agentDir = path.join(DATA_DIR, 'agents', harnessId);
@@ -1807,7 +2260,7 @@ function configRpc(harnessId, method, params) {
     const proc = spawn(cmd, args, {
     windowsHide: true,
       cwd: dir,
-      env: { ...process.env, AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: process.cwd(), AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
+      env: { ...adapterEnvironment(), AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: process.cwd(), ...(historyOnly ? {} : { AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir }), ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let buf = '';
@@ -1825,7 +2278,7 @@ function configRpc(harnessId, method, params) {
         let msg; try { msg = JSON.parse(line); } catch { continue; }
         if (msg.id === 1 && !settled) {
           settled = true;
-          if (msg.error) reject(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
+          if (msg.error) reject(Object.assign(new Error(msg.error.message), { code: msg.error.code, data: msg.error.data }));
           else resolve(msg.result);
           proc.kill();
         }
@@ -1835,6 +2288,49 @@ function configRpc(harnessId, method, params) {
     proc.on('error', (e) => { if (!settled) { settled = true; reject(e); } });
     proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) + '\n');
   });
+}
+
+// --- harness-private connections (capability: providers) ---------------------
+// The harness owns the connection definition and the credential (its own store);
+// the hub only routes the lifecycle a caller asks for and refuses to reach a
+// harness that has not declared the capability. Secret values a caller submits
+// pass through to that harness's adapter at that moment — the hub keeps no copy.
+function harnessPrivateSurface(id) {
+  const m = manifestOf(id);
+  return !!m && (m.capabilities || []).includes('providers');
+}
+function privateConnectionRpc(harnessId, method, params) {
+  if (!harnessPrivateSurface(harnessId)) {
+    return Promise.reject(Object.assign(new Error('this harness has no private connection surface (it does not declare the providers capability)'), { code: 'unsupported' }));
+  }
+  // These operations are served by code from the harness's own runtime (its
+  // native auth/connection modules). Prepare it exactly like a session spawn
+  // would, so a fresh install fails at preparation with the plugin's own
+  // answer instead of deep inside a module import.
+  return ensureRuntime(harnessId).then(() => configRpc(harnessId, method, params));
+}
+// Adapter machine codes -> hub error table. An unknown failure is 502 and never a
+// state the hub invented.
+const PRIVATE_CONNECTION_ERRORS = {
+  'unsupported': [501, 'unsupported'],
+  'unsupported-for-provider': [501, 'unsupported'],
+  'validation-failed': [400, 'validation_failed'],
+  'unknown-provider': [404, 'provider_not_found'],
+  'connection-not-found': [404, 'connection_not_found'],
+  'revision-conflict': [409, 'revision_conflict'],
+  'settings-conflict': [409, 'revision_conflict'],
+  'settings-rejected': [400, 'validation_failed'],
+  'busy-session-active': [409, 'session_busy'],
+  'model-discovery-failed': [502, 'provider_catalog_failed'],
+  'auth-expired': [400, 'validation_failed'],
+};
+function connectionFailure(res, e) {
+  // An adapter carries its machine code in error.data.code (JSON-RPC reserves
+  // error.code for the transport). Read the machine code first: it is the
+  // contract; the numeric one only says which protocol layer answered.
+  const machine = (e && e.data && e.data.code) || (e && e.code) || '';
+  const [status, code] = PRIVATE_CONNECTION_ERRORS[machine] || [502, 'adapter_unreachable'];
+  return fail(res, status, code, e && e.message ? e.message : 'connection operation failed');
 }
 
 // tools/list (H-6): the tool catalog is the data source for approvalDefault and
@@ -1873,22 +2369,27 @@ function effectiveModels(row) {
   const decls = row.models && typeof row.models === 'object' ? row.models : {};
   const catalog = Array.isArray(row.catalog?.models) ? row.catalog.models : [];
   const seen = new Map();
+  // Start from the provider's own catalog, then let the declaration override per
+  // field. Both are data the person or the plugin wrote; neither is interpreted.
   for (const m of catalog) {
     if (!m || typeof m.id !== 'string' || !m.id) continue;
-    seen.set(m.id, { id: m.id, name: (typeof m.name === 'string' && m.name) || m.id });
+    const { reasoning: _r, thinkingLevelsSource: _s, ...rest } = m;
+    const entry = { ...rest, name: (typeof m.name === 'string' && m.name) || m.id };
+    const levels = levelsOf(m);
+    if (levels) entry.thinkingLevels = levels;
+    seen.set(m.id, entry);
   }
   for (const [id, d] of Object.entries(decls)) {
-    if (!seen.has(id)) seen.set(id, { id, name: id });
-    if (!d) continue;
-    if (typeof d.name === 'string' && d.name) seen.get(id).name = d.name;
-  }
-  for (const [id, d] of Object.entries(decls)) {
-    if (!d) continue;
-    const entry = seen.get(id);
+    const fromCatalog = seen.get(id) || { id, name: id };
+    const name = d && typeof d.name === 'string' && d.name ? d.name : fromCatalog.name;
+    const out = { id, name };
     for (const key of ['input', 'cost', 'contextWindow', 'maxTokens']) {
-      if (d[key] !== undefined && d[key] !== null) entry[key] = d[key];
+      const value = d && d[key] !== undefined && d[key] !== null ? d[key] : fromCatalog[key];
+      if (value !== undefined && value !== null) out[key] = value;
     }
-    if (d.reasoning) entry.reasoning = d.reasoning;
+    const levels = (d ? levelsOf(d) : null) ?? levelsOf(fromCatalog);
+    if (levels) out.thinkingLevels = levels;
+    seen.set(id, out);
   }
   return [...seen.values()];
 }
@@ -1897,7 +2398,7 @@ function effectiveModels(row) {
 // The token is not here — a catalog is not a place to move a secret (§6.2); the
 // adapter needs the endpoint and the declared models, nothing more.
 function injectedProviderDeclarations() {
-  return loadProviders().map((row) => ({
+  return loadProviders().filter((row) => !!findProviderType(row)).map((row) => ({
     id: row.id,
     url: row.endpoint?.url || null,
     models: effectiveModels(row),
@@ -1932,29 +2433,10 @@ async function listModels(harnessId) {
     name: x.name || x.id,
     available: x.available !== false,
     unavailableReason: x.unavailableReason || null,
-    // Thinking levels come from the harness exactly as reported — native names,
-    // no core vocabulary and no invented conversion. Absent array = the harness
-    // reported none; empty array = it reported that this model has none. The two
-    // are different answers and stay different.
-    // Reported verbatim: this harness's names, order and default. No core
-    // vocabulary and no conversion, so a caller shows exactly what the harness
-    // accepts. `null` = the harness did not report levels (absence is an answer);
-    // any array it does report is passed through, including ['off'] for a model
-    // that has nothing to turn off.
-    // Where the levels came from, as one field so a caller never has to guess:
-    //   'declared' — this harness reported a level list for this model; the
-    //                list below is that harness's own, verbatim.
-    //   'default'  — the model reasons, but this harness did not name its
-    //                levels. The harness has a default; the core does not know
-    //                it, so it is not invented here.
-    //   'none'     — the model does not reason; there is nothing to choose.
-    // Which level is currently in effect is the caller's question, not the
-    // core's: `appliedThinkingLevel` on the session is what a harness confirmed.
+    // The levels the model's configuration states, passed through as data. The
+    // core adds nothing, subtracts nothing and labels nothing: null = nothing was
+    // stated, [] = an empty list was stated. Who interprets them is the caller.
     thinkingLevels: Array.isArray(x.thinkingLevels) ? x.thinkingLevels.filter((l) => typeof l === 'string' && l) : null,
-    thinkingLevelsSource: Array.isArray(x.thinkingLevels) && x.thinkingLevels.length
-      ? 'declared'
-      : (x.reasoning || x.thinkingLevelsSource === 'default' ? 'default' : 'none'),
-    reasoning: x.reasoning || null,
     contextWindow: x.contextWindow != null ? x.contextWindow : null,
     maxTokens: x.maxTokens != null ? x.maxTokens : null,
   }));
@@ -2017,19 +2499,23 @@ function readHarnessSkills(sid, s, res) {
 }
 
 function createProvider(b, res) {
-  if (rejectUnknownFields(res, b, ['id', 'label', 'url', 'api', 'token', 'declarations'], 'POST /v1/hub/providers')) return;
+  if (rejectUnknownFields(res, b, ['id', 'label', 'url', 'api', 'token', 'declarations', 'providerType', 'providerTypeVersion'], 'POST /v1/hub/providers')) return;
+  const type = findProviderType(b);
+  if (!type) return fail(res, 400, 'validation_failed', 'provider type or version is unavailable');
   const rows = loadProviders();
   const id = b.id || `p-${crypto.randomBytes(4).toString('hex')}`;
   if (rows.some((r) => r.id === id)) return fail(res, 409, 'already_exists', 'provider id already exists');
-  if (!b.url) return fail(res, 400, 'validation_failed', 'url is required');
+  const configured = type.configure(b);
   const now = new Date().toISOString();
   const row = {
     id, label: b.label || '',
+    providerType: type.descriptor.id, providerTypeVersion: type.descriptor.version,
     // What this provider is: where it lives, and what it speaks. `api` is the
     // harness vocabulary for the wire protocol (openai-completions,
     // anthropic-messages, ...); the adapter that writes the harness's own
     // provider entry is the one that validates it.
-    endpoint: { url: b.url, api: typeof b.api === 'string' && b.api ? b.api : null },
+    endpoint: { url: configured?.url ?? null, api: configured?.api ?? null },
+    ...(typeof configured?.catalogUrl === 'string' && configured.catalogUrl ? { catalogUrl: configured.catalogUrl } : {}),
     models: null, selection: null, catalog: null, endpointRevision: 0,
     createdAt: now, updatedAt: now,
   };
@@ -2049,21 +2535,18 @@ function updateProvider(id, b, res) {
   const rows = loadProviders();
   const row = rows.find((r) => r.id === id);
   if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  if (!findProviderType(row)) return fail(res, 501, 'unsupported', 'provider type or version is unavailable');
+  const configured = requireProviderType(row).configure(b, row.endpoint);
+  const endpoint = { url: configured?.url ?? null, api: configured?.api ?? null };
+  if (typeof configured?.catalogUrl === 'string' && configured.catalogUrl) row.catalogUrl = configured.catalogUrl;
   if (b.label !== undefined) row.label = b.label;
   if (b.declarations !== undefined) {
     const checked = checkDeclarations(b.declarations);
     if (checked.error) return fail(res, 400, 'validation_failed', checked.error);
     row.models = checked.value;
   }
-  if (b.api !== undefined) {
-    if (b.api !== null && (typeof b.api !== 'string' || !b.api)) return fail(res, 400, 'validation_failed', 'api must be a non-empty string or null');
-    if ((b.api || null) !== (row.endpoint?.api || null)) row.endpointRevision = (row.endpointRevision || 0) + 1;
-  }
-  if ((b.url !== undefined && b.url !== (row.endpoint?.url || null)) || b.token) row.endpointRevision = (row.endpointRevision || 0) + 1;
-  row.endpoint = {
-    url: b.url !== undefined ? b.url : (row.endpoint?.url || null),
-    api: b.api !== undefined ? (b.api || null) : (row.endpoint?.api || null),
-  };
+  if (endpoint.url !== row.endpoint?.url || endpoint.api !== row.endpoint?.api || b.token) row.endpointRevision = (row.endpointRevision || 0) + 1;
+  row.endpoint = endpoint;
   if (b.token) storeSecret(secretName(id), b.token);
   row.updatedAt = new Date().toISOString();
   persistProviders(rows);
@@ -2080,15 +2563,102 @@ function deleteProvider(id, res) {
   json(res, 200, { ok: true, id });
 }
 
-function logoutProvider(id, res) {
+async function logoutProvider(id, res) {
   const rows = loadProviders();
   const row = rows.find((r) => r.id === id);
   if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  const credential = getSecret(secretName(id));
   deleteSecret(secretName(id));   // drop the token, keep the provider
   row.endpointRevision = (row.endpointRevision || 0) + 1;
   row.updatedAt = new Date().toISOString();
   persistProviders(rows);
+  // A plugin that can revoke remotely gets the chance; a failed revocation is
+  // reported, never allowed to undo the local removal or fail the request.
+  const plugin = findProviderType(row);
+  if (credential && plugin && typeof plugin.authLogout === 'function') {
+    try { await plugin.authLogout({ providerId: id, credential }); }
+    catch (e) { process.stderr.write(`[hub] provider '${id}' logout: remote revocation failed: ${e && e.message ? e.message : e}
+`); }
+  }
   json(res, 200, { provider: providerValueFree(row) });
+}
+
+// --- hub-level authorization operations --------------------------------------
+// The plugin owns the vendor flow; the HUB owns the operation: it is created and
+// tracked here, survives the caller leaving, and settles the credential into the
+// hub secret store so the existing per-session grant reaches every harness. The
+// caller only renders the steps it is handed.
+const providerAuthOps = new Map();   // operationId -> {id, providerId, state, next, error, abort, startedAt}
+function startProviderAuth(id, res) {
+  const row = loadProviders().find((r) => r.id === id);
+  if (!row) return fail(res, 404, 'provider_not_found', 'no such provider');
+  const plugin = findProviderType(row);
+  if (!plugin) return fail(res, 501, 'unsupported', 'provider type or version is unavailable');
+  const methods = Array.isArray(plugin.descriptor.authMethods) ? plugin.descriptor.authMethods : [];
+  if (typeof plugin.beginAuth !== 'function' || !methods.some((m) => m !== 'api-key')) {
+    return fail(res, 501, 'unsupported', 'this provider type has no authorization flow');
+  }
+  if ([...providerAuthOps.values()].some((op) => op.providerId === id && op.state === 'pending')) {
+    const existing = [...providerAuthOps.values()].find((op) => op.providerId === id && op.state === 'pending');
+    return json(res, 200, { operationId: existing.id, ...(existing.next ? { next: existing.next } : {}) , pending: true });
+  }
+  const op = { id: `op-${crypto.randomBytes(6).toString('hex')}`, providerId: id, state: 'pending', next: null, error: null, abort: new AbortController(), startedAt: new Date().toISOString() };
+  providerAuthOps.set(op.id, op);
+  const report = (info) => { if (!op.next && info && typeof info === 'object') op.next = info; };
+  Promise.resolve()
+    .then(() => plugin.beginAuth({ providerId: id, label: row.label || id, report, signal: op.abort.signal, endpoint: row.endpoint || null }))
+    .then((r) => {
+      const credential = r && typeof r.credential === 'string' && r.credential ? r.credential : null;
+      if (!credential) throw Object.assign(new Error('the authorization finished without a credential'), { code: 'validation_failed' });
+      const rows = loadProviders();
+      const current = rows.find((x) => x.id === id);
+      if (!current) throw Object.assign(new Error('the provider was removed while it was authorizing'), { code: 'provider_not_found' });
+      storeSecret(secretName(id), credential);
+      const url = r.endpoint && typeof r.endpoint.url === 'string' && r.endpoint.url ? r.endpoint.url : null;
+      const api = r.endpoint && typeof r.endpoint.api === 'string' && r.endpoint.api ? r.endpoint.api : null;
+      const catalogUrl = typeof r.catalogUrl === 'string' && r.catalogUrl ? r.catalogUrl : null;
+      if (catalogUrl) current.catalogUrl = catalogUrl;
+      if (url || api || catalogUrl) {
+        current.endpoint = { url: url || current.endpoint?.url || null, api: api || current.endpoint?.api || null };
+        current.endpointRevision = (current.endpointRevision || 0) + 1;
+        current.updatedAt = new Date().toISOString();
+        persistProviders(rows);
+      }
+      op.state = 'approved';
+      if (r.account !== undefined) op.account = r.account;
+    })
+    .catch((e) => {
+      if (op.abort.signal.aborted || (e && e.name === 'AbortError')) { op.state = 'cancelled'; return; }
+      op.state = 'failed';
+      op.error = e && e.message ? e.message : String(e);
+    });
+  // The caller gets the first declared step; the flow keeps running in the hub.
+  const deadline = Date.now() + 20000;
+  return (async () => {
+    while (Date.now() < deadline) {
+      if (op.next) return json(res, 200, { operationId: op.id, next: op.next });
+      if (op.state !== 'pending') {
+        return op.state === 'failed'
+          ? fail(res, 502, 'upstream_blocked', op.error || 'authorization failed')
+          : fail(res, 400, 'validation_failed', 'the authorization ended before it produced steps');
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    op.abort.abort();
+    op.state = 'failed';
+    op.error = 'the authorization did not produce steps in time';
+    return fail(res, 502, 'upstream_blocked', op.error);
+  })();
+}
+function providerAuthStatus(id, opId, res) {
+  const op = providerAuthOps.get(opId);
+  if (!op || op.providerId !== id) return fail(res, 404, 'not_found', 'no such authorization operation');
+  return json(res, 200, { operationId: op.id, status: op.state, ...(op.next ? { next: op.next } : {}), ...(op.error ? { error: op.error } : {}), ...(op.account !== undefined ? { account: op.account } : {}) });
+}
+function providerAuthCancel(id, opId, res) {
+  const op = providerAuthOps.get(opId);
+  if (op && op.providerId === id && op.state === 'pending') { op.abort.abort(); op.state = 'cancelled'; }
+  return json(res, 200, { ok: true, id: opId });   // idempotent
 }
 
 // ---------------------------------------------------------------------------
@@ -2239,6 +2809,7 @@ function connectionCredential(harnessId, connectionId) {
   const pv = getSecret(secretName(connectionId));
   if (pv != null) {
     const row = loadProviders().find((r) => r.id === connectionId);
+    if (row) requireProviderType(row);
     return { value: pv, url: row ? (row.endpoint?.url || null) : null, api: row ? (row.endpoint?.api || null) : null, models: row ? effectiveModels(row) : null };
   }
   const c = loadConnections().find((r) => r.id === connectionId);
@@ -2496,6 +3067,7 @@ function createSession(b, res) {
   // does not offer is refused now rather than at the first turn.
   if (mpid && modelId) {
     const prov = loadProviders().find((p) => p.id === mpid);
+    if (prov && !findProviderType(prov)) return fail(res, 501, 'unsupported', 'provider type or version is unavailable');
     const declared = prov && prov.declarations && typeof prov.declarations === 'object' ? Object.keys(prov.declarations) : null;
     if (declared && declared.length && !declared.includes(modelId)) {
       return fail(res, 400, 'validation_failed', `model '${modelId}' is not offered by provider '${mpid}'`);
@@ -2803,23 +3375,26 @@ function readMessages(sid, res, query) {
   if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
   const beforeId = query && query.get('beforeId') ? query.get('beforeId') : undefined;
   const limit = Math.max(1, Number(query && query.get('limit')) || 100);
-  let conn = connFor(sid);
-  if (!conn) {
-    if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'session has no resume ref');
-    conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+  const readonly = (manifestOf(s.harnessId)?.capabilities || []).includes('history-readonly');
+  let history;
+  if (readonly) {
+    history = configRpc(s.harnessId, 'history/read', {sid, ref:s.ref, limit, beforeId});
+  } else {
+    let conn = connFor(sid);
+    if (!conn) {
+      if (!s.ref) return fail(res, 502, 'adapter_unreachable', 'session has no resume ref');
+      conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
+    }
+    history = initAdapter(conn, s, {}).then(() => rpc(conn, 'history/page', {sid,limit,beforeId}));
   }
-  // Readiness is conn.started (see initAdapter); a freshly spawned process has
-  // not run session/start yet. Reading history must fully re-init (grant +
-  // config), not leave a half-initialized process behind.
-  const ensureStarted = initAdapter(conn, s, {});
-  return ensureStarted
-    .then(() => rpc(conn, 'history/page', { sid, limit, beforeId }))
+  return history
     .then((r) => {
       const messages = r.messages || [];
       const next = r.hasMore ? (messages.length ? messages[0].id : null) : null;
       json(res, 200, { messages, next_cursor: next });
     })
     .catch((e) => {
+      if (e.data?.code === 'history_unavailable') return fail(res, 502, 'history_unavailable', e.message);
       // adapter signals an unknown anchor; surface the contract's invalid_cursor.
       if (/unknown beforeId/i.test(e.message || '')) return fail(res, 400, 'invalid_cursor', e.message);
       return fail(res, 502, 'adapter_unreachable', e.message);
@@ -2894,7 +3469,7 @@ function canonicalProviderId(value) {
   return value;
 }
 
-function switchModel(sid, b, res) {
+async function switchModel(sid, b, res) {
   if (rejectUnknownFields(res, b, ['modelProviderId', 'modelId', 'presetId', 'disabledTools', 'plan', 'review', 'thinkingLevel', 'title'], 'PATCH /v1/sessions/{id}')) return;
   const s = sessions.get(sid);
   if (!s) return fail(res, 404, 'unknown_session', 'no such session');
@@ -2916,9 +3491,15 @@ function switchModel(sid, b, res) {
     if (typeof b.modelProviderId !== 'string' || !b.modelProviderId) return fail(res, 400, 'validation_failed', 'modelProviderId must name a managed provider');
     const providerId = canonicalProviderId(b.modelProviderId);
     const provider = providerId ? loadProviders().find((p) => p.id === providerId) : null;
-    if (!provider) return fail(res, 404, 'provider_not_found', 'no such managed provider');
-    const value = getSecret(secretName(provider.id));
-    if (!value) return fail(res, 400, 'provider_unauthorized', 'provider has no stored credential');
+    if (!provider) {
+      let catalog;
+      try { catalog = await listModels(s.harnessId); } catch (e) { return failError(res, e); }
+      if (!catalog.models.some(m => m.providerId === b.modelProviderId && m.id === b.modelId && m.available)) return fail(res, 404, 'provider_not_found', 'provider/model is not available in this harness');
+      // Native provider keeps its private credentials; no hub grant or import.
+    }
+    if (provider && !findProviderType(provider)) return fail(res, 501, 'unsupported', 'provider type or version is unavailable');
+    const value = provider ? getSecret(secretName(provider.id)) : null;
+    if (provider && !value) return fail(res, 400, 'provider_unauthorized', 'provider has no stored credential');
     if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before switching provider');
     if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'recover the current execution before switching provider');
     const model = b.modelId !== undefined ? b.modelId : s.modelId;
@@ -2929,14 +3510,16 @@ function switchModel(sid, b, res) {
     // deepseek-official) — accepted here, and only failing mid-turn inside the
     // harness. A declared provider knows its own models, so it can answer this
     // now; a refused change leaves the session as it was.
-    const declared = provider.declarations && typeof provider.declarations === 'object' && Object.keys(provider.declarations).length
+    const declared = provider?.declarations && typeof provider.declarations === 'object' && Object.keys(provider.declarations).length
       ? Object.keys(provider.declarations) : null;
     if (declared && !declared.includes(model)) {
       return fail(res, 400, 'validation_failed', `model '${model}' is not offered by provider '${provider.id}'`);
     }
     b = { ...b, modelId: model };
-    providerGrant = { connectionId: provider.id, url: provider.endpoint?.url || null, ...(provider.endpoint?.api ? { api: provider.endpoint.api } : {}), value };
+    if (provider) providerGrant = { connectionId: provider.id, url: provider.endpoint?.url || null, ...(provider.endpoint?.api ? { api: provider.endpoint.api } : {}), value };
   }
+  if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
+  if (!livePolicyChange && ['admitted','running','awaiting_approval','awaiting_question','cancelling'].includes(s.activeTurn.state)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before changing configuration');
   let conn = connFor(sid);
   if (livePolicyChange && ['running', 'awaiting_approval', 'awaiting_question'].includes(s.activeTurn.state) && !conn?.ready) return fail(res, 409, 'session_busy', 'live policy change requires a ready session');
   if (!conn) conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
@@ -2991,10 +3574,10 @@ function switchModel(sid, b, res) {
       // each knob from it so a harness that accepted the knob but stayed put is
       // visible, instead of the request echoing back as if it took effect.
       const a = applied && applied.applied;
-      if (changingProvider && (!a || a.modelProviderId !== b.modelProviderId || a.model !== b.modelId)) {
+      if (changingProvider && (!a || canonicalProviderId(a.modelProviderId) !== canonicalProviderId(b.modelProviderId) || a.model !== b.modelId)) {
         throw Object.assign(new Error('adapter did not confirm the requested provider and model'), { code: 'model_mismatch' });
       }
-      if (changingProvider) s.modelProviderId = b.modelProviderId;
+      if (changingProvider) s.modelProviderId = canonicalProviderId(b.modelProviderId);
       // T0 guard, same as the create path: a silent model fallback is the worst
       // failure mode and must fail loudly here too, never pass as success.
       if (b.modelId !== undefined && a && typeof a.model === 'string' && a.model !== b.modelId) {
@@ -3008,6 +3591,7 @@ function switchModel(sid, b, res) {
           s.modelId = b.modelId;
           s.appliedModel = a.model != null ? a.model : null;
           s.appliedProviderId = a.connectionId != null ? a.connectionId : null;
+          s.appliedThinkingLevel = typeof a.thinkingLevel === 'string' ? a.thinkingLevel : null;
         }
         if (a.preset !== undefined) { s.presetId = a.preset; s.appliedPreset = a.preset != null ? a.preset : null; }
         if (a.plan !== undefined) s.appliedPlan = a.plan != null ? a.plan : null;
@@ -3258,6 +3842,24 @@ function fail(res, httpCode, code, message) {
 // default the table would disagree with. (The session routes used to flatten
 // every caught code to 400, so `needs_repair` came back 400 while the table said
 // 409 — the caller saw a status and a code that contradicted each other.)
+// Removing a directory on Windows can fail with EPERM/EBUSY while a process that was
+// using it is still exiting — exactly what happens right after a session of that harness
+// is closed. The caller's intent is clear (that plugin goes away), so the removal is
+// retried briefly; if it still fails, the error says what is actually in the way instead
+// of reporting "Permission denied" and leaving the reader to guess.
+function rmRetrying(target, { tries = 6, delayMs = 200 } = {}) {
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      return null;
+    } catch (e) {
+      if (attempt === tries) return e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+  return null;
+}
+
 function failError(res, e, fallbackCode = 'validation_failed') {
   const code = (e && e.code) || fallbackCode;
   const declared = ERROR_STATUS[code];
@@ -3278,6 +3880,25 @@ const server = http.createServer((req, res) => {
 // model-driven scenarios around a check that takes milliseconds, which is exactly the
 // wrong way round. A running hub is now always self-consistent, and there is nothing
 // to forget to run.
+// If the application that started this hub dies WITHOUT stopping it (a hard kill, a
+// crash, a machine-level interrupt), the hub must not stay behind holding a data dir:
+// the next launch would otherwise run a second hub on the same directory and two writers
+// is a state nobody can reason about. A parent that is gone is checked for plainly, by
+// liveness only.
+const PARENT_PID = Number(process.env.AGENT_HUB_PARENT_PID || 0);
+if (PARENT_PID > 0) {
+  const timer = setInterval(() => {
+    let alive = true;
+    try { process.kill(PARENT_PID, 0); } catch { alive = false; }
+    if (!alive) {
+      console.log(`parent ${PARENT_PID} is gone: stopping this hub`);
+      clearInterval(timer);
+      process.exit(0);
+    }
+  }, 5000);
+  timer.unref();
+}
+
 function selfCheck() {
   const problems = [];
   const key = (m, p) => `${m} ${p}`;
@@ -3342,14 +3963,23 @@ function selfCheck() {
       let m = null;
       try { m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch (e) { problems.push(`${id}: manifest.json is not JSON`); continue; }
       if (m.id !== id) problems.push(`${id}: manifest id '${m.id}' is not the plugin directory name`);
-      if (m.protocol !== ADAPTER_PROTOCOL) problems.push(`${id}: speaks adapter protocol ${m.protocol}, this hub speaks ${ADAPTER_PROTOCOL}`);
-      for (const req of adapterContract.manifest.required) if (m[req] === undefined) problems.push(`${id}: manifest is missing required field '${req}'`);
+      const isHarness = m.command !== undefined || m.protocol !== undefined || m.runtime !== undefined || m.capabilities !== undefined || m.extensions !== undefined;
+      const hasProvider = m.provider !== undefined;
+      if (!isHarness && !hasProvider) problems.push(`${id}: declares neither command (harness adapter) nor provider (hub provider module)`);
+      if (isHarness) {
+        if (m.protocol !== ADAPTER_PROTOCOL) problems.push(`${id}: speaks adapter protocol ${m.protocol}, this hub speaks ${ADAPTER_PROTOCOL}`);
+        for (const req of adapterContract.manifest.required) if (m[req] === undefined) problems.push(`${id}: manifest is missing required field '${req}'`);
+      }
+      if (hasProvider) {
+        const entry = providerModuleEntry(id);
+        if (entry && entry.error) problems.push(`${id}: ${entry.error}`);
+      }
       for (const k of Object.keys(m)) if (!fields.has(k)) problems.push(`${id}: manifest field '${k}' is not declared in adapter-v1.json`);
       let src = '';
       for (const f of fs.readdirSync(dir)) if (f.endsWith('-adapter.cjs')) src = fs.readFileSync(path.join(dir, f), 'utf8');
       if (!src) continue;
       const handled = new Set((src.match(/case\s+'([\w./]+)'\s*:/g) || []).map((s2) => s2.replace(/.*case\s+'|'\s*:/g, '')));
-      for (const cap of m.capabilities || []) {
+      for (const cap of (isHarness ? m.capabilities || [] : [])) {
         if (!capSurface[cap]) { problems.push(`${id}: declares capability '${cap}', which adapter-v1.json does not define`); continue; }
         for (const method of capSurface[cap].methods || []) {
           if (!handled.has(method)) problems.push(`${id}: declares '${cap}' but its adapter does not handle '${method}'`);
@@ -3369,6 +3999,9 @@ function selfCheck() {
     process.exit(1);
   }
 }
+await loadProviderPlugins();
+for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
+`);
 selfCheck();
 
 loadSessions();

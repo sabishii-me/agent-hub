@@ -87,7 +87,7 @@ harness 身份仍不能通过该操作改变。操作进行中不接纳新 turn�
 
 ## 6. 配置面(连接/凭据/认证/目录/生效)——capability `providers`
 
-**这份配置面今天是 adapter 内部面**:方法在 `../contract/adapter-v1.json` 的 `providerSurface` 里声明,但 hub 没有任何路由调用它(hub 自己用一文件一 provider 管模型来源)。deepseek 实现了全套;记录在此,是为了它不被称为"hub 可达"。
+**这份配置面现在由 hub 路由**:`GET/POST/DELETE /v1/harnesses/{id}/connections…` 与 `POST/GET /v1/harnesses/{id}/auth…` 转发能力门控的 adapter 方法;凭据由该 harness 自己保存,hub 不留副本。hub 自己的 provider 来源是另一层:它由 hub provider 插件(hub 导入的模块,非内置)提供,`/v1/hub/providers` 管理,凭据进 hub secret store 并在每次会话启动时 grant 给所有兼容 harness。两层同名不合并。
 
 产口红线:用户在壳内完成 发现→连接/登录→目录→选模型→生效,不得要求退出壳去操作其他 CLI。外部指引仅限故障排查。adapter 负责把通用信封翻译成本 harness 原生机制(RPC/非交互命令/配置文件),壳零特判。
 
