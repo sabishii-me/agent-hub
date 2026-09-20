@@ -2161,40 +2161,106 @@ function removePlugin(id, res) {
   if (pluginOrigin(id) !== 'hub') {
     return fail(res, 409, 'conflict', `plugin '${id}' is in a directory this hub does not own (${dir}): removing it is that deployment's business`);
   }
-  const live = openSessions(id);
-  if (live.length) {
-    return fail(res, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
+  // Removal is the caller's decision, so nothing here asks again. The user stated
+  // the intent and the hub owns the mechanics, in this order:
+  //   1. remove the plugin files,
+  //   2. close the sessions of that harness,
+  //   3. stop the processes the hub started for it.
+  // What "remove the plugin files" requires is that nothing is running FROM them:
+  // a running harness holds its own image under the plugin directory, and Windows
+  // will not delete a running image. So the stop happens BEFORE the delete - it is
+  // the precondition of step 1, not a later step - and the sessions are closed
+  // after, which is the part of the order the user asked for. Every process
+  // involved was started by the hub, so the hub stops them: telling the caller to
+  // "close anything using that harness" asked for something they had no way to do.
+  stopHarnessProcesses(id);
+  let failed = null;
+  for (let attempt = 1; attempt <= 12; attempt++) {
+    failed = rmRetrying(dir, { tries: 1 });
+    if (!failed) break;
+    // A running harness takes a moment to release its files after being asked to
+    // stop. The retry window is longer than a plain removal's, and when it still
+    // fails the message names the lock rather than an EPERM nobody can act on.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
   }
-  // Removal is ALL OR NOTHING. Deleting the plugin files while its runtime stays
-  // behind left a directory that is no longer a plugin but still occupies space,
-  // still has an install record, and still shows as "not installed" in the UI —
-  // a state no user action could repair. The whole directory moves aside first
-  // (one rename, which either works or does not), is removed from there, and is
-  // put back if that removal fails.
-  const aside = path.join(HUB_PLUGINS_DIR, `.removing-${process.pid}-${Date.now()}`);
-  try {
-    fs.renameSync(dir, aside);
-  } catch (error) {
-    return fail(res, 409, 'plugin_in_use', `plugin '${id}' could not be detached from ${dir}: ${error.message} — a harness process may still be running; close it and try again`);
-  }
-  const failed = rmRetrying(aside);
+  const closed = closeSessionsOf(id);
   if (failed) {
-    // Put it back exactly where it was: a refused removal must change nothing.
-    let restored = true;
-    try { fs.renameSync(aside, dir); }
-    catch (restoreError) {
-      restored = false;
-      process.stderr.write(`[hub] plugin '${id}': could not restore ${dir} after a failed removal (${restoreError.message}); its contents are at ${aside}\n`);
-    }
-    const where = restored ? `${dir} is unchanged` : `its contents were kept at ${aside}`;
-    return fail(res, 500, 'plugin_remove_failed', `plugin '${id}' could not be removed: ${failed.message} — ${where}; close anything using that harness and try again`);
+    return fail(res, 409, 'plugin_in_use', `plugin '${id}' is still in use by a process that did not stop: ${failed.message} — its ${closed} session(s) were closed; try again in a moment`);
   }
   // The files are gone. The records follow in the same request, so the hub never
   // answers "removed" while a stale record still claims the plugin exists.
   const records = readJson(PLUGINS_FILE, {}) || {};
   if (records[id]) { delete records[id]; writeJson(PLUGINS_FILE, records); }
   reconcileHarnesses();
-  json(res, 200, { ok: true, id, plugins: installedPlugins().map(pluginValue) });
+  json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: installedPlugins().map(pluginValue) });
+}
+
+// Close every open session of one harness and kill the adapter processes the hub
+// owns for it. A closed session keeps its history: this is not a deletion.
+function closeSessionsOf(harnessId) {
+  let closed = 0;
+  for (const s of sessions.values()) {
+    if (s.harnessId !== harnessId || s.status === 'closed') continue;
+    const conn = connFor(s.id);
+    try { conn?.proc?.kill(); } catch { /* the tree removal below reports what is really holding it */ }
+    // NOTE: there is no adapter method to ask a harness to stop its own detached
+    // server, and inventing one would put a method in the core that only one
+    // plugin answers. The process sweep below is what actually releases the files;
+    // the adapter kill above only stops the process in front.
+    s.status = 'closed';
+    s.activeTurn = { state: 'idle', ended: null, cause: null, partialPersisted: false, partialItems: 0 };
+    s.updatedAt = new Date().toISOString();
+    if (adapters.get(s.id) === conn) adapters.delete(s.id);
+    closed++;
+  }
+  if (closed) persistSessions();
+  return closed;
+}
+
+// The processes the hub started under this harness's data directory. The adapters
+// are children this process knows; a harness's own server (dsh) is detached BY
+// DESIGN, so it is found by the data directory it was started with rather than by
+// process parentage. Only processes whose command line names THIS harness's
+// directory are touched - never another harness, never an unrelated process, and
+// never a harness the user runs outside this application.
+function stopHarnessProcesses(harnessId) {
+  const agentDir = path.join(DATA_DIR, 'agents', harnessId);
+  const pluginPath = pluginDir(harnessId);
+  // The adapters this process spawned are the first thing to stop. They are keyed
+  // by SESSION id, not by harness id, so the session record is what identifies
+  // them: matching on the harness id here matched nothing and left every adapter
+  // running through the removal.
+  for (const [key, conn] of adapters) {
+    const owner = sessions.get(key);
+    if (!owner || owner.harnessId !== harnessId) continue;
+    try { conn.proc.kill(); } catch { /* already gone */ }
+  }
+  if (process.platform !== 'win32') return;
+  // A harness's own server is detached BY DESIGN (dsh keeps serving after its
+  // adapter dies), so it is not a child of this process and parentage cannot find
+  // it. It is found by what it was started with and where it runs:
+  //   * an executable UNDER the plugin directory - Windows will not delete a
+  //     running image, and that is the whole of the reported failure;
+  //   * or a command line naming this harness's own data directory.
+  // Both are specific to THIS harness. Nothing else - another harness, a system
+  // node, a process the user runs outside this application - can match.
+  const script = path.join(os.tmpdir(), `agent-hub-stop-${harnessId}-${process.pid}.ps1`);
+  const quote = (value) => value.replace(/'/g, "''");
+  try {
+    fs.writeFileSync(script, [
+      `$plugin = '${quote(pluginPath)}'`,
+      `$agents = '${quote(agentDir)}'`,
+      'Get-CimInstance Win32_Process | Where-Object {',
+      '  $_.ProcessId -ne $PID -and (',
+      '    ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($plugin, [StringComparison]::OrdinalIgnoreCase)) -or',
+      '    ($_.CommandLine -and $_.CommandLine.Contains($agents))',
+      '  )',
+      '} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }',
+      '',
+    ].join(String.fromCharCode(10)));
+    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore', windowsHide: true });
+  } catch { /* a machine without PowerShell is not a reason to refuse the removal */ }
+  finally { try { fs.rmSync(script, { force: true }); } catch { /* it is in temp; the OS will clear it */ } }
 }
 
 // --- the runtime a REGISTRY install carries -------------------------------------
