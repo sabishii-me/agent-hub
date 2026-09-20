@@ -2165,10 +2165,32 @@ function removePlugin(id, res) {
   if (live.length) {
     return fail(res, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
   }
-  const failed = rmRetrying(dir);
-  if (failed) {
-    return fail(res, 500, 'plugin_remove_failed', `${dir}: ${failed.message} — a harness process may still be exiting; removing again is safe`);
+  // Removal is ALL OR NOTHING. Deleting the plugin files while its runtime stays
+  // behind left a directory that is no longer a plugin but still occupies space,
+  // still has an install record, and still shows as "not installed" in the UI —
+  // a state no user action could repair. The whole directory moves aside first
+  // (one rename, which either works or does not), is removed from there, and is
+  // put back if that removal fails.
+  const aside = path.join(HUB_PLUGINS_DIR, `.removing-${process.pid}-${Date.now()}`);
+  try {
+    fs.renameSync(dir, aside);
+  } catch (error) {
+    return fail(res, 409, 'plugin_in_use', `plugin '${id}' could not be detached from ${dir}: ${error.message} — a harness process may still be running; close it and try again`);
   }
+  const failed = rmRetrying(aside);
+  if (failed) {
+    // Put it back exactly where it was: a refused removal must change nothing.
+    let restored = true;
+    try { fs.renameSync(aside, dir); }
+    catch (restoreError) {
+      restored = false;
+      process.stderr.write(`[hub] plugin '${id}': could not restore ${dir} after a failed removal (${restoreError.message}); its contents are at ${aside}\n`);
+    }
+    const where = restored ? `${dir} is unchanged` : `its contents were kept at ${aside}`;
+    return fail(res, 500, 'plugin_remove_failed', `plugin '${id}' could not be removed: ${failed.message} — ${where}; close anything using that harness and try again`);
+  }
+  // The files are gone. The records follow in the same request, so the hub never
+  // answers "removed" while a stale record still claims the plugin exists.
   const records = readJson(PLUGINS_FILE, {}) || {};
   if (records[id]) { delete records[id]; writeJson(PLUGINS_FILE, records); }
   reconcileHarnesses();
