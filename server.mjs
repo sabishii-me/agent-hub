@@ -238,7 +238,13 @@ function installedPlugins() {
   const ids = new Set();
   for (const root of pluginRoots()) {
     if (!fs.existsSync(root)) continue;
-    for (const d of fs.readdirSync(root)) if (manifestOf(d)) ids.add(d);
+    for (const d of fs.readdirSync(root)) {
+      // The manifest must be read from THIS directory. Resolving by id through
+      // pluginRoots() let a directory of the same name in another root vouch for
+      // this one, so a manifestless leftover under the hub's own root (an
+      // interrupted replace) was listed as an installed plugin.
+      if (fs.existsSync(path.join(root, d, 'manifest.json'))) ids.add(d);
+    }
   }
   return [...ids].sort();
 }
@@ -318,6 +324,56 @@ function runtimeTarget(id) {
   const rel = rt.command.slice(1).find((p) => !String(p).startsWith('-'));
   return rel ? path.resolve(pluginDir(id), rel) : null;
 }
+// What is unpacked under this plugin's runtime directory, from the marker the
+// installer writes. `pin` is the manifest declaration; this is the disk's own
+// answer, which can disagree after an interrupted replace.
+function installedRuntime(id) {
+  const target = runtimeTarget(id);
+  if (!target || !fs.existsSync(target)) return null;
+  const marker = runtimeMarker(target);
+  const entry = path.join(target, ...String((manifestOf(id) || {}).runtime?.command?.slice(1).find((p) => !String(p).startsWith('-')) || '').split('/'));
+  return {
+    package: marker && typeof marker.package === 'string' ? marker.package : null,
+    version: marker && typeof marker.version === 'string' ? marker.version : null,
+    installedAt: marker && typeof marker.installedAt === 'string' ? marker.installedAt : null,
+    sources: marker && typeof marker.sources === 'number' ? marker.sources : null,
+    entryPresent: fs.existsSync(entry),
+    target,
+  };
+}
+
+// Directories under the hub's OWN plugins root that carry no manifest: an
+// interrupted replace or a failed install leaves these, and nothing else in the
+// hub can see them (every reader looks for a manifest). They hold a runtime and
+// occupy space while appearing as "not installed" to a client, so the hub names
+// them and can clear them on request. A deployment's directory is never listed:
+// those roots are not the hub's to clean.
+function orphanPluginDirs() {
+  const out = [];
+  if (!fs.existsSync(HUB_PLUGINS_DIR)) return out;
+  for (const entry of fs.readdirSync(HUB_PLUGINS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const id = entry.name;
+    if (id.startsWith('.')) continue;                 // staging/aside/carry dirs are transient
+    const dir = path.join(HUB_PLUGINS_DIR, id);
+    if (fs.existsSync(path.join(dir, 'manifest.json'))) continue;
+    let bytes = null;
+    try { bytes = dirSize(dir); } catch { bytes = null; }
+    out.push({ id, path: dir, bytes, hasRuntime: fs.existsSync(path.join(dir, 'runtime')) });
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function dirSize(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += dirSize(full);
+    else if (entry.isFile()) { try { total += fs.statSync(full).size; } catch { /* a file vanishing mid-walk is not an error here */ } }
+  }
+  return total;
+}
+
 function runtimeReady(id) {
   const target = runtimeTarget(id);
   return target ? fs.existsSync(target) : true;   // no declared runtime = nothing to prepare
@@ -1106,6 +1162,30 @@ const ROUTES = [
     });
   } },
 
+  // Leftover plugin state under the hub's own root: named, sized, never removed
+  // here. A client can offer to clean it; nothing else could even see it.
+  { method: 'GET', path: '/v1/hub/orphans', handler: ({ res }) =>
+    json(res, 200, { orphans: orphanPluginDirs() }) },
+
+  // Clearing leftover plugin state is an explicit action, never a side effect of
+  // listing it. Only a directory the hub's own root holds, without a manifest, is
+  // removable here; a real plugin is removed by the plugin route, and a
+  // deployment's tree is never touched.
+  { method: 'DELETE', path: '/v1/hub/orphans/{id}', handler: ({ res, params }) => {
+    const id = String(params.id || '');
+    if (!PLUGIN_ID_RE.test(id)) return fail(res, 400, 'validation_failed', `not a plugin id: ${JSON.stringify(id)}`);
+    const dir = path.join(HUB_PLUGINS_DIR, id);
+    if (!fs.existsSync(dir)) return fail(res, 404, 'not_found', `no directory at ${dir}`);
+    if (fs.existsSync(path.join(dir, 'manifest.json'))) {
+      return fail(res, 409, 'conflict', `plugin '${id}' has a manifest: remove it through DELETE /v1/hub/plugins/{id}`);
+    }
+    const owner = pluginRootOf(id);
+    if (owner && owner !== HUB_PLUGINS_DIR) return fail(res, 409, 'conflict', `'${id}' belongs to ${owner}, which this hub does not own`);
+    const held = rmRetrying(dir);
+    if (held) return fail(res, 502, 'plugin_dir_busy', `the leftover at ${dir} could not be removed: ${held.message} — close anything using that harness and retry`);
+    return json(res, 200, { ok: true, removed: dir });
+  } },
+
   // the surface itself, as data (this table, the event names, the contract)
   { method: 'GET', path: '/v1/hub/surface', handler: ({ res }) =>
     json(res, 200, surfaceValue()) },
@@ -1782,7 +1862,11 @@ function pluginValue(id) {
     // The plugin's own version (what a release publishes) and the runtime it pins are
     // two facts: an adapter fix keeps the runtime and still gets a new version.
     version: typeof m.version === 'string' ? m.version : null,
-    runtime: m.runtime ? { package: m.runtime.package, version: m.runtime.version, target: runtimeTarget(id) } : null,
+    // Two facts a caller must not confuse: the pin the manifest declares, and
+    // what is actually unpacked right now. A runtime directory can be left over
+    // from a different pin (an interrupted replace), and reporting only the pin
+    // made that invisible.
+    runtime: m.runtime ? { package: m.runtime.package, version: m.runtime.version, target: runtimeTarget(id), installed: installedRuntime(id), orphaned: false } : null,
     // Where the runtime is being installed from: the catalog's recorded official sources
     // for a registry install, the adapter itself for a development entry.
     runtimeSource: (runtimePrepare.get(id) || {}).source ?? null,
