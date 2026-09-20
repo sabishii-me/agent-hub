@@ -282,6 +282,11 @@
       "http": 500,
       "retryable": true,
       "message": "the verified runtime could not be put in place; the filesystem's own words are in the message"
+    },
+    "plugin_dir_busy": {
+      "http": 502,
+      "retryable": true,
+      "message": "the interrupted plugin install could not be cleared because a process still holds it"
     }
   }
 }

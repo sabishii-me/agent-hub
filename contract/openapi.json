@@ -124,7 +124,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -252,7 +252,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -379,7 +379,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -510,7 +510,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -642,7 +642,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -787,7 +787,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -900,7 +900,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1018,7 +1018,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1179,7 +1179,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1338,7 +1338,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1465,7 +1465,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1625,7 +1625,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1755,7 +1755,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -1874,7 +1874,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2025,7 +2025,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2144,7 +2144,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2254,7 +2254,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2456,7 +2456,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2574,7 +2574,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2700,7 +2700,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -2824,7 +2824,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -3002,7 +3002,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -3381,7 +3381,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -3567,7 +3567,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -3686,7 +3686,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -3834,7 +3834,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -3985,7 +3985,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -4134,7 +4134,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -4274,7 +4274,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -4423,7 +4423,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -4584,7 +4584,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -4751,7 +4751,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -4860,7 +4860,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5000,7 +5000,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5212,7 +5212,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5350,7 +5350,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5487,7 +5487,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5620,7 +5620,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5760,7 +5760,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -5868,7 +5868,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6033,7 +6033,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6150,7 +6150,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6305,7 +6305,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6424,7 +6424,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6553,7 +6553,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6676,7 +6676,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6812,7 +6812,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -6964,7 +6964,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7095,7 +7095,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7229,7 +7229,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7361,7 +7361,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7516,7 +7516,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7714,7 +7714,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7864,7 +7864,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -7982,7 +7982,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -8095,7 +8095,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -8257,7 +8257,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -8400,7 +8400,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -8519,7 +8519,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -8650,7 +8650,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -8892,7 +8892,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9011,7 +9011,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9130,7 +9130,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9251,7 +9251,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9416,7 +9416,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9565,7 +9565,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9688,7 +9688,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9833,7 +9833,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -9960,7 +9960,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -10083,7 +10083,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -10210,7 +10210,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {
@@ -10341,7 +10341,7 @@
             }
           },
           "502": {
-            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed — the master table is contract/errors.json",
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
             "content": {
               "application/json": {
                 "schema": {

@@ -1972,17 +1972,19 @@ function landPlugin(staging, id, record, res) {
     fs.rmSync(staging, { recursive: true, force: true });
     return fail(res, 409, 'conflict', `plugin '${id}' is already installed in a directory this hub does not own (${owner}): replacing a deployment's plugin is that deployment's business`);
   }
-  const replacing = owner === HUB_PLUGINS_DIR;
-  // A runtime is not part of the plugin release: it is an install of official sources,
-  // keyed by the pin the manifest declares. Replacing the plugin must CARRY it over —
-  // otherwise every adapter fix deletes a runtime it has no quarrel with and fetches
-  // hundreds of megabytes again to arrive at the same directory.
+  // A directory at dest is a replace even when it has no manifest: an interrupted
+  // install leaves exactly that, and pluginRootOf cannot see it (it looks for a
+  // manifest), so keying on the manifest would treat the orphan as a first install.
+  const replacing = owner === HUB_PLUGINS_DIR || (owner === null && fs.existsSync(dest));
+  // A directory can survive an interrupted replace holding nothing but a runtime
+  // (the adapter files are gone). It is not a usable install, and a rename over it
+  // is what produced the reported EPERM. Its runtime is still worth keeping: an
+  // adapter-only update must not re-fetch hundreds of megabytes.
+  const destExists = fs.existsSync(dest);
+  const destHasManifest = fs.existsSync(path.join(dest, 'manifest.json'));
   let carriedRuntime = null;
-  if (replacing) {
-    const previousRuntime = path.join(dest, 'runtime');
-    if (fs.existsSync(previousRuntime) && !fs.existsSync(path.join(staging, 'runtime'))) {
-      carriedRuntime = path.join(HUB_PLUGINS_DIR, `.runtime-carry-${process.pid}-${Date.now()}`);
-    }
+  if (replacing && fs.existsSync(path.join(dest, 'runtime')) && !fs.existsSync(path.join(staging, 'runtime'))) {
+    carriedRuntime = path.join(HUB_PLUGINS_DIR, `.runtime-carry-${process.pid}-${Date.now()}`);
   }
   if (replacing) {
     // Replacing a plugin a running session is using would pull the files out from
@@ -1994,11 +1996,39 @@ function landPlugin(staging, id, record, res) {
       return fail(res, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
     }
   }
-  const aside = replacing ? path.join(HUB_PLUGINS_DIR, `.outgoing-${process.pid}-${Date.now()}`) : null;
+  if (destExists && !destHasManifest) {
+    // The half-replaced directory cannot be renamed over and is not a plugin. Its
+    // runtime moves aside first so an adapter-only update keeps it, then the rest
+    // is removed with the same retry a removal uses; a directory still held open
+    // is reported as exactly that instead of a rename EPERM nobody can act on.
+    if (carriedRuntime) {
+      try { fs.renameSync(path.join(dest, 'runtime'), carriedRuntime); }
+      catch (error) {
+        fs.rmSync(staging, { recursive: true, force: true });
+        return fail(res, 502, 'plugin_dir_busy', `the interrupted install at ${dest} could not be read: ${error.message} — close anything using that harness and retry`);
+      }
+    }
+    const held = rmRetrying(dest);
+    if (held) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      if (carriedRuntime) {
+        try { fs.mkdirSync(dest, { recursive: true }); fs.renameSync(carriedRuntime, path.join(dest, 'runtime')); } catch { /* the message below is the fact */ }
+      }
+      return fail(res, 502, 'plugin_dir_busy', `the interrupted install at ${dest} could not be cleared: ${held.message} — close anything using that harness and retry`);
+    }
+  }
+  const aside = replacing && destHasManifest ? path.join(HUB_PLUGINS_DIR, `.outgoing-${process.pid}-${Date.now()}`) : null;
   try {
-    if (carriedRuntime) fs.renameSync(path.join(dest, 'runtime'), carriedRuntime);
-    if (replacing) fs.renameSync(dest, aside);
-    fs.renameSync(staging, dest);
+    if (carriedRuntime && fs.existsSync(path.join(dest, 'runtime'))) fs.renameSync(path.join(dest, 'runtime'), carriedRuntime);
+    if (aside) fs.renameSync(dest, aside);
+    // The staging rename is the step Windows can refuse while a previous copy is
+    // being released; retried under the same rule as a removal.
+    let moved = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try { fs.renameSync(staging, dest); moved = null; break; }
+      catch (error) { moved = error; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250); }
+    }
+    if (moved) throw moved;
     if (carriedRuntime) fs.renameSync(carriedRuntime, path.join(dest, 'runtime'));
   } catch (e) {
     // Restore the old plugin BEFORE returning its runtime. Creating dest first
@@ -2009,6 +2039,7 @@ function landPlugin(staging, id, record, res) {
         fs.renameSync(aside, dest);
       }
       if (carriedRuntime && fs.existsSync(carriedRuntime)) {
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
         fs.renameSync(carriedRuntime, path.join(dest, 'runtime'));
       }
     } catch (restoreError) {
