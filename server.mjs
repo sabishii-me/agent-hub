@@ -506,7 +506,14 @@ function listHarnesses() {
       id: row.id,
       name: m.name || row.id,
       base: m.base || row.id,
-      version: m.version || null,
+      // Two facts, both published (ADR-0004). `adapterVersion` is this deployment's
+      // release of the plugin; `runtimeVersion` is the harness it drives. Neither is
+      // derivable from the other, so neither is dropped - and there is deliberately
+      // no bare `version`, which is the ambiguity that made the roster answer a
+      // different question than the harness routes did.
+      adapterVersion: m.version || null,
+      runtimeVersion: (m.runtime && m.runtime.version) || null,
+      runtimePackage: (m.runtime && m.runtime.package) || null,
       capabilities: m.capabilities || [],
       status: row.enabled ? 'enabled' : 'disabled',
       permissionModel: m.permissionModel || 'none',
@@ -538,11 +545,13 @@ function harnessValue(row) {
     skills: Array.isArray(row.skills) ? row.skills : null,
     missing: row.missing === true,
     runtime: m.runtime || null,
-    // The harness version IS the runtime version the manifest declares. There is
-    // no second field for it: a duplicate version is a version that will one day
-    // disagree with itself, and this one did (`pin` vs `runtime.version`) until
-    // the field was removed.
-    version: (m.runtime && m.runtime.version) || null,
+    // Two facts, both published (ADR-0004). The `pin` field that used to sit here
+    // was a SECOND NAME for `runtime.version` - the same value twice, which is why
+    // removing it was right. These two are different values: the adapter's release
+    // and the runtime it drives. Neither may be dropped in favour of the other.
+    adapterVersion: m.version || null,
+    runtimeVersion: (m.runtime && m.runtime.version) || null,
+    runtimePackage: (m.runtime && m.runtime.package) || null,
     capabilities: m.capabilities || [],
     registeredAt: row.registeredAt || null,
     updatedAt: row.updatedAt || null,

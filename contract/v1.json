@@ -24,11 +24,26 @@
           "type": "string",
           "description": "opaque adapter base id; never enumerated"
         },
-        "version": {
+        "adapterVersion": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "This deployment's release of the harness PLUGIN (its adapter code, capabilities and protocol). ADR-0004: the adapter version and the runtime version are two independent facts; neither is derivable from the other, so a harness row publishes both and has no bare `version`."
+        },
+        "runtimeVersion": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The version of the harness runtime the adapter drives (manifest runtime.version). ADR-0004: a runtime change bumps BOTH versions; an adapter-only change bumps only the adapter."
+        },
+        "runtimePackage": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The package the runtime version names (manifest runtime.package), so a version string is never ambiguous about which package it belongs to."
         },
         "capabilities": {
           "type": "array",
