@@ -38,6 +38,20 @@ const arg = (name, fallback = null) => {
 };
 const flag = (name) => argv.includes(`--${name}`);
 
+// The deployment root (the checkout owning `plugins/` and `apps/`). A recorded path
+// is relative to it, never absolute: this file is published, and one machine's disk
+// layout must not travel inside it.
+const repoRoot = path.resolve(HERE, '..', '..');
+// Reduce a path to one relative to the deployment root. A published record carrying
+// this machine's disk is worse than a failed pack, so a path outside the root is
+// refused rather than written.
+function toRepoRelative(target) {
+  const rel = path.relative(repoRoot, path.resolve(target));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`refusing to record a non-portable path: ${target} is outside the deployment root ${repoRoot}`);
+  }
+  return rel;
+}
 const pluginsDir = path.resolve(arg('plugins', path.join(HERE, '..', '..', 'plugins')));
 const registryFile = path.resolve(arg('registry', path.join(HERE, 'registry.json')));
 const only = (arg('only', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -140,7 +154,8 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
     if (!lock) {
       for (const candidate of candidates) {
         const found = readJson(candidate, null);
-        if (found && found.packages) { lock = found; where = candidate; break; }
+        // Relative to the deployment root, so the record reproduces elsewhere.
+        if (found && found.packages) { lock = found; where = toRepoRelative(candidate); break; }
       }
     }
     if (!lock) throw new Error(`no lockfile to read (looked at ${candidates.join(', ')}) and --resolve was not passed`);
@@ -275,7 +290,22 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
     if (JSON.stringify(entry.runtime || null) !== JSON.stringify(record)) changed = true;
     const release = entry.versions?.find(v => v.version === manifest.version);
     if (!release) throw new Error(`no release for plugin ${manifest.id}@${manifest.version}`);
-    if (release.runtime?.sources && JSON.stringify(release.runtime) !== JSON.stringify(record)) {
+    // What must be immutable is the ARTIFACT description - the sources and their
+    // integrity - because those are the bytes an installing machine verifies.
+    // `recordedFrom` is provenance annotation that nothing reads, so it is excluded:
+    // correcting it must not demand a plugin version bump. A real change to the
+    // sources still throws.
+    const artifact = (r) => { if (!r) return null; const { recordedFrom: _omit, ...rest } = r; return rest; };
+    if (release.runtime?.sources && JSON.stringify(artifact(release.runtime)) !== JSON.stringify(artifact(record))) {
+      // This is a real difference in the artifact description, and the published
+      // record is the authority: re-running this tool on a different machine must
+      // never replace digests an installing machine may already have verified.
+      // It fires today for jouzu@0.1.2 (164 published vs 151 rebuilt). Do NOT
+      // silence it by regenerating; resolve which lockfile is correct first, or
+      // bump the plugin version so the difference is a new release.
+      const a = artifact(release.runtime).sources || [];
+      const b = artifact(record).sources || [];
+      console.error(`[${manifest.id}] published record has ${a.length} source(s); this machine rebuilds ${b.length} - refusing to overwrite a verified record`);
       throw new Error(`runtime record for ${manifest.id}@${manifest.version} is immutable; bump the plugin version`);
     }
     release.runtime = record;
