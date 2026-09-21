@@ -177,6 +177,10 @@
         "activeTurn": {
           "$ref": "#/defs/turnState"
         },
+        "turnRunning": {
+          "type": "boolean",
+          "description": "The hub's own verdict that this session has a turn admitted and not yet finished (admitted/running/awaiting_approval/awaiting_question/cancelling). Published so a client renders this fact instead of re-deriving it from activeTurn.state with its own copy of the state list - a second authority that drifts from this one."
+        },
         "createdAt": {
           "type": "string"
         },

@@ -717,7 +717,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
   });
   proc.on('exit', (code) => {
     const s = sessions.get(sid);
-    if (adapters.get(connKey) === conn && s && ['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+    if (adapters.get(connKey) === conn && turnIsOpen(s)) {
       s.activeTurn = { state: 'ended', ended: 'interrupted', cause: 'adapter-crash', partialPersisted: true, partialItems: 0 };
       endTurn(s, 'interrupted', 'adapter-crash');
       emitSessionEvent(sid, 'turn.ended', { turn: s.activeTurn });
@@ -1418,7 +1418,7 @@ const ROUTES = [
       providers: loadProviders().map(providerValueFree),
       connections: loadConnections().map(connectionValueFree),
       sessionCount: sessions.size,
-      activeTurns: [...sessions.values()].filter((s) => ['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)).length,
+      activeTurns: [...sessions.values()].filter(turnIsOpen).length,
     }) },
   { method: 'POST', path: '/v1/hub/shutdown', handler: ({ res }) => {
     json(res, 200, { ok: true });
@@ -1437,11 +1437,11 @@ const ROUTES = [
     const list = [...sessions.values()]
       .filter((s) => s.deleted !== true)
       .filter((s) => includeClosed || s.status !== 'closed')
-      .map((s) => ({ ...s, activeTurn: s.activeTurn }));
+      .map((s) => sessionValue(s));
     return json(res, 200, { sessions: list, next_cursor: null });
   } },
   { method: 'GET', path: '/v1/sessions/{id}', handler: (c) =>
-    withSession(c.params.id, c.res, (s) => json(c.res, 200, { session: s })) },
+    withSession(c.params.id, c.res, (s) => json(c.res, 200, { session: sessionValue(s) })) },
   // ACP session/delete: remove from session/list. Not a wipe.
   { method: 'DELETE', path: '/v1/sessions/{id}', handler: (c) =>
     withSession(c.params.id, c.res, () => deleteSession(c.params.id, c.res)) },
@@ -1507,6 +1507,21 @@ const ROUTES = [
 function withHarness(id, res, run) {
   if (!manifestOf(id)) return fail(res, 404, 'harness_not_found', `no harness ${id}`);
   return run();
+}
+
+// The states in which a turn has been admitted and not yet finished. Named once,
+// because the list was copied into eight call sites here and then copied AGAIN
+// into the client, where it became a second authority that could drift from this
+// one. A session is "running" by the hub's definition, not by anyone's re-reading
+// of `activeTurn.state` (ADR-0001 D2/D5).
+const TURN_OPEN_STATES = ['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'];
+const turnIsOpen = (s) => !!s && !!s.activeTurn && TURN_OPEN_STATES.includes(s.activeTurn.state);
+
+// The shape a session is published in. One function, so `activeTurn` and the
+// derived `turnRunning` flag cannot disagree with each other or with the routes
+// that decide what a session may accept.
+function sessionValue(s) {
+  return { ...s, activeTurn: s.activeTurn, turnRunning: turnIsOpen(s) };
 }
 
 // A session-named route answers unknown_session for an id nobody created —
@@ -3304,7 +3319,7 @@ function createSession(b, res) {
   return initAdapter(conn, s, { modelProviderId: mpid, modelId, presetId, plan, review, thinkingLevel, title })
     .then(() => {
       persistSessions();
-      json(res, 200, { session: s });
+      json(res, 200, { session: sessionValue(s) });
     })
     .catch((e) => {
       sessions.delete(id);
@@ -3358,7 +3373,7 @@ function compactSession(sid, b, res) {
   const s = sessions.get(sid);
   if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
   if (s.deleted || s.status === 'closed') return fail(res, 409, 'session_closed', 'reopen the session before compacting it');
-  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+  if (turnIsOpen(s)) {
     return fail(res, 409, 'session_busy', 'a running turn is left alone; compact after it ends');
   }
   if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'repair the session before compacting it');
@@ -3416,7 +3431,7 @@ function forkSession(sid, b, res) {
   const s = sessions.get(sid);
   if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
   if (s.deleted || s.status === 'closed') return fail(res, 409, 'session_closed', 'reopen the session before forking it');
-  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+  if (turnIsOpen(s)) {
     // A fork into a running turn has no completed-turn boundary to cut at.
     return fail(res, 409, 'session_busy', 'finish or cancel the current turn before forking');
   }
@@ -3496,7 +3511,7 @@ function sendTurn(sid, b, req, res) {
   if (s.status === 'closed') return fail(res, 409, 'session_closed', 'session is closed; reopen it before sending');
   if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'orphaned tail requires repair before sending');
   if (!isHarnessEnabled(s.harnessId)) return fail(res, 409, 'harness_disabled', `harness ${s.harnessId} is deactivated; activate it before use`);
-  if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) {
+  if (turnIsOpen(s)) {
     // C-9: refuse, do not queue; include the current turn state so the caller
     // knows what it collided with.
     return json(res, 409, errorBody('session_busy', 'session has a running turn; sending is refused, not queued', { turn: s.activeTurn }));
@@ -3685,7 +3700,7 @@ async function switchModel(sid, b, res) {
   // a success report for a change that did not happen. Refuse instead (C-9:
   // refuse, do not queue), for every knob, exactly as the provider path does.
   const livePolicyChange = Object.keys(b).length > 0 && Object.keys(b).every(key => key === 'plan' || key === 'review');
-  if (s.activeTurn.state === 'cancelling' || (['admitted', 'running', 'awaiting_approval', 'awaiting_question'].includes(s.activeTurn.state) && !livePolicyChange)) {
+  if (s.activeTurn.state === 'cancelling' || (turnIsOpen(s) && !livePolicyChange)) {
     return fail(res, 409, 'session_busy', 'finish or cancel the current turn before changing configuration');
   }
   const changingProvider = b.modelProviderId !== undefined;
@@ -3703,7 +3718,7 @@ async function switchModel(sid, b, res) {
     if (provider && !findProviderType(provider)) return fail(res, 501, 'unsupported', 'provider type or version is unavailable');
     const value = provider ? getSecret(secretName(provider.id)) : null;
     if (provider && !value) return fail(res, 400, 'provider_unauthorized', 'provider has no stored credential');
-    if (['admitted', 'running', 'awaiting_approval', 'awaiting_question', 'cancelling'].includes(s.activeTurn.state)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before switching provider');
+    if (turnIsOpen(s)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before switching provider');
     if (s.status === 'needs-repair') return fail(res, 409, 'needs_repair', 'recover the current execution before switching provider');
     const model = b.modelId !== undefined ? b.modelId : s.modelId;
     if (typeof model !== 'string' || !model) return fail(res, 400, 'validation_failed', 'modelId is required when the session has no selected model');
@@ -3722,7 +3737,7 @@ async function switchModel(sid, b, res) {
     if (provider) providerGrant = { connectionId: provider.id, url: provider.endpoint?.url || null, ...(provider.endpoint?.api ? { api: provider.endpoint.api } : {}), value };
   }
   if (configuringSessions.has(sid)) return fail(res, 409, 'session_busy', 'session configuration is in progress');
-  if (!livePolicyChange && ['admitted','running','awaiting_approval','awaiting_question','cancelling'].includes(s.activeTurn.state)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before changing configuration');
+  if (!livePolicyChange && turnIsOpen(s)) return fail(res, 409, 'session_busy', 'finish or cancel the current turn before changing configuration');
   let conn = connFor(sid);
   if (livePolicyChange && ['running', 'awaiting_approval', 'awaiting_question'].includes(s.activeTurn.state) && !conn?.ready) return fail(res, 409, 'session_busy', 'live policy change requires a ready session');
   if (!conn) conn = spawnAdapter(sid, s.harnessId, s.cwd, s.additionalDirectories);
