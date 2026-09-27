@@ -1977,7 +1977,7 @@ async function refreshRegistry() {
   return { source: REGISTRY_FILE, plugins: raw.plugins.length };
 }
 function catalogValue() {
-  if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [] };
+  if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [], fault: `no registry at ${REGISTRY_FILE}` };
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); }
   catch (e) { return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
@@ -4274,11 +4274,6 @@ function selfCheck() {
     for (const p of problems) console.error(`  - ${p}`);
     process.exit(1);
   }
-}
-if (!REGISTRY_URL && !fs.existsSync(REGISTRY_FILE)) {
-  console.error(`the hub refuses to start: no registry at ${REGISTRY_FILE}`);
-  console.error('  the desktop seeds one from the file it ships; for a hub with no desktop, set AGENT_HUB_REGISTRY_FILE or AGENT_HUB_REGISTRY_URL (with an explicit refresh).');
-  process.exit(1);
 }
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
