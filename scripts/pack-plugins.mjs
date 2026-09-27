@@ -43,7 +43,7 @@ const arg = (name, fallback = null) => {
 };
 const flag = (name) => argv.includes(`--${name}`);
 
-const DEFAULT_REPO_TEMPLATE = 'https://github.com/{repository}/releases/download/v{version}/{id}-{version}.zip';
+const DEFAULT_REPO_TEMPLATE = 'https://github.com/{repository}/releases/download/v{version}/{file}';
 const repoTemplate = arg('repo-template', DEFAULT_REPO_TEMPLATE);
 const outDir = path.resolve(arg('out', path.join(HERE, 'dist', 'plugins')));
 const registryFile = path.resolve(arg('registry', path.join(HERE, 'registry.json')));
@@ -98,8 +98,11 @@ let failed = false;
 
 for (const root of pluginDirs) {
   if (!fs.existsSync(root)) { console.error(`no such plugins directory: ${root}`); failed = true; continue; }
-  for (const name of fs.readdirSync(root).sort()) {
-    const dir = path.join(root, name);
+  // A directory that IS a plugin (it carries a manifest) is that one plugin; a
+  // directory that holds plugins is searched. Named either way, no parent is required.
+  const names = fs.existsSync(path.join(root, 'manifest.json')) ? ['.'] : fs.readdirSync(root).sort();
+  for (const name of names) {
+    const dir = name === '.' ? root : path.join(root, name);
     const manifestFile = path.join(dir, 'manifest.json');
     if (!fs.existsSync(manifestFile)) continue;
     const manifest = readJson(manifestFile, null);
@@ -117,13 +120,17 @@ for (const root of pluginDirs) {
       if (only.includes(manifest.id)) { console.error(what); failed = true; } else console.log(`skipped ${manifest.id}: ${what.split(': ')[1]}`);
       continue;
     }
-    const kind = Array.isArray(manifest.command) ? 'harness' : manifest.provider ? 'provider' : null;
-    if (!kind) { console.error(`${dir}: manifest declares neither a command nor a provider module`); failed = true; continue; }
+    const kind = typeof manifest.kind === 'string' ? manifest.kind : null;
+    if (!kind) { console.error(`${dir}: manifest declares no kind`); failed = true; continue; }
+    const dirId = `${kind}-${manifest.id}`;
 
     const exclude = Array.isArray(release.exclude) ? release.exclude : [];
     const files = collectFiles(dir, exclude);
     const known = readJson(registryFile, null);
-    const file = `${manifest.id}-${version}.zip`;
+    // The artifact carries the plugin's own id, which already states what it is
+    // (a `harness-adapter-` or `model-provider-` name): a manifest's id is its
+    // directory name, and the directory is the plugin.
+    const file = `${dirId}-${version}.zip`;
     fs.mkdirSync(outDir, { recursive: true });
     const zipPath = path.join(outDir, file);
     // --keep reuses a zip this exact version already produced, so a registry-only
@@ -133,9 +140,13 @@ for (const root of pluginDirs) {
     const bytes = fs.statSync(zipPath).size;
     const sha256 = crypto.createHash('sha256').update(fs.readFileSync(zipPath)).digest('hex');
     const repository = release.repository || null;
-    const url = repository
-      ? repoTemplate.replaceAll('{repository}', repository).replaceAll('{version}', version).replaceAll('{id}', manifest.id)
-      : release.url || null;
+    const fill = (template, assetName) => template
+      .replaceAll('{repository}', repository || '')
+      .replaceAll('{version}', version)
+      .replaceAll('{id}', manifest.id)
+      .replaceAll('{file}', assetName)
+      .replace(/[^/]+$/, assetName);
+    const url = repository ? fill(repoTemplate, file) : release.url || null;
     if (!url) { console.error(`${dir}: no repository in release.json and no --repo-template to build a URL from`); failed = true; continue; }
 
     // A catalog entry: enough to list the adapter and install it, and nothing more.
@@ -146,13 +157,15 @@ for (const root of pluginDirs) {
     if (Array.isArray(release.capabilities)) entry.capabilities = release.capabilities;
     else if (Array.isArray(manifest.capabilities)) entry.capabilities = manifest.capabilities;
     if (manifest.icons && typeof manifest.icons === 'object' && release.repository) {
-      const asset = (name) => `${repoTemplate.replaceAll('{repository}', release.repository).replaceAll('{version}', version).replaceAll('{id}', manifest.id).replace(/[^/]+$/, path.basename(name))}`;
+      const asset = (name) => fill(repoTemplate, path.basename(name));
       const light = typeof manifest.icons.light === 'string' ? asset(manifest.icons.light) : null;
       const dark = typeof manifest.icons.dark === 'string' ? asset(manifest.icons.dark) : null;
       if (light || dark) entry.icon = { light: light ?? dark, dark: dark ?? light };
     }
     const versionEntry = { version, url, sha256, size: bytes, releasedAt: new Date().toISOString().slice(0, 10) };
-    const previous = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id) : null;
+    // An entry is (kind, id): a harness-adapter and a model-provider may share a short
+    // id, so an id-only lookup would find the other one's entry.
+    const previous = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id && p.kind === kind) : null;
     const published = previous && Array.isArray(previous.versions) ? previous.versions.find((v) => v && v.version === version) : null;
     if (published && published.sha256 !== sha256) {
       console.error(`${manifest.id} ${version} is already in ${registryFile} with sha256 ${published.sha256};`);

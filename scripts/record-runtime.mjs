@@ -15,7 +15,7 @@
 //      (`runtime/npm-shrinkwrap.json`, else `runtime/package-lock.json`): npm's own
 //      resolution record. `resolved`/`integrity` are the registry's values, and entries
 //      marked `inBundle` are already inside the vendor's tarball.
-//   2. `--resolve`: ask npm to resolve it now (`npm install --package-lock-only`).
+//   2. `--resolve`: ask pnpm to resolve it now (`pnpm install --lockfile-only`).
 //
 // Two checks run before anything is written, because a runtime that is missing a
 // package is a session that dies in someone's face later:
@@ -58,10 +58,35 @@ const only = (arg('only', '') || '').split(',').map((s) => s.trim()).filter(Bool
 const readJson = (file, fallback = null) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 const recordedFromFile = (file) => JSON.stringify(readJson(file, null), null, 2);
 
-const npmView = (spec, fields) => {
-  const out = execFileSync('npm', ['view', spec, ...fields, '--json'], { encoding: 'utf8', windowsHide: true, shell: process.platform === 'win32', timeout: 120_000 });
-  return JSON.parse(out);
-};
+// Registry metadata for one package, read once over HTTP (one request for the whole
+// package, not one process per field). The fields asked for are the shape npm view
+// returns, so callers do not change.
+const REGISTRY = process.env.AGENT_HUB_NPM_REGISTRY || 'https://registry.npmjs.org';
+const metaCache = new Map();
+async function npmView(spec, fields) {
+  const at = spec.lastIndexOf('@');
+  const name = at > 0 ? spec.slice(0, at) : spec;
+  const want = at > 0 ? spec.slice(at + 1) : 'latest';
+  let doc = metaCache.get(name);
+  if (!doc) {
+    const res = await fetch(`${REGISTRY}/${name.replace('/', '%2f')}`, { signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) throw new Error(`${name}: the registry answered ${res.status}`);
+    doc = await res.json();
+    metaCache.set(name, doc);
+  }
+  const version = want === 'latest' ? doc['dist-tags']?.latest : want;
+  const v = (doc.versions || {})[version];
+  if (!v) throw new Error(`${name}@${version}: the registry has no such version`);
+  const out = { version, name: v.name || name };
+  for (const f of fields) {
+    if (f === 'version') continue;
+    const parts = f.split('.');
+    let cur = v;
+    for (const part of parts) cur = cur == null ? undefined : cur[part];
+    if (cur !== undefined) out[f] = cur;
+  }
+  return out;
+}
 
 /** Every package name a path can denote, so a dependency can be looked up. */
 function nameOf(key, entry) {
@@ -86,18 +111,128 @@ function completeness(lock, topName) {
   return { entries, missing };
 }
 
-async function resolveWithNpm(spec, log) {
+/**
+ * A minimal reader for pnpm-lock.yaml: only the three top-level maps this needs.
+ */
+function readPnpmLock(text) {
+  const out = { packages: {}, snapshots: {}, importers: {} };
+  let section = null, key = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    if (/^[a-zA-Z]/.test(line)) { section = line.replace(/:.*/, ''); key = null; continue; }
+    if (!section || !out[section]) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 2 && line.trimEnd().endsWith(':')) {
+      key = line.trim().slice(0, -1).replace(/^'|'$/g, '');
+      out[section][key] = {};
+      continue;
+    }
+    if (key && indent >= 4) {
+      const b = out[section][key].__block;
+      const m = line.trim().match(/^([^:]+):\s*(.*)$/);
+      if (!m) continue;
+      const name = m[1].trim().replace(/^'|'$/g, '');
+      const value = m[2].trim().replace(/^'|'$/g, '');
+      // Inside a block (dependencies:, optionalDependencies:, ...) every line is an
+      // entry of that block; only a shallower line (indent 4 with a trailing colon)
+      // starts a new block.
+      if (b && indent >= 6) { out[section][key][b][name] = value; continue; }
+      if (value !== '') out[section][key][name] = value;
+      else { out[section][key][name] = {}; out[section][key].__block = name; }
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve a runtime closure with pnpm, handed back in the npm lockfile shape the rest of
+ * this file reads: a flat `packages` map keyed `node_modules/<name>` with
+ * version/integrity/dependencies. pnpm is used because npm's resolution HANGS on some
+ * closures (deepseek's @deepseek-ai/dsh never finished; pnpm did it in seconds). pnpm's
+ * lock carries no url; the caller already backfills a missing url from the registry.
+ */
+async function resolveWithPnpm(spec, log) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-runtime-'));
-  const file = path.join(dir, 'package.json');
-  fs.writeFileSync(file, '{}\n');
-  log(`asking npm to resolve ${spec} (this is the release machine doing the resolving)`);
-  execFileSync('npm', ['install', '--package-lock-only', '--omit=dev', '--no-audit', '--no-fund', spec], {
+  // The spec goes into package.json: pnpm only expands a dependency's own tree when
+  // it is a declared dependency, not when it is passed on the command line.
+  const at = spec.lastIndexOf('@');
+  const depName = at > 0 ? spec.slice(0, at) : spec;
+  const depVersion = at > 0 ? spec.slice(at + 1) : 'latest';
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { [depName]: depVersion } }, null, 2) + String.fromCharCode(10));
+  log(`asking pnpm to resolve ${spec} (this is the release machine doing the resolving)`);
+  execFileSync('pnpm', ['install', '--lockfile-only', '--prod', '--ignore-scripts'], {
     cwd: dir, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, shell: process.platform === 'win32', timeout: 900_000,
   });
-  const lock = readJson(path.join(dir, 'package-lock.json'), null);
+  const text = fs.readFileSync(path.join(dir, 'pnpm-lock.yaml'), 'utf8');
   fs.rmSync(dir, { recursive: true, force: true });
-  if (!lock) throw new Error(`npm resolved ${spec} but wrote no package-lock.json`);
-  return { lock, where: 'npm install --package-lock-only (release machine)' };
+  const y = readPnpmLock(text);
+
+  // Peel "<name>@<version>" and, for snapshots, a peer suffix "(...)".
+  const split = (k) => { const at = k.lastIndexOf('@'); return at <= 0 ? null : { name: k.slice(0, at), version: k.slice(at + 1).split('(')[0] }; };
+  const byVersion = new Map();   // "name@version" -> {integrity, deps}
+  for (const [k, v] of Object.entries(y.packages)) {
+    const p2 = split(k); if (!p2) continue;
+    byVersion.set(`${p2.name}@${p2.version}`, { integrity: v.resolution ? String(v.resolution.integrity || '') : '', deps: {} });
+  }
+  const edges = [];              // { from: "name@version", dep: "name@version" }
+  for (const [k, v] of Object.entries(y.snapshots)) {
+    const p2 = split(k); if (!p2) continue;
+    const from = `${p2.name}@${p2.version}`;
+    if (!byVersion.has(from)) byVersion.set(from, { integrity: '', deps: {} });
+    for (const [dn, dv] of Object.entries(v.dependencies || {})) {
+      const ver = String(dv).split('(')[0];
+      byVersion.get(from).deps[dn] = ver;
+      edges.push({ from, dep: `${dn}@${ver}` });
+    }
+  }
+
+  // A layout Node can resolve. pnpm allows many versions of one name; a tree does not,
+  // so the FIRST name to be reached at a level takes `node_modules/<name>` there, and a
+  // second version of the same name is nested under the parent that needs it. Every
+  // `name@version` is placed exactly once, so the walk cannot fan out: it is a graph
+  // traversal, not a path enumeration.
+  const packages = {};
+  const placedAt = new Map();      // "name@version" -> path
+  const placed = new Set();        // paths already taken
+  const rootSplit = split(spec);
+  const rootId = `${rootSplit.name}@${rootSplit.version}`;
+  const place = (id, path) => {
+    const p2 = split(id);
+    const held = byVersion.get(id) || { integrity: '', deps: {} };
+    packages[path] = { name: p2.name, version: p2.version, ...(held.integrity ? { integrity: held.integrity } : {}), ...(Object.keys(held.deps).length ? { dependencies: held.deps } : {}) };
+    placedAt.set(id, path);
+    placed.add(path);
+  };
+  // Where this dependency would live under a given ancestor path, honouring the name
+  // rule: free at that level -> that level; taken by a different version -> nested.
+  const wantPath = (ancestor, name, id) => {
+    const base = ancestor ? `${ancestor}/node_modules/${name}` : `node_modules/${name}`;
+    const holder = placedAt.get(id);
+    if (holder) return holder;
+    const conflict = [...placedAt.entries()].some(([otherId, otherPath]) => otherPath === base && otherId !== id);
+    if (conflict) {
+      // nested one level under every parent that needs it would explode; pnpm chooses one
+      // subtree per instance, and a single extra level under the FIRST such parent is what
+      // Node needs to resolve it there.
+      return `${ancestor ? `${ancestor}/node_modules/${name}` : `node_modules/${name}`}`;
+    }
+    return base;
+  };
+  const queue = [{ id: rootId, path: '' }];
+  while (queue.length) {
+    const { id, path } = queue.shift();
+    if (!placedAt.has(id)) place(id, path);
+    const deps = (byVersion.get(id) || {}).deps || {};
+    for (const [dn, dv] of Object.entries(deps)) {
+      const child = `${dn}@${dv}`;
+      if (placedAt.has(child)) continue;
+      const childPath = path ? `${path}/node_modules/${dn}` : `node_modules/${dn}`;
+      if (placed.has(childPath)) continue;
+      queue.push({ id: child, path: childPath });
+    }
+  }
+  return { lock: { lockfileVersion: 3, packages }, where: 'pnpm install --lockfile-only (release machine)' };
 }
 
 
@@ -123,8 +258,9 @@ async function tarballEntries(url, log) {
 
 let failed = false;
 let changed = false;
-for (const name of fs.readdirSync(pluginsDir).sort()) {
-  const dir = path.join(pluginsDir, name);
+const runtimeNames = fs.existsSync(path.join(pluginsDir, 'manifest.json')) ? ['.'] : fs.readdirSync(pluginsDir).sort();
+for (const name of runtimeNames) {
+  const dir = name === '.' ? pluginsDir : path.join(pluginsDir, name);
   const manifest = readJson(path.join(dir, 'manifest.json'), null);
   if (!manifest || !manifest.runtime || !manifest.runtime.package || !manifest.runtime.version) continue;
   if (only.length && !only.includes(manifest.id)) continue;
@@ -134,7 +270,7 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
   const target = command.length > 1 && command[0].includes('/') ? command[0].split('/')[0] : 'runtime';
   console.log(`[${manifest.id}] runtime ${spec} -> ${target}/`);
   try {
-    const dist = npmView(spec, ['dist.tarball', 'dist.integrity', 'version']);
+    const dist = await npmView(spec, ['dist.tarball', 'dist.integrity', 'version']);
     if (!dist['dist.tarball'] || !dist['dist.integrity']) throw new Error(`the registry states no tarball/integrity for ${spec}`);
     const sources = [{ url: dist['dist.tarball'], integrity: dist['dist.integrity'], path: '' }];
 
@@ -143,7 +279,7 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
     // --resolve means "ask npm NOW": a lockfile recorded earlier can be a subset of the
     // real closure (one was: it lacked nine platform variants of an optional dependency,
     // and the completeness check below is what caught it).
-    if (flag('resolve')) ({ lock, where } = await resolveWithNpm(spec, log));
+    if (flag('resolve')) ({ lock, where } = await resolveWithPnpm(spec, log));
     const candidates = [
       arg('lockfile', null),
       path.join(dir, 'runtime', 'npm-shrinkwrap.json'),
@@ -203,9 +339,9 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
         if (!range) throw new Error(`${parentKey} names no range for ${dep}`);
         const version = /^[0-9]/.test(range) && /^\d+\.\d+\.\d+/.test(range)
           ? range
-          : String(npmView(`${dep}@${range}`, ['version']).version ?? '').split(',')[0];
+          : String((await npmView(`${dep}@${range}`, ['version'])).version ?? '').split(',')[0];
         if (!version) throw new Error(`${dep}@${range}: no version satisfied the range`);
-        const info = npmView(`${dep}@${version}`, ['dist.tarball', 'dist.integrity', 'os', 'cpu', 'dependencies', 'optionalDependencies']);
+        const info = await npmView(`${dep}@${version}`, ['dist.tarball', 'dist.integrity', 'os', 'cpu', 'dependencies', 'optionalDependencies']);
         if (!info['dist.integrity']) throw new Error(`${dep}@${version}: the registry publishes no integrity`);
         if (info.dependencies && Object.keys(info.dependencies).length) throw new Error(`${dep}@${version} has its own dependencies: this fill cannot be trusted for it`);
         completed.push({
@@ -255,7 +391,7 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
       const name = nameOf(key, entry);
       const version = entry.version;
       if (!version) throw new Error(`${key}: no version to look the registry up by`);
-      const info = npmView(`${name}@${version}`, ['dist.integrity', 'dist.tarball']);
+      const info = await npmView(`${name}@${version}`, ['dist.integrity', 'dist.tarball']);
       if (!info['dist.integrity']) throw new Error(`${key}: the registry publishes no integrity for ${name}@${version}`);
       if (source.url && info['dist.tarball'] && info['dist.tarball'] !== source.url) {
         throw new Error(`${key}: the recorded URL ${source.url} is not the registry's ${info['dist.tarball']}`);
