@@ -536,30 +536,37 @@ function isHarnessEnabled(id) {
 }
 
 // The harness's icon, taken from its own manifest and returned as a data URI.
-// The icon is the plugin's own asset (manifest.icons: {light, dark} naming files
-// beside the manifest); the hub reads those bytes so a client draws the mark the
-// plugin ships, without the client importing adapter code or reaching the disk.
-// A harness that declares no icon returns null and the client draws none.
+// The icon's URL for a harness, so a client draws the plugin's own mark without the
+// hub inlining bytes (an inlined mark does not survive hundreds of harnesses). The
+// bytes are served by the icon route below; a harness with no declared icon returns
+// null and the client draws none.
 function harnessIcons(id) {
   const m = manifestOf(id) || {};
   const decl = m.icons;
   if (!decl || typeof decl !== 'object') return null;
-  const dir = pluginDir(id);
-  const read = (name) => {
-    if (typeof name !== 'string' || !name) return null;
-    const full = path.resolve(dir, name);
-    if (full !== dir && !full.startsWith(dir + path.sep)) return null;
-    try {
-      const buf = fs.readFileSync(full);
-      const ext = path.extname(full).toLowerCase();
-      const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
-      return `data:${mime};base64,${buf.toString('base64')}`;
-    } catch { return null; }
+  return {
+    light: `/v1/hub/plugins/${encodeURIComponent(id)}/icon/light`,
+    dark: `/v1/hub/plugins/${encodeURIComponent(id)}/icon/dark`,
   };
-  const light = read(decl.light ?? decl.dark);
-  const dark = read(decl.dark ?? decl.light);
-  if (!light && !dark) return null;
-  return { light: light ?? dark, dark: dark ?? light };
+}
+
+// Serve one variant of a harness's icon from its manifest. 404 when the harness or
+// that variant is absent.
+function serveHarnessIcon(id, variant, res) {
+  const m = manifestOf(id) || {};
+  const decl = m.icons && typeof m.icons === 'object' ? m.icons : null;
+  if (!decl) return fail(res, 404, 'not_found', `no icon for '${id}'`);
+  const name = variant === 'dark' ? (decl.dark ?? decl.light) : (decl.light ?? decl.dark);
+  if (typeof name !== 'string' || !name) return fail(res, 404, 'not_found', `no '${variant}' icon for '${id}'`);
+  const dir = pluginDir(id);
+  const full = path.resolve(dir, name);
+  if (full !== dir && !full.startsWith(dir + path.sep)) return fail(res, 404, 'not_found', `icon path for '${id}' is outside the plugin`);
+  let buf = null;
+  try { buf = fs.readFileSync(full); } catch { return fail(res, 404, 'not_found', `icon file for '${id}' is missing`); }
+  const ext = path.extname(full).toLowerCase();
+  const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
+  res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-cache' });
+  res.end(buf);
 }
 
 // The hub's view of one harness: what the plugin is, plus what the hub has
@@ -1316,6 +1323,8 @@ const ROUTES = [
     body().then((b) => installPlugin(b, res)).catch((e) => failError(res, e)) },
   { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
     json(res, 200, catalogValue()) },
+  { method: 'GET', path: '/v1/hub/plugins/{id}/icon/{variant}', handler: ({ res, params }) =>
+    serveHarnessIcon(params.id, params.variant, res) },
   { method: 'POST', path: '/v1/hub/registry/refresh', handler: ({ res }) =>
     refreshRegistry().then((r) => json(res, 200, r)).catch((e) => {
       const status = e.code === 'registry_url_missing' ? 409 : 502;
@@ -2341,13 +2350,13 @@ function stopHarnessProcesses(harnessId) {
 // that is the point of the artifacts: a clean machine installs a harness, not a build
 // job. The adapter's own runtime/prepare stays what it always was for a DEVELOPMENT
 // entry (a git checkout), and is never used for something installed from the registry.
-function catalogEntry(id) {
-  const catalog = catalogValue();
-  return (catalog.plugins || []).find((entry) => entry && entry.id === id) || null;
-}
-
-function runtimeDeclaration(entry) {
-  const runtime = entry && entry.runtime;
+// The runtime closure an installed plugin ships, read from its own directory
+// (runtime.sources.json, packed into the artifact). It is not in the registry: the
+// catalog lists adapters, the artifact carries install detail.
+function runtimeDeclaration(id) {
+  const file = path.join(pluginDir(id), 'runtime.sources.json');
+  let runtime = null;
+  try { runtime = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
   if (!runtime || !Array.isArray(runtime.sources) || !runtime.sources.length) return null;
   return runtime;
 }
@@ -2355,16 +2364,12 @@ function runtimeDeclaration(entry) {
 function installCatalogRuntime(id) {
   const held = runtimePrepare.get(id);
   if (held && held.inFlight) return held.inFlight;
-  const entry = catalogEntry(id);
   const manifest = manifestOf(id) || {};
   const declared = !!(manifest.runtime && Array.isArray(manifest.capabilities) && manifest.capabilities.includes('runtime'));
   const state = { state: 'running', detail: null, startedAt: new Date().toISOString(), finishedAt: null, source: 'catalog' };
   runtimePrepare.set(id, state);
   const installedVersion = manifest.version;
-  const release = entry?.versions?.find(v => v.version === installedVersion);
-  // Legacy entries may have only a top-level runtime. Accept it only when its
-  // exact pin agrees with this installed plugin, never silently install latest.
-  const runtime = runtimeDeclaration({ runtime: release?.runtime ?? entry?.runtime });
+  const runtime = runtimeDeclaration(id);
   // Where the runtime goes: the directory the catalog names, resolved inside THIS
   // plugin's own directory. The manifest's command points at a file inside it, so the
   // record states the directory instead of having anything derive it by guessing.
@@ -2382,10 +2387,7 @@ function installCatalogRuntime(id) {
         return { ready: true, detail: state.detail };
       }
       if (!runtime) {
-        const why = entry
-          ? `the catalog entry for '${id}' names no runtime sources: the hub does not run a package manager, so a plugin that needs a runtime must come with one published for ${platformKey()}`
-          : `'${id}' is not in the catalog, so no runtime is recorded for it`;
-        throw Object.assign(new Error(why), { code: 'runtime_unavailable' });
+        throw Object.assign(new Error(`'${id}' ships no runtime.sources.json, so the hub cannot install its runtime (it runs no package manager)`), { code: 'runtime_unavailable' });
       }
       if (runtime.package !== manifest.runtime.package || runtime.version !== manifest.runtime.version) {
         throw Object.assign(new Error(`runtime pin does not match plugin ${id}@${installedVersion}`), { code: 'runtime_unavailable' });
