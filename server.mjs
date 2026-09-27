@@ -1407,7 +1407,7 @@ const ROUTES = [
     res.on('error', drop);
   } },
   { method: 'GET', path: '/v1/hub/plugins', handler: ({ res }) =>
-    json(res, 200, { plugins: installedPlugins().map(pluginValue), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR, searched: pluginRoots() } }) },
+    json(res, 200, { plugins: pluginList(), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR, searched: pluginRoots() } }) },
   { method: 'POST', path: '/v1/hub/plugins', handler: ({ res, body }) =>
     body().then(async (b) => await installPlugin(b, res)).catch((e) => failError(res, e)) },
   { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
@@ -1995,6 +1995,18 @@ function secretName(providerId) { return `provider-${providerId}-token`; }
 // What a plugin looks like on the wire: where it is, where it came from, and whether
 // the runtime its manifest pins is on disk. `runtimeReady` is a filesystem fact about
 // the declared command existing — not a claim that the harness works.
+// The plugins a client should see: what is installed, PLUS anything the hub is installing
+// right now (which has no directory yet, so installedPlugins() cannot see it - and a client
+// asking "what is happening" must. The in-progress one is a minimal row: its id and busy).
+function pluginList() {
+  const rows = installedPlugins().map(pluginValue);
+  for (const [id, op] of pluginOps) {
+    if (rows.some((r) => r.id === id)) continue;
+    rows.push({ id, kind: id.split('-').slice(0, -1).join('-') || null, busy: op.what, installed: false });
+  }
+  return rows;
+}
+
 function pluginValue(id) {
   const m = manifestOf(id) || {};
   const installed = readJson(PLUGINS_FILE, {}) || {};
@@ -2035,7 +2047,7 @@ function pluginValue(id) {
     prepare: prep ? { state: prep.state, detail: prep.detail, startedAt: prep.startedAt, finishedAt: prep.finishedAt } : null,
     // The hub's own fact about what it is doing to this plugin right now: an install or a
     // removal in progress. A client renders THIS, not a flag it kept from its own click.
-    busy: pluginOps.get(id) || null,
+    busy: pluginOps.get(id)?.what || null,
     invalid: manifestFault(id),
   };
 }
@@ -2174,6 +2186,13 @@ async function installArtifact(a, res) {
     return fail(res, 400, 'validation_failed', `source.artifact.size must be a positive integer of bytes (got ${JSON.stringify(a.size)})`);
   }
   fs.mkdirSync(HUB_PLUGINS_DIR, { recursive: true });
+  // The busy fact covers the WHOLE install, download included - that is what a user sees as
+  // "installing". The kind is not in the request, but the registry entry for this id names
+  // it, so the managed id (and the busy key) is known before a byte is fetched.
+  const known = (catalogValue().plugins || []).find((e) => e && e.id === a.id);
+  const busyId = known && known.kind ? managedId(known.kind, a.id) : a.id;
+  beginPluginOp(busyId, 'install');
+  try {
   const work = fs.mkdtempSync(path.join(HUB_PLUGINS_DIR, '.download-'));
   const file = path.join(work, 'artifact.zip');
   try {
@@ -2226,6 +2245,9 @@ async function installArtifact(a, res) {
     return await landPlugin(staging, m.id, { source: a.url, ref: null, commit: null, artifact: { id: a.id, version: a.version, url: a.url, sha256: a.sha256.toLowerCase(), size: a.size ?? null } }, res);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+  }
+  } finally {
+    endPluginOp(busyId);
   }
 }
 
@@ -2411,7 +2433,7 @@ async function removePlugin(id, res) {
     if (records[id]) { delete records[id]; writeJson(PLUGINS_FILE, records); }
     reconcileHarnesses();
     announcePluginsChanged('removed');
-    json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: installedPlugins().map(pluginValue) });
+    json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: pluginList() });
   } finally { endPluginOp(id); }
 }
 
@@ -2595,12 +2617,18 @@ const runtimePrepare = new Map();   // harnessId -> {state, detail, startedAt, f
 // progress belongs to the process doing it, not to a client's memory of its own click. A
 // client that keeps its own flag loses it on a refresh and overwrites it when a second
 // plugin is acted on. Keyed by the managed id.
-const pluginOps = new Map();   // managedId -> 'install' | 'remove'
+const pluginOps = new Map();   // managedId -> { what, depth }
 function beginPluginOp(id, what) {
-  pluginOps.set(id, what);
+  const held = pluginOps.get(id);
+  if (held && held.what === what) { held.depth++; return; }
+  pluginOps.set(id, { what, depth: 1 });
   announcePluginsChanged(what);
 }
 function endPluginOp(id) {
+  const held = pluginOps.get(id);
+  if (!held) return;
+  held.depth--;
+  if (held.depth > 0) return;
   pluginOps.delete(id);
   announcePluginsChanged('idle');
 }
