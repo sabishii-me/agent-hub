@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // agent-hub CLI — a thin client of the hub process. No logic lives here: every
 // command is one HTTP call (chat is one POST + SSE read). The CLI is the test
 // main battlefield: every feature is exercised here before any UI work.

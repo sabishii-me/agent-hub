@@ -24,11 +24,26 @@
           "type": "string",
           "description": "opaque adapter base id; never enumerated"
         },
-        "version": {
+        "adapterVersion": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "This deployment's release of the harness PLUGIN (its adapter code, capabilities and protocol). ADR-0004: the adapter version and the runtime version are two independent facts; neither is derivable from the other, so a harness row publishes both and has no bare `version`."
+        },
+        "runtimeVersion": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The version of the harness runtime the adapter drives (manifest runtime.version). ADR-0004: a runtime change bumps BOTH versions; an adapter-only change bumps only the adapter."
+        },
+        "runtimePackage": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The package the runtime version names (manifest runtime.package), so a version string is never ambiguous about which package it belongs to."
         },
         "capabilities": {
           "type": "array",
@@ -176,6 +191,10 @@
         },
         "activeTurn": {
           "$ref": "#/defs/turnState"
+        },
+        "turnRunning": {
+          "type": "boolean",
+          "description": "The hub's own verdict that this session has a turn admitted and not yet finished (admitted/running/awaiting_approval/awaiting_question/cancelling). Published so a client renders this fact instead of re-deriving it from activeTurn.state with its own copy of the state list - a second authority that drifts from this one."
         },
         "createdAt": {
           "type": "string"
@@ -365,14 +384,58 @@
             "assistant",
             "bridge",
             "system",
-            null
-          ]
+            null,
+            "harness"
+          ],
+          "description": "Origin of the message, separate from model-facing role. Harness-generated continuations are not human input."
         },
         "bridge": {
           "type": [
             "object",
             "null"
           ]
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Reasoning text returned by the native session, when present; never reconstructed from assistant prose."
+        },
+        "nativeId": {
+          "type": "string",
+          "description": "Native persisted entry identity if distinct from the stable adapter message id."
+        },
+        "tools": {
+          "type": "array",
+          "description": "Native tool calls belonging to this message, correlated to results by toolCallId, not positional inference.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "args",
+              "state"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "args": {
+                "type": "object"
+              },
+              "state": {
+                "enum": [
+                  "pending",
+                  "done",
+                  "failed"
+                ]
+              },
+              "result": {
+                "type": "array"
+              }
+            }
+          }
         }
       }
     },
@@ -683,31 +746,33 @@
     },
     "artifact": {
       "type": "object",
+      "description": "one release artifact: the zip, and the digest that makes it verifiable",
       "required": [
+        "url",
+        "sha256",
         "id",
-        "name",
-        "kind",
-        "size"
+        "version"
       ],
       "properties": {
+        "url": {
+          "type": "string",
+          "description": "http(s) URL of the release zip"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "64 hex characters; the artifact is refused unless the download hashes to exactly this"
+        },
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "the plugin id the archive must declare in its manifest"
         },
-        "name": {
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "file",
-            "diff",
-            "other"
-          ]
+        "version": {
+          "type": "string",
+          "description": "which release this artifact is (the harness version its manifest pins)"
         },
         "size": {
-          "type": "integer"
-        },
-        "createdAt": {
-          "type": "string"
+          "type": "integer",
+          "description": "the artifact's byte size; checked as well, so a truncated download is caught even when it happens to hash the same (it cannot, but the size is also what makes a 0-byte or half-written file obvious)"
         }
       }
     },
@@ -799,6 +864,87 @@
         "type": "string",
         "description": "why the manifest cannot be honoured; null when it can",
         "nullable": true
+      },
+      "artifact": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "{id, version, url, sha256, size} exactly as the install named it, when this plugin came from a release artifact; null for a git source or a directory nobody installed. A client compares `version` with a catalog entry to know an update exists — the hub does not compare anything itself."
+      }
+    },
+    "catalogVersion": {
+      "type": "object",
+      "description": "one release of a plugin, as the registry file states it (stored verbatim, never resolved or rewritten by the hub)",
+      "required": [
+        "version",
+        "url",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "nullable": true
+        },
+        "releasedAt": {
+          "type": "string",
+          "nullable": true
+        },
+        "notes": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    },
+    "catalogEntry": {
+      "type": "object",
+      "description": "one plugin the registry file lists; extra fields are kept as the author wrote them",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "description": "'harness' or 'provider' — what the plugin is, as the registry declares it"
+        },
+        "name": {
+          "type": "string",
+          "nullable": true,
+          "description": "display name; the client localises what it can and shows this otherwise"
+        },
+        "summary": {
+          "type": "string",
+          "nullable": true
+        },
+        "description": {
+          "type": "string",
+          "nullable": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/catalogVersion"
+          },
+          "description": "newest first: the entry a client installs or updates to is versions[0]"
+        }
       }
     }
   },
@@ -870,7 +1016,7 @@
     {
       "method": "GET",
       "path": "/v1/harnesses/{id}/models",
-      "description": "the models THIS HARNESS CAN RUN — the single authoritative source for model selection, and the only list a caller needs (do not merge it with API 1). One query: the harness's own catalog plus every core-managed provider the harness can reach during a session, so an entry means the same thing whichever harness answered and whichever way a provider got there (native config, like dsh, or injected at session start, like pi). An injected provider is named `hub-<coreProviderId>` in every harness — one spelling, no slash (pi splits a model reference on the first slash) — and `modelProviderId` accepts that spelling or the bare `<coreProviderId>`. capability-gated; known:false = harness declares no models capability (never faked as empty). Each entry keeps its real providerId. thinkingLevels is the levels for THAT model, verbatim and unconverted; a different model may offer a different list. thinkingLevelsSource says where it came from: 'declared' (stated), 'default' (the model reasons but declares none, so the set is not controllable), 'none' (the model does not reason). A model id is unique only with its providerId; (providerId, id) is the key.",
+      "description": "the models THIS HARNESS CAN RUN — the single authoritative source for model selection, and the only list a caller needs (do not merge it with API 1). One query: the harness's own catalog plus every core-managed provider the harness can reach during a session, so an entry means the same thing whichever harness answered and whichever way a provider got there (native config, like dsh, or injected at session start, like pi). An injected provider is named `hub-<coreProviderId>` in every harness — one spelling, no slash (pi splits a model reference on the first slash) — and `modelProviderId` accepts that spelling or the bare `<coreProviderId>`. capability-gated; known:false = harness declares no models capability (never faked as empty). Each entry keeps its real providerId. `thinkingLevels` is the list the model's configuration states, passed through verbatim: null = nothing was stated, [] = an empty list was stated, a list = exactly those names in that order. The core derives nothing from it (no vocabulary, no source label, no per-model verdict) and neither does a caller have to. A model id is unique only with its providerId; (providerId, id) is the key.",
       "response": {
         "harnessId": {
           "type": "string",
@@ -1125,7 +1271,7 @@
     {
       "method": "PATCH",
       "path": "/v1/sessions/{id}",
-      "description": "Change session configuration. modelProviderId selects another core-managed provider in the same conversation; credentials/grant precedes config/set. Supply modelId or retain the currently selected model. Provider switching requires an idle turn and is serialized against turn admission and lifecycle mutations. Session id and native ref are preserved. Missing credentials/unknown provider fail before injection. Failed application retains saved selection and drops the changed adapter so next use restores saved configuration. Applied provider/model must be confirmed by the adapter. thinkingLevel sets the harness-native thinking level for this session; unconfirmed application is reported as null plus a warning, never as the requested value. A level the model does not offer is 400 validation_failed. `title` renames the session in the HARNESS as well (the hub is not the only place a name is shown): the adapter answers with the title the harness accepted, which may differ from the one asked for (dsh normalizes and sanitises), and the session reports both — `title` what was asked, `appliedTitle` what the harness holds. Requires the harness capability `rename` (501 unsupported otherwise). A title the harness did not accept is an error, never a hub-only rename that looks applied. Refused with 409 session_busy while a turn is running, like every other PATCH knob.",
+      "description": "Change session configuration. modelProviderId selects another core-managed provider in the same conversation; credentials/grant precedes config/set. Supply modelId or retain the currently selected model. Provider switching requires an idle turn and is serialized against turn admission and lifecycle mutations. Session id and native ref are preserved. Missing credentials/unknown provider fail before injection. Failed application retains saved selection and drops the changed adapter so next use restores saved configuration. Applied provider/model must be confirmed by the adapter. thinkingLevel sets the harness-native thinking level for this session; unconfirmed application is reported as null plus a warning, never as the requested value. A level the model does not offer is 400 validation_failed. `title` renames the session in the HARNESS as well (the hub is not the only place a name is shown): the adapter answers with the title the harness accepted, which may differ from the one asked for (dsh normalizes and sanitises), and the session reports both — `title` what was asked, `appliedTitle` what the harness holds. Requires the harness capability `rename` (501 unsupported otherwise). A title the harness did not accept is an error, never a hub-only rename that looks applied. Refused with 409 session_busy while a turn is running, like every other PATCH knob. Policy-only PATCH containing plan/review may apply during a running or waiting turn when the adapter is ready. Cancellation and model/provider/thinking/preset changes still require idle. Review changes affect future tool calls; already pending approvals/questions remain explicit decisions, never auto-approved. Applied fields must confirm actual state. modelProviderId also accepts an available native provider/model pair from this harness catalogue; native credentials remain harness-private and no hub credential is granted. Model switches return the observed thinking level for the selected model.",
       "request": {
         "modelId": "string?",
         "presetId": "string?",
@@ -1218,7 +1364,8 @@
         "session.compacting",
         "session.compacted",
         "session.renamed",
-        "approval.resolved"
+        "approval.resolved",
+        "session.notification"
       ]
     },
     {
@@ -1500,7 +1647,7 @@
     {
       "method": "GET",
       "path": "/v1/hub/providers",
-      "description": "the providers the hub manages. One provider is one file in the hub's data dir (`providers/<id>.json`): the endpoint it lives at, the protocol it speaks, the declarations for its models, the selection, and the catalog it last served. A provider is reported as `{id, label, url, api, scope, tokenConfigured, declarations, selection, catalogRevision, createdAt, updatedAt}`; the token itself is never returned.",
+      "description": "the providers the hub manages. One provider is one file in the hub's data dir (`providers/<id>.json`): the endpoint it lives at, the protocol it speaks, the declarations for its models, the selection, and the catalog it last served. A provider is reported as `{id, label, url, api, providerType, providerTypeVersion, providerTypeAvailable, catalogUrl, tokenConfigured, declarations, selection, catalogRevision, createdAt, updatedAt}`; the token itself is never returned. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. Legacy untyped records are read as custom-compatible v1 without rewriting storage or guessing from endpoint/name.",
       "response": {
         "providers": "array",
         "broken": {
@@ -1527,14 +1674,16 @@
     {
       "method": "POST",
       "path": "/v1/hub/providers",
-      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id — what that model accepts (thinking levels, window, limits) — because a provider's model list does not carry any of it. A declaration may also carry `input` — the modalities the model takes (\"text\", \"image\") — because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers).",
+      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id — what that model accepts (thinking levels, window, limits) — because a provider's model list does not carry any of it. A declaration may also carry `input` — the modalities the model takes (\"text\", \"image\") — because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers). Optional immutable providerType/providerTypeVersion select an installed type. Omitted values select custom-compatible v1 for compatibility. Explicit unknown type/version is rejected before storing credentials. Endpoint requirements and configuration validation belong to the selected type: a type that accepts a caller endpoint requires url; a type that owns its endpoint supplies it and rejects overrides. Fields are the configuration.fields its descriptor declares.",
       "request": {
         "id": "string?",
         "label": "string?",
-        "url": "string",
+        "url": "string?",
         "api": "string?",
         "token": "string?",
-        "declarations": "object?"
+        "declarations": "object?",
+        "providerType": "string?",
+        "providerTypeVersion": "integer?"
       },
       "response": {
         "provider": "object"
@@ -1543,7 +1692,7 @@
     {
       "method": "GET",
       "path": "/v1/hub/providers/{id}",
-      "description": "read one provider by id.",
+      "description": "read one provider by id. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. Legacy untyped records are read as custom-compatible v1 without rewriting storage or guessing from endpoint/name.",
       "response": {
         "provider": "object"
       }
@@ -1575,7 +1724,7 @@
     {
       "method": "POST",
       "path": "/v1/hub/providers/{id}/logout",
-      "description": "drop a provider's stored credential and keep the row: the provider stays registered (its catalog, its declarations, its selection) but has no token until one is supplied again. Requests that need the credential then fail as `provider_unauthorized` instead of running on something else.",
+      "description": "drop a provider's stored credential and keep the row: the provider stays registered (its catalog, its declarations, its selection) but has no token until one is supplied again. Requests that need the credential then fail as `provider_unauthorized` instead of running on something else. A provider plugin with authLogout() is asked to revoke remotely (best effort; a failed revocation is reported and never undoes the local removal).",
       "response": {
         "provider": "object"
       }
@@ -1650,7 +1799,7 @@
     {
       "method": "GET",
       "path": "/v1/hub/providers/{id}/models",
-      "description": "the cached catalog without touching the network. Each entry is `{id, name, enabled, available}` plus whatever its declaration states (`reasoning`/`thinkingLevels`/`thinkingLevelsSource`, `input`, `contextWindow`, `maxTokens`). `stale` is true when the endpoint or credential changed since the fetch; a stale catalog reports every model unavailable.",
+      "description": "the cached catalog without touching the network. Each entry is `{id, name, enabled, available}` plus whatever its declaration states (`thinkingLevels`, `input`, `contextWindow`, `maxTokens`). `stale` is true when the endpoint or credential changed since the fetch; a stale catalog reports every model unavailable.",
       "response": {
         "providerId": "string",
         "fetchedAt": "string|null",
@@ -1709,6 +1858,34 @@
     },
     {
       "method": "GET",
+      "path": "/v1/hub/catalog",
+      "description": "the plugin catalog this hub was shipped with: a registry file (AGENT_HUB_REGISTRY_FILE, else registry.json beside the hub) restating where first-party plugins are released. It is DATA and read-only — the hub does not resolve, rank or rewrite it, and an install names the artifact it wants (url + sha256), so a catalog that lies about its own artifact fails exactly like a hand-typed URL. `source` is the file that answered (null when there is none), `plugins` is the list verbatim, and `fault` says why an unreadable file could not be used instead of pretending the catalog is empty.",
+      "response": {
+        "schema": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string",
+          "nullable": true
+        },
+        "note": {
+          "type": "string",
+          "nullable": true
+        },
+        "fault": {
+          "type": "string",
+          "nullable": true
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/catalogEntry"
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
       "path": "/v1/hub/plugins",
       "description": "what plugin directories the hub can see, where they came from, and whether each one's runtime is on disk. A plugin is a directory with a manifest; the hub reads the root it was given (AGENT_HUB_PLUGINS_DIR) and, when it is the hub's own, the plugins it installed there. `runtimeReady` is a fact about the filesystem (the manifest's command exists), not a claim about the harness working.",
       "response": {
@@ -1727,31 +1904,74 @@
     {
       "method": "POST",
       "path": "/v1/hub/plugins",
-      "description": "install a plugin: `{source: {url, ref?}}` is cloned into the hub's own plugins directory (<DATA_DIR>/plugins/<id>, the id the cloned manifest declares) and registered, and its runtime is prepared by the adapter itself in the background. Refused (409) when the hub was given a plugins directory it does not own (a deployment's checkout): installing into that would write into someone else's tree, and preparing a plugin there is that deployment's business.",
+      "description": "install a plugin. Two sources, one landing rule: what lands is a directory with a manifest, under the id that manifest declares, in the hub's OWN plugins root (<DATA_DIR>/plugins). `{source:{url, ref?}}` clones a git repository (a URL or a local path); `{source:{artifact:{url, sha256, id, version, size?}}}` downloads a release zip and verifies it — size first, then sha256 — before anything is unpacked. An id the hub already installed is REPLACED: that is what updating is, and it is the same primitive because the only difference is whether a directory was already there. The old copy is moved aside first and removed only after the new one is in place, so a failure at any step leaves the previous plugin exactly as it was. An id living in a directory this hub does not own (AGENT_HUB_PLUGINS_DIR, a deployment's checkout) is refused with 409: that tree is somebody else's. A harness with open sessions is refused (409 `plugin_in_use`, naming them) rather than replaced under a running process. The response says `updated`, and the plugin's runtime is prepared by the adapter in the background.",
       "request": {
         "source": {
           "type": "object",
-          "description": "where the plugin comes from: a git URL or a local path (git is the installer, so a local clone of a plugin repository works)",
+          "description": "where the plugin comes from",
           "properties": {
             "url": {
-              "type": "string"
+              "type": "string",
+              "description": "a git URL or a local path (git is the installer, so a local clone of a plugin repository works)"
             },
             "ref": {
               "type": "string",
               "description": "a branch, tag or commit to check out"
+            },
+            "artifact": {
+              "$ref": "#/defs/artifact"
             }
-          },
-          "required": [
-            "url"
-          ]
+          }
         }
       },
       "response": {
-        "plugin": "object"
+        "plugin": {
+          "$ref": "#/defs/plugin"
+        },
+        "updated": {
+          "type": "boolean",
+          "description": "true when an id the hub had installed was replaced"
+        }
       },
       "errors": [
         "validation_failed",
-        "conflict"
+        "conflict",
+        "plugin_in_use",
+        "plugin_install_failed",
+        "artifact_download_failed",
+        "artifact_digest_mismatch",
+        "plugin_archive_invalid"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/hub/plugins/{id}",
+      "description": "remove a plugin the HUB installed, and nothing else. A directory a deployment put on the search path is read-only to the hub (409, naming the directory), and a harness with open sessions is refused rather than yanked out from under them (409 `plugin_in_use`, naming the sessions). The plugin's record goes with it; the harness row keeps its configuration and reads as missing until something with that id is installed again. Sessions are never deleted by this: a plugin is code, a session is history.",
+      "params": {
+        "id": {
+          "type": "string",
+          "description": "the plugin id (the directory name under the hub's plugins root)"
+        }
+      },
+      "response": {
+        "ok": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/defs/plugin"
+          }
+        }
+      },
+      "errors": [
+        "not_found",
+        "conflict",
+        "plugin_in_use",
+        "plugin_remove_failed"
       ]
     },
     {
@@ -1772,6 +1992,303 @@
         "unsupported",
         "runtime_prepare_failed"
       ]
+    },
+    {
+      "method": "GET",
+      "path": "/v1/sessions/{id}/resources",
+      "description": "Read-only resource catalogue authorized by this session harness skill selection. Logical skills:// URIs only; no installation paths. This is not filesystem or shell confinement. null skill selection retains existing all-installed semantics.",
+      "response": {
+        "resources": "array"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/sessions/{id}/resources/read",
+      "description": "Read a UTF-8 skills:// resource within the session harness selected skills. No filesystem URL fallback. Reject traversal, symlinks/junctions, binary files and files over 512 KiB. Does not execute scripts. Uses current registry selection; content version is SHA-256.",
+      "request": {
+        "uri": "string"
+      },
+      "response": {
+        "uri": "string",
+        "mimeType": "string",
+        "version": "string",
+        "content": "string"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/provider-types",
+      "description": "Installed hub provider plugins, as data. A provider type is not built into the hub: each entry here was imported from a plugin directory (manifest.provider.module). Types unavailable because no plugin ships them stay absent — a provider record naming one remains readable but unusable. `broken` lists provider modules that were declared but could not load, with their reason. A plugin's fetchCatalog may return plain model entries or {models, note}; entries may carry metadata (thinkingLevels, contextWindow, maxTokens, input, cost) stated by the vendor — declarations still override per field, and both are what a harness receives at session start.",
+      "response": {
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "version",
+              "owner",
+              "name",
+              "authMethods",
+              "configuration",
+              "catalog"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "owner": {
+                "const": "hub"
+              },
+              "name": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "authMethods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "configuration": {
+                "type": "object",
+                "properties": {
+                  "modelDeclarations": {
+                    "type": "boolean"
+                  },
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "type"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "text",
+                            "url",
+                            "enum",
+                            "secret"
+                          ]
+                        },
+                        "required": {
+                          "type": "boolean"
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "default": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "oneOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "catalog": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "broken": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "plugin",
+              "error"
+            ],
+            "properties": {
+              "plugin": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/harnesses/{id}/connections/schema",
+      "description": "What this harness itself lets a person connect: its own providers, the fields each expects, and each auth kind. Forwarded from the harness adapter; a harness without the providers capability answers unsupported (501) rather than an invented empty schema.",
+      "response": {
+        "providers": "array"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/harnesses/{id}/connections",
+      "description": "The connections this harness itself holds (value-free: id, providerId, label, status, revision, endpoint). A private connection belongs to this harness only; it is never mixed with the hub-managed providers route.",
+      "response": {
+        "connections": "array"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/harnesses/{id}/connections/validate",
+      "description": "Ask the harness to validate a draft (may be a live provider probe with the draft credential; it persists nothing). body {draft:{providerId,fields,label?}} -> {ok,fieldErrors?,transportError?}.",
+      "request": {
+        "draft": "object"
+      },
+      "response": {
+        "ok": "boolean",
+        "fieldErrors": "array?",
+        "transportError": "string?"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/harnesses/{id}/connections",
+      "description": "Create (providerId \"custom\" or a new upstream) or update an existing private connection. Secret fields are forwarded to the owning harness, which stores them in its own credential store; the hub persists no copy. body {id?,providerId,label?,fields:{...},secretPolicy?(keep|replace|clear),expectedRevision?} -> {connection,requires?}.",
+      "request": {
+        "id": "string?",
+        "providerId": "string",
+        "label": "string?",
+        "fields": "object?",
+        "secretPolicy": "string?",
+        "expectedRevision": "integer?"
+      },
+      "response": {
+        "connection": "object",
+        "requires": "string?"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/harnesses/{id}/connections/{cid}",
+      "description": "Delete a private connection from the owning harness. The harness drops its stored credential too. -> {ok,id}.",
+      "response": {
+        "ok": true,
+        "id": "string"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/harnesses/{id}/auth",
+      "description": "Start the harness’s own authorization operation for a provider (browser/device code and so on). The harness defines the steps; a harness that has none answers unsupported with its own message — never a fabricated step. -> {operationId,next}.",
+      "request": {
+        "providerId": "string"
+      },
+      "response": {
+        "operationId": "string",
+        "next": "object?"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/harnesses/{id}/auth/{op}",
+      "description": "Current state of an authorization operation the harness started.",
+      "response": {
+        "status": "object"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/harnesses/{id}/auth/{op}/cancel",
+      "description": "Cancel an authorization operation. Idempotent for a harness whose operations do not exist.",
+      "response": {
+        "ok": "object"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/providers/{id}/auth",
+      "description": "Start the authorization the provider plugin declares (device-code, browser, ...). The operation runs in the hub and outlives this request/caller; the caller receives the first declared step {operationId,next}. A type with no beginAuth() (or only api-key) answers 501 rather than a fabricated flow.",
+      "response": {
+        "operationId": "string",
+        "next": "object"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/providers/{id}/auth/{op}",
+      "description": "Current state of a hub-level authorization operation: {status:pending|approved|failed|expired|cancelled,next?,error?,account?}. Once approved, the credential is in the hub secret store and the existing credentials/grant path reaches every compatible harness.",
+      "response": {
+        "status": "object"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hub/providers/{id}/auth/{op}/cancel",
+      "description": "Cancel a pending hub-level authorization. Idempotent.",
+      "response": {
+        "ok": true,
+        "id": "string"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hub/orphans",
+      "description": "Plugin directories under the hub's OWN root that carry no manifest: what an interrupted replace or a failed install leaves behind. Every other reader looks for a manifest, so nothing else can see or clean these. They are reported (with size and whether a runtime is inside), never removed by a GET; a deployment's roots are not the hub's to clean and are never listed.",
+      "response": {
+        "orphans": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "hasRuntime": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/hub/orphans/{id}",
+      "description": "Remove leftover plugin state (a manifestless directory under the hub's own root). Refused with 409 when the directory has a manifest (that is a real plugin - use the plugin route) or belongs to another root. A directory a process still holds is reported as plugin_dir_busy, not a bare EPERM.",
+      "response": {
+        "ok": {
+          "type": "boolean"
+        },
+        "removed": {
+          "type": "string"
+        }
+      }
     }
   ],
   "events": [
@@ -1871,6 +2388,10 @@
           },
           "detail": {
             "type": "string"
+          },
+          "args": {
+            "type": "object",
+            "description": "Structured invocation arguments when supplied by the adapter."
           }
         }
       }
@@ -1897,6 +2418,9 @@
           },
           "ok": {
             "type": "boolean"
+          },
+          "result": {
+            "description": "Original structured tool result when supplied by the adapter; detail remains a short summary."
           }
         }
       }
@@ -2161,6 +2685,34 @@
         }
       },
       "description": "the HARNESS named or renamed the session (dsh titles a session from its first prompt); the hub follows instead of keeping a title only it believes in"
+    },
+    {
+      "name": "session.notification",
+      "payload": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "message",
+          "level"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ]
+          }
+        }
+      },
+      "description": "Harness notification, not model output. Live stream only; no durable notification history promised."
     }
   ]
 }

@@ -72,6 +72,41 @@ Measured behaviours (all four, on Windows, against real hubs):
 | hub killed hard | file **still there**, `pid` dead, port refused — stale, ignore or delete |
 | hub restarted on the same data dir | file replaced, `pid` and **token** different; the OLD token gets `401 unauthorized` from the new hub |
 
+## Engines: catalog, install, update, remove
+
+A client renders engines from two reads, and the join is the client's own:
+
+* `GET /v1/hub/catalog` — the catalog the hub carries, verbatim. Each entry lists its
+  releases (`versions[0]` is the newest; the file states the order). It may be empty
+  (`source: null`), or unusable — `fault` says why, and the list is empty rather than
+  pretending otherwise.
+* `GET /v1/hub/plugins` — what the hub has loaded, with `artifact` (the release it was
+  installed from, or null for a git source), `origin` (`hub` = installed here and
+  removable, otherwise a directory a deployment provided) and the runtime state.
+
+Then three calls, one per action:
+
+* **install** — `POST /v1/hub/plugins {source:{artifact:{url, sha256, id, version, size?}}}`.
+  `201` with `updated:false` when the id was not installed, `200` with `updated:true`
+  when it was: an install over an installed id *is* the update. The digest is verified
+  before anything is unpacked, and a failure leaves the installed plugin untouched.
+* **remove** — `DELETE /v1/hub/plugins/{id}`. `409 conflict` for a directory the hub
+  does not own, `409 plugin_in_use` (naming the sessions) while a session of that
+  harness is open. Sessions are never deleted by this: a plugin is code, a session is
+  history.
+* **prepare** — `POST /v1/hub/plugins/{id}/prepare`, when a runtime is not ready yet.
+  Installing starts this in the background anyway; progress shows up in the plugin list.
+  For a plugin that came from an artifact, the hub installs the runtime FROM THE CATALOG'S
+  RECORDED OFFICIAL SOURCES (the vendor's tarballs, verified against the recorded
+  integrity, filtered by the vendors' own `os`/`cpu` metadata) — no package manager runs.
+  For a plugin developed in place (a git checkout), the adapter's own `runtime/prepare`
+  does what it always did. A catalog that names no runtime for this machine answers `409
+  runtime_unavailable` and says so, rather than quietly reaching for a package manager.
+
+An update is offered by comparing the installed `artifact.version` with the catalog's
+newest `version`. The hub compares nothing itself: it reports what is installed and what
+the catalog says, and the client decides what to show.
+
 ## Restarts, and the one trap
 
 The token changes on every boot, so a client that caches it must treat **`401`** as
@@ -154,3 +189,25 @@ desktop                          hub
 
 A `SIGTERM` (or `SIGINT`) makes the hub delete the file and exit; a hard kill leaves
 it, which the `pid` check catches.
+
+## Logical skill resources (initial read-only surface)
+
+`GET /v1/sessions/{id}/resources` lists logical `skills://<id>/SKILL.md`
+resources from the session harness's selected skill set. It does not enumerate
+arbitrary host files or expose installation locations. Existing registry semantics
+apply: `skills: null` permits the installed set; an explicit list restricts it.
+
+`POST /v1/sessions/{id}/resources/read` with `{ "uri": "skills://id/SKILL.md" }`
+returns `{uri,mimeType,version,content}`. Version is a content SHA-256. The endpoint
+is read-only, accepts UTF-8 text up to 512 KiB, and does not execute resource scripts.
+It rejects traversal, encoded separators, alternate streams and symlinks/junctions.
+Failures return logical resource errors, not filesystem error paths.
+
+This is NOT an execution sandbox or a model integration yet. Native skill loading
+still exposes native paths until adapters are integrated. Content may itself name
+host paths; URI indirection alone does not sanitize it. The parser and resolver
+reject static link escapes, but the check/open sequence is not a claim of race-free
+confinement against hostile concurrent directory replacement. Such attackers need
+OS confinement or handle-relative traversal. The HTTP caller still has the hub
+bearer token; this is not a least-privilege credential suitable for giving to an
+agent. Do not expose the management token to read resources.

@@ -227,6 +227,66 @@
       "http": 502,
       "retryable": true,
       "message": "the plugin could not be installed (git failed, or the repository is not a plugin); the messenger is the installer"
+    },
+    "history_unavailable": {
+      "http": 502,
+      "retryable": false,
+      "message": "session history could not be read or aligned; session data retained"
+    },
+    "artifact_download_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "the artifact could not be downloaded (transport, DNS, a non-2xx answer, or a download past AGENT_HUB_ARTIFACT_LIMIT); the URL is in the message"
+    },
+    "artifact_digest_mismatch": {
+      "http": 502,
+      "retryable": false,
+      "message": "the downloaded bytes are not what the artifact said they are (sha256 or size); the message carries both, and the download is discarded"
+    },
+    "plugin_archive_invalid": {
+      "http": 502,
+      "retryable": false,
+      "message": "the artifact is not a usable plugin archive: unreadable zip, an entry that escapes the archive root, a symlink, no manifest.json, or a manifest whose id is not the artifact's"
+    },
+    "plugin_in_use": {
+      "http": 409,
+      "retryable": false,
+      "message": "the harness has open sessions; a plugin is not removed from under a session that is using it"
+    },
+    "plugin_remove_failed": {
+      "http": 500,
+      "retryable": true,
+      "message": "the plugin directory could not be removed; the filesystem's own words are in the message"
+    },
+    "runtime_unavailable": {
+      "http": 409,
+      "retryable": false,
+      "message": "the catalog names no runtime for this plugin on this machine; the hub does not run a package manager, so a plugin that needs one must come with runtime sources published"
+    },
+    "runtime_download_failed": {
+      "http": 502,
+      "retryable": true,
+      "message": "an official runtime source could not be fetched; the URL and the transport's own words are in the message"
+    },
+    "runtime_integrity_mismatch": {
+      "http": 502,
+      "retryable": false,
+      "message": "the bytes of a runtime source are not what the recorded integrity says they are; the download is discarded and the installed runtime is left untouched"
+    },
+    "runtime_unpack_failed": {
+      "http": 502,
+      "retryable": false,
+      "message": "a runtime source could not be unpacked (not a tarball, or an entry that leaves the destination); named by entry"
+    },
+    "runtime_install_failed": {
+      "http": 500,
+      "retryable": true,
+      "message": "the verified runtime could not be put in place; the filesystem's own words are in the message"
+    },
+    "plugin_dir_busy": {
+      "http": 502,
+      "retryable": true,
+      "message": "the interrupted plugin install could not be cleared because a process still holds it"
     }
   }
 }
