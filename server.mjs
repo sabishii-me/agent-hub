@@ -1069,8 +1069,30 @@ const SURFACE_EVENTS = [
   'session.compacting',
   'session.compacted',
   'session.renamed',
+  // hub-level, not session-level: the set of installed plugins changed (an install, a
+  // removal, or a runtime's prepare finishing). A client that shows plugins subscribes
+  // once and re-reads on this, instead of polling.
+  'hub.plugins.changed',
 ];
 const SURFACE_EVENT_SET = new Set(SURFACE_EVENTS);
+
+// Clients subscribed to the hub-level event stream (GET /v1/hub/events).
+const hubEventClients = new Set();
+function emitHubEvent(event, data) {
+  if (!SURFACE_EVENT_SET.has(event)) {
+    throw new Error(`undeclared SSE event '${event}': add it to SURFACE_EVENTS and to contract/v1.json`);
+  }
+  const id = `hub-${++eventSeq}`;
+  for (const res of hubEventClients) {
+    try { sseWrite(res, { id, event, data }); } catch { hubEventClients.delete(res); }
+  }
+}
+
+// The hub's plugin view changed; say so, and let every subscriber re-read what it shows.
+function announcePluginsChanged(reason) {
+  try { emitHubEvent('hub.plugins.changed', { reason, at: new Date().toISOString() }); }
+  catch { /* an event nobody can receive is not a reason to fail the change */ }
+}
 
 function emitSessionEvent(sid, event, data) {
   if (!SURFACE_EVENT_SET.has(event)) {
@@ -1371,6 +1393,16 @@ const ROUTES = [
   // A plugin is a directory with a manifest. Two roots: the one a deployment gave
   // this hub (read-only to the hub) and the hub's own inside its data dir. The route
   // says which is which, because a client that installs has to know where it landed.
+  // The hub-level event stream: whatever the plugin set does, once, to every client that
+  // shows plugins. One subscription replaces polling for an install or a prepare.
+  { method: 'GET', path: '/v1/hub/events', handler: ({ res }) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    hubEventClients.add(res);
+    sseWrite(res, { event: 'hub.plugins.changed', data: { reason: 'subscribed', at: new Date().toISOString() } });
+    const drop = () => hubEventClients.delete(res);
+    res.on('close', drop);
+    res.on('error', drop);
+  } },
   { method: 'GET', path: '/v1/hub/plugins', handler: ({ res }) =>
     json(res, 200, { plugins: installedPlugins().map(pluginValue), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR, searched: pluginRoots() } }) },
   { method: 'POST', path: '/v1/hub/plugins', handler: ({ res, body }) =>
@@ -2289,6 +2321,7 @@ function landPlugin(staging, shortId, record, res) {
   writeJson(PLUGINS_FILE, records);
   reconcileHarnesses();
   ensureRuntimeFor(id).catch(() => {});
+  announcePluginsChanged('installed');
   json(res, replacing ? 200 : 201, { plugin: pluginValue(id), updated: replacing });
 }
 
@@ -2339,6 +2372,7 @@ function removePlugin(id, res) {
   const records = readJson(PLUGINS_FILE, {}) || {};
   if (records[id]) { delete records[id]; writeJson(PLUGINS_FILE, records); }
   reconcileHarnesses();
+  announcePluginsChanged('removed');
   json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: installedPlugins().map(pluginValue) });
 }
 
@@ -2493,7 +2527,7 @@ function installCatalogRuntime(id) {
       state.finishedAt = new Date().toISOString();
       throw Object.assign(new Error(e.message), { code: e.code || 'runtime_install_failed' });
     })
-    .finally(() => { state.inFlight = null; });
+    .finally(() => { state.inFlight = null; announcePluginsChanged('runtime'); });
   state.inFlight = inFlight;
   return inFlight;
 }
@@ -2546,7 +2580,7 @@ function prepareRuntime(harnessId, conn = null) {
       state.finishedAt = new Date().toISOString();
       throw Object.assign(new Error(e.message), { code: 'runtime_prepare_failed' });
     })
-    .finally(() => { state.inFlight = null; });
+    .finally(() => { state.inFlight = null; announcePluginsChanged('runtime'); });
   state.inFlight = inFlight;
   return inFlight;
 }

@@ -1147,6 +1147,18 @@
     },
     {
       "method": "GET",
+      "path": "/v1/hub/events",
+      "description": "The hub-level SSE stream: plugin-set changes (an install, a removal, or a runtime prepare finishing). A client that shows plugins subscribes once and re-reads on hub.plugins.changed, instead of polling. Sends hub.plugins.changed immediately on subscribe.",
+      "events": [
+        "hub.plugins.changed"
+      ],
+      "response": {
+        "type": "object",
+        "description": "SSE: no JSON body; frames carry {reason, at}."
+      }
+    },
+    {
+      "method": "GET",
       "path": "/v1/hub/openapi.json",
       "description": "The OpenAPI 3.1 document for this surface, byte for byte as scripts/emit-openapi.mjs generated it from contract/v1.json + contract/errors.json. It is a PROJECTION for tools (client generators, Swagger UI, validators), never a second source: edit the contract and regenerate. The adapter protocol is not HTTP and is not here — it lives in contract/adapter-v1.json and is checked against every manifest, every request the hub sends, every event an adapter emits and every event the hub handles. GET /v1/hub/surface reports this document's sha256, so a client can prove which one it is reading.",
       "response": {
@@ -2737,6 +2749,21 @@
         }
       },
       "description": "Harness notification, not model output. Live stream only; no durable notification history promised."
+    },
+    {
+      "name": "hub.plugins.changed",
+      "payload": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "the set of installed plugins changed (installed | removed | runtime | subscribed); re-read what you show"
     }
   ]
 }
