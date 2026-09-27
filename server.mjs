@@ -71,6 +71,21 @@ function pluginDir(id) {
   }
   return path.join(PLUGINS_DIR, id);
 }
+// A plugin's MANAGED ID is `<kind>-<id>`: the kind states what the plugin is
+// (harness-adapter or model-provider) and the id is the plugin's own short name. The
+// directory under a plugins root is named by the managed id, so a harness and a model
+// provider may share a short id without colliding - they are different things. The
+// manifest inside keeps its own short `id` and states its `kind`; this is the only
+// place that joins them.
+function managedId(kind, id) {
+  return kind && id ? `${kind}-${id}` : id;
+}
+// The manifest's `kind` for a plugin directory whose managed id this is. Read from
+// the manifest, never guessed from the shape of other fields.
+function kindOf(dirId) {
+  const m = manifestOf(dirId);
+  return m && typeof m.kind === 'string' ? m.kind : null;
+}
 // which root a plugin was found in (the writable one is the hub's own)
 function pluginRootOf(id) {
   for (const root of pluginRoots()) {
@@ -410,8 +425,12 @@ function errorBody(code, message, extra) {
 function manifestFault(id) {
   const m = manifestOf(id);
   if (!m) return 'no manifest.json';
-  if (m.id !== id) return `manifest id '${m.id}' is not the plugin directory '${id}'`;
-  const isHarness = m.command !== undefined || m.protocol !== undefined || m.runtime !== undefined || m.capabilities !== undefined || m.extensions !== undefined;
+  // The directory is the plugin's MANAGED id (`<kind>-<id>`); the manifest states the
+  // plugin's own short `id` and its `kind`. The managed id must equal kind-id, so a
+  // mismatch between the manifest and the directory is still caught.
+  if (typeof m.kind !== 'string' || !m.kind) return `manifest declares no kind`;
+  if (m.id !== id && managedId(m.kind, m.id) !== id) return `manifest id '${m.id}' with kind '${m.kind}' is not the plugin directory '${id}'`;
+  const isHarness = m.kind === 'harness-adapter';
   if (m.provider !== undefined) {
     const entry = providerModuleEntry(id);
     if (entry && entry.error) return entry.error;
@@ -1942,7 +1961,7 @@ function pluginValue(id) {
   const providerEntry = providerModuleEntry(id);
   return {
     id,
-    kind: Array.isArray(m.command) ? 'harness' : providerEntry ? 'provider' : 'invalid',
+    kind: typeof m.kind === 'string' ? m.kind : (Array.isArray(m.command) ? 'harness-adapter' : providerEntry ? 'model-provider' : 'invalid'),
     icons: harnessIcons(id),
     provider: m.provider ? { apiVersion: m.provider.apiVersion, module: m.provider.module, types: [...PROVIDER_TYPE_INDEX.values()].filter((x) => x.pluginId === id).map((x) => `${x.descriptor.id}@${x.descriptor.version}`), fault: providerEntry && providerEntry.error ? providerEntry.error : null } : null,
     origin: pluginOrigin(id),
@@ -2144,9 +2163,18 @@ async function installArtifact(a, res) {
       fs.rmSync(staging, { recursive: true, force: true });
       return fail(res, 502, 'plugin_archive_invalid', `the archive declares id '${m.id}' but the artifact was for '${a.id}'`);
     }
-    if (m.version !== a.version) {
+    if (typeof m.kind !== 'string' || !m.kind) {
       fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 502, 'plugin_archive_invalid', `manifest version '${m.version}' does not match artifact '${a.version}'`);
+      return fail(res, 502, 'plugin_archive_invalid', `the archive declares no kind`);
+    }
+    // The version is the manifest's, or the plugin's package.json when the manifest
+    // states none (a provider plugin may carry its version there - pack-plugins reads
+    // the same two places).
+    const mVersion = typeof m.version === 'string' && m.version ? m.version
+      : (() => { try { return JSON.parse(fs.readFileSync(path.join(staging, 'package.json'), 'utf8')).version || null; } catch { return null; } })();
+    if (mVersion !== a.version) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      return fail(res, 502, 'plugin_archive_invalid', `plugin version '${mVersion}' does not match artifact '${a.version}'`);
     }
     return landPlugin(staging, m.id, { source: a.url, ref: null, commit: null, artifact: { id: a.id, version: a.version, url: a.url, sha256: a.sha256.toLowerCase(), size: a.size ?? null } }, res);
   } finally {
@@ -2157,7 +2185,11 @@ async function installArtifact(a, res) {
 // A checked staging directory goes into place, and the answer says what that did.
 // Replacing moves the old copy aside first and removes it only after the new one is
 // in place, so a failure at any step leaves the previous plugin exactly where it was.
-function landPlugin(staging, id, record, res) {
+function landPlugin(staging, shortId, record, res) {
+  // Everything below works in the plugin's MANAGED id (kind + its short id): that is
+  // the directory, and it is the id the rest of the hub addresses the plugin by.
+  const m = readJson(path.join(staging, 'manifest.json'), null) || {};
+  const id = m.kind && m.id ? managedId(m.kind, m.id) : shortId;
   const dest = path.join(HUB_PLUGINS_DIR, id);
   const owner = pluginRootOf(id);
   if (owner && owner !== HUB_PLUGINS_DIR) {
@@ -4266,8 +4298,9 @@ function selfCheck() {
       const dir = pluginDir(id);
       let m = null;
       try { m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch (e) { problems.push(`${id}: manifest.json is not JSON`); continue; }
-      if (m.id !== id) problems.push(`${id}: manifest id '${m.id}' is not the plugin directory name`);
-      const isHarness = m.command !== undefined || m.protocol !== undefined || m.runtime !== undefined || m.capabilities !== undefined || m.extensions !== undefined;
+      if (typeof m.kind !== 'string' || !m.kind) problems.push(`${id}: manifest declares no kind`);
+      else if (m.id !== id && managedId(m.kind, m.id) !== id) problems.push(`${id}: manifest id '${m.id}' with kind '${m.kind}' is not the plugin directory name`);
+      const isHarness = m.kind === 'harness-adapter';
       const hasProvider = m.provider !== undefined;
       if (!isHarness && !hasProvider) problems.push(`${id}: declares neither command (harness adapter) nor provider (hub provider module)`);
       if (isHarness) {

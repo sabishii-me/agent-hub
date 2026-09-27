@@ -129,7 +129,40 @@ async function chat() {
   }
 }
 
+// A plugin is built by the hub, not by the main product it will run in: the hub owns
+// the artifact format (zip.mjs writes what the hub reads), the runtime record, and
+// the registry entry. These commands run the hub's own release tooling against a
+// plugin directory that lives in its own repository.
+function runTool(script, rest) {
+  const r = spawn(process.execPath, [path.join(HERE, 'scripts', script), ...rest], { stdio: 'inherit', windowsHide: true });
+  r.on('exit', (code) => process.exit(code ?? 0));
+}
+
 async function main() {
+  if (pos[0] === 'plugin' && (pos[1] === 'build' || pos[1] === 'pack' || pos[1] === 'runtime')) {
+    // `agent-hub plugin build --plugins <dir> [--only <id>] [--write] [--resolve] [--publish --yes]`
+    // records the runtime, then packs the artifact. `pack` and `runtime` run one half.
+    // rest already begins with `--plugins <dir>`: it is the whole tail after the
+    // subcommand, passed straight to the tool.
+    const rest = argv.slice(argv.indexOf(pos[1]) + 1);
+    const dir = rest[0] === '--plugins' ? rest[1] : rest[0];
+    if (pos[1] !== 'runtime' && !dir) {
+      process.stderr.write('usage: agent-hub plugin ' + pos[1] + ' --plugins <dir> [--only <id>] [--write] [--resolve] [--publish --yes]' + String.fromCharCode(92) + 'n');
+      process.exit(2);
+    }
+    if (pos[1] === 'build') {
+      const runtimeArgs = rest.filter((a, i) => a !== '--publish' && a !== '--yes');
+      const r = spawn(process.execPath, [path.join(HERE, 'scripts', 'record-runtime.mjs'), ...runtimeArgs], { stdio: 'inherit', windowsHide: true });
+      r.on('exit', (code) => {
+        if (code) { process.exit(code); return; }
+        const r2 = spawn(process.execPath, [path.join(HERE, 'scripts', 'pack-plugins.mjs'), ...rest], { stdio: 'inherit', windowsHide: true });
+        r2.on('exit', (c2) => process.exit(c2 ?? 0));
+      });
+      return;
+    }
+    runTool(pos[1] === 'pack' ? 'pack-plugins.mjs' : 'record-runtime.mjs', rest);
+    return;
+  }
   if (pos[0] === 'daemon' && pos[1] === 'start') {
     const child = spawn(process.execPath, [path.join(HERE, 'server.mjs')], { detached: true, windowsHide: true, stdio: 'ignore', env: process.env });
     child.unref();
@@ -237,7 +270,10 @@ async function main() {
         '  agent-hub connection list\n' +
         '  agent-hub connection create <name> <scheme> <endpoint> [envName] [token]\n' +
         '  agent-hub connection enable <id> | disable <id>\n' +
-        '  agent-hub connection delete <id>\n'
+        '  agent-hub connection delete <id>\n' +
+        '  agent-hub plugin build --plugins <dir> [--only <id>] [--resolve] [--write] [--publish --yes]\n' +
+        '  agent-hub plugin pack --plugins <dir> [--write]\n' +
+        '  agent-hub plugin runtime --plugins <dir> [--resolve] [--write]\n'
     );
     process.exit(pos.length ? 2 : 0);
   }

@@ -8,10 +8,11 @@
     "file": "plugins/<id>/manifest.json \u2014 a plugin is a directory; the directory name is its id",
     "required": [
       "id",
-      "protocol",
-      "command"
+      "kind"
     ],
     "optional": [
+      "protocol",
+      "command",
       "runtime",
       "extensions",
       "capabilities",
@@ -26,6 +27,7 @@
     ],
     "fields": {
       "id": "must equal the plugin directory name; a manifest that claims another id is refused",
+      "kind": "what this plugin is, from a fixed set: `harness-adapter` (drives a harness; declares command/protocol) or `model-provider` (ships a hub provider module; declares provider). The hub uses it as the plugin's own type - a harness-adapter and a model-provider may share an id, because they are different things. Also the repo prefix: agent-hub-<kind>-<id>.",
       "protocol": "the adapter protocol this plugin speaks; must equal this file's version, or the hub refuses to start the adapter (harness_invalid)",
       "command": "argv that starts the adapter; relative paths resolve against the plugin directory",
       "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives \u2014 there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. The PLUGIN materialises the package at that version, through the `runtime` capability's `runtime/prepare` method; the hub asks for that and verifies the result, and hands `command` (absolute) to the adapter as AGENT_HUB_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
