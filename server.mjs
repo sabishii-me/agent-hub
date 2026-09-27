@@ -1955,12 +1955,21 @@ const ARTIFACT_TIMEOUT = Number(process.env.AGENT_HUB_ARTIFACT_TIMEOUT_MS || 900
 // whatever was last fetched (or the bundled file), never to a crash.
 const REGISTRY_URL = process.env.AGENT_HUB_REGISTRY_URL || null;
 const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(HERE, 'registry.json');
+// Where a fetched registry is kept, so the URL is consulted at most once.
 const REGISTRY_CACHE = path.join(DATA_DIR, 'registry.json');
-function activeRegistryFile() {
-  return REGISTRY_URL && fs.existsSync(REGISTRY_CACHE) ? REGISTRY_CACHE : REGISTRY_FILE;
+// The registry that is read: the local file if there is one, else a previously
+// fetched copy. A local registry is authoritative - the URL is only how one is
+// obtained when none is present.
+function localRegistryFile() {
+  if (fs.existsSync(REGISTRY_FILE)) return REGISTRY_FILE;
+  if (fs.existsSync(REGISTRY_CACHE)) return REGISTRY_CACHE;
+  return null;
 }
-async function fetchRegistry() {
-  if (!REGISTRY_URL) return;
+// Fetch the registry from the URL ONLY when there is no local one. Once a copy is
+// on disk it is used and the URL is not contacted again, so a hub that has a
+// registry never depends on the network to start or to answer.
+async function ensureRegistry() {
+  if (!REGISTRY_URL || localRegistryFile()) return;
   try {
     const answer = await fetch(REGISTRY_URL, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
     if (!answer.ok) throw new Error(`HTTP ${answer.status}`);
@@ -1971,12 +1980,12 @@ async function fetchRegistry() {
     fs.writeFileSync(REGISTRY_CACHE, text);
     process.stderr.write(`registry: fetched ${REGISTRY_URL} (${raw.plugins.length} entries)\n`);
   } catch (e) {
-    process.stderr.write(`registry: could not fetch ${REGISTRY_URL} (${e.message}); using ${fs.existsSync(REGISTRY_CACHE) ? 'the last fetched copy' : 'the bundled file'}\n`);
+    process.stderr.write(`registry: could not fetch ${REGISTRY_URL} (${e.message}); no registry is in use\n`);
   }
 }
 function catalogValue() {
-  const file = activeRegistryFile();
-  if (!fs.existsSync(file)) return { schema: 1, source: null, plugins: [] };
+  const file = localRegistryFile();
+  if (!file) return { schema: 1, source: null, plugins: [] };
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (e) { return { schema: 1, source: file, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
@@ -4281,7 +4290,7 @@ function selfCheck() {
     process.exit(1);
   }
 }
-await fetchRegistry();
+await ensureRegistry();
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
 `);
