@@ -1,39 +1,16 @@
 {
-  "name": "@sabishii-me/agent-hub",
+  "name": "sabishii-me-agent-hub",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "description": "A local hub that manages agent harnesses: one HTTP+SSE surface on loopback, one plugin per harness.",
-  "license": "UNLICENSED",
-  "bin": {
-    "agent-hub": "./cli.mjs"
-  },
-  "exports": {
-    "./server": "./server.mjs",
-    "./contract/*": "./contract/*",
-    "./zip": "./zip.mjs",
-    "./registry.json": "./registry.json",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "cli.mjs",
-    "server.mjs",
-    "resources.mjs",
-    "runtime.mjs",
-    "secret-store.mjs",
-    "unpack-worker.mjs",
-    "zip.mjs",
-    "build-id.mjs",
-    "debate.mjs",
-    "contract/",
-    "registry.json"
-  ],
+  "repository": "sabishii-me/sabishii-dev-agent-hub",
+  "bin": { "agent-hub": "./cli.mjs" },
   "scripts": {
     "serve": "node server.mjs",
     "cli": "node cli.mjs",
     "pack": "node scripts/pack-plugins.mjs --write && node scripts/record-runtime.mjs --write",
-    "pack:runtime": "node scripts/record-runtime.mjs --write"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "pack:runtime": "node scripts/record-runtime.mjs --write",
+    "pack:hub": "node scripts/pack-hub.mjs"
   }
 }
