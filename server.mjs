@@ -1316,6 +1316,11 @@ const ROUTES = [
     body().then((b) => installPlugin(b, res)).catch((e) => failError(res, e)) },
   { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
     json(res, 200, catalogValue()) },
+  { method: 'POST', path: '/v1/hub/registry/refresh', handler: ({ res }) =>
+    refreshRegistry().then((r) => json(res, 200, r)).catch((e) => {
+      const status = e.code === 'registry_url_missing' ? 409 : 502;
+      return fail(res, status, e.code || 'registry_fetch_failed', e.message);
+    }) },
   { method: 'DELETE', path: '/v1/hub/plugins/{id}', handler: ({ res, params }) =>
     removePlugin(params.id, res) },
   { method: 'POST', path: '/v1/hub/plugins/{id}/prepare', handler: ({ res, params }) => {
@@ -1949,7 +1954,19 @@ const ARTIFACT_TIMEOUT = Number(process.env.AGENT_HUB_ARTIFACT_TIMEOUT_MS || 900
 // downloaded: an install names the artifact it wants (url + sha256), so the digest in
 // the request is what is verified, and a catalog that lies about its own artifact
 // fails the same way a hand-typed URL does.
-const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(HERE, 'registry.json');
+const REGISTRY_URL = process.env.AGENT_HUB_REGISTRY_URL || null;
+const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(DATA_DIR, 'registry.json');
+async function refreshRegistry() {
+  if (!REGISTRY_URL) throw Object.assign(new Error('no registry URL is configured'), { code: 'registry_url_missing' });
+  const answer = await fetch(REGISTRY_URL, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
+  if (!answer.ok) throw Object.assign(new Error(`the registry URL answered ${answer.status}`), { code: 'registry_fetch_failed' });
+  const text = await answer.text();
+  let raw = null;
+  try { raw = JSON.parse(text); } catch (e) { throw Object.assign(new Error(`the registry URL did not return JSON: ${e.message}`), { code: 'registry_fetch_failed' }); }
+  if (!raw || !Array.isArray(raw.plugins)) throw Object.assign(new Error('the registry has no plugins array'), { code: 'registry_fetch_failed' });
+  fs.writeFileSync(REGISTRY_FILE, text);
+  return { source: REGISTRY_FILE, plugins: raw.plugins.length };
+}
 function catalogValue() {
   if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [] };
   let raw = null;
@@ -4255,6 +4272,11 @@ function selfCheck() {
     for (const p of problems) console.error(`  - ${p}`);
     process.exit(1);
   }
+}
+if (!REGISTRY_URL && !fs.existsSync(REGISTRY_FILE)) {
+  console.error(`the hub refuses to start: no registry at ${REGISTRY_FILE}`);
+  console.error('  the desktop seeds one from the file it ships; for a hub with no desktop, set AGENT_HUB_REGISTRY_FILE or AGENT_HUB_REGISTRY_URL (with an explicit refresh).');
+  process.exit(1);
 }
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}

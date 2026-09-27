@@ -1885,6 +1885,21 @@
       }
     },
     {
+      "method": "POST",
+      "path": "/v1/hub/registry/refresh",
+      "description": "Read the configured registry URL (AGENT_HUB_REGISTRY_URL) and write it where the hub reads the catalog. This is the ONLY way the URL is contacted: the hub never fetches at startup, and a missing local registry is an error, not a fetch. Called by a user action that asks to check for adapter updates. 409 when no registry URL is configured; 502 when the URL cannot be read.",
+      "response": {
+        "source": {
+          "type": "string",
+          "description": "the file that was written"
+        },
+        "plugins": {
+          "type": "integer",
+          "description": "how many plugin entries the fetched registry carries"
+        }
+      }
+    },
+    {
       "method": "GET",
       "path": "/v1/hub/plugins",
       "description": "what plugin directories the hub can see, where they came from, and whether each one's runtime is on disk. A plugin is a directory with a manifest; the hub reads the root it was given (AGENT_HUB_PLUGINS_DIR) and, when it is the hub's own, the plugins it installed there. `runtimeReady` is a fact about the filesystem (the manifest's command exists), not a claim about the harness working.",
