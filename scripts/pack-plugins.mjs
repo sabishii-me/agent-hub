@@ -98,8 +98,11 @@ let failed = false;
 
 for (const root of pluginDirs) {
   if (!fs.existsSync(root)) { console.error(`no such plugins directory: ${root}`); failed = true; continue; }
-  for (const name of fs.readdirSync(root).sort()) {
-    const dir = path.join(root, name);
+  // A directory that IS a plugin (it carries a manifest) is that one plugin; a
+  // directory that holds plugins is searched. Named either way, no parent is required.
+  const names = fs.existsSync(path.join(root, 'manifest.json')) ? ['.'] : fs.readdirSync(root).sort();
+  for (const name of names) {
+    const dir = name === '.' ? root : path.join(root, name);
     const manifestFile = path.join(dir, 'manifest.json');
     if (!fs.existsSync(manifestFile)) continue;
     const manifest = readJson(manifestFile, null);

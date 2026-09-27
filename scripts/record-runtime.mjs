@@ -123,8 +123,9 @@ async function tarballEntries(url, log) {
 
 let failed = false;
 let changed = false;
-for (const name of fs.readdirSync(pluginsDir).sort()) {
-  const dir = path.join(pluginsDir, name);
+const runtimeNames = fs.existsSync(path.join(pluginsDir, 'manifest.json')) ? ['.'] : fs.readdirSync(pluginsDir).sort();
+for (const name of runtimeNames) {
+  const dir = name === '.' ? pluginsDir : path.join(pluginsDir, name);
   const manifest = readJson(path.join(dir, 'manifest.json'), null);
   if (!manifest || !manifest.runtime || !manifest.runtime.package || !manifest.runtime.version) continue;
   if (only.length && !only.includes(manifest.id)) continue;
