@@ -43,8 +43,8 @@
         {
           "version": "0.1.4",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.4/harness-adapter-deepseek-0.1.4.zip",
-          "sha256": "1c60c2aa51126dd9b3bac29332afff1ed9f51ab50001c1660e2f74add941bcf4",
-          "size": 43990,
+          "sha256": "830f75aea09447c1035586c69c1bdfe97b7dbc4b1bd41b4452dc797a3212c167",
+          "size": 64999,
           "releasedAt": "2026-09-27"
         }
       ]
@@ -95,8 +95,8 @@
         {
           "version": "0.1.5",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.5/harness-adapter-jouzu-0.1.5.zip",
-          "sha256": "b2c3edf40b437f779e5968867cc98449db37e4b961b40825ba50ea64ce98770c",
-          "size": 622536,
+          "sha256": "05fd787bd5f839f6df0321821d0791dae516fac5cf946cf4b3b490865be93011",
+          "size": 622940,
           "releasedAt": "2026-09-27"
         }
       ]
@@ -127,8 +127,8 @@
         {
           "version": "0.1.4",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.4/harness-adapter-pi-0.1.4.zip",
-          "sha256": "64b4772d4c415b806c403bff05e87ec4b556da4e0e08d77169627704cb0f3537",
-          "size": 40958,
+          "sha256": "999d379cfc63e844cde49d2964662503e040c60e8ea1872ce53d4e2bd180b127",
+          "size": 41386,
           "releasedAt": "2026-09-27"
         }
       ]
