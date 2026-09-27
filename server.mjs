@@ -734,7 +734,12 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
     throw Object.assign(new Error(`harness '${harnessId}' cannot be used: ${fault}`), { code: 'harness_invalid' });
   }
   const dir = pluginDir(harnessId);
-  const [cmd, ...args] = m.command;
+  const [cmd, ...rawArgs] = m.command;
+  // The script argument is resolved against the plugin directory, so the process's
+  // command line NAMES its plugin. A bare `deepseek-adapter.cjs` in the command line is
+  // how a running adapter survived a removal once: the removal finds a harness's process
+  // by what it was started with, and a relative path names nothing it can match.
+  const args = rawArgs.map((part) => (part.startsWith('-') ? part : path.resolve(dir, part)));
   // The runtime an adapter drives is declared by its manifest, not discovered by
   // the adapter: there is no "system install" to fall back to, and an adapter
   // that went looking on its own would make the pin a comment instead of a fact.
@@ -2395,7 +2400,8 @@ function stopHarnessProcesses(harnessId) {
       'Get-CimInstance Win32_Process | Where-Object {',
       '  $_.ProcessId -ne $PID -and (',
       '    ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($plugin, [StringComparison]::OrdinalIgnoreCase)) -or',
-      '    ($_.CommandLine -and $_.CommandLine.Contains($agents))',
+      '    ($_.CommandLine -and $_.CommandLine.Contains($agents)) -or',
+      '    ($_.CommandLine -and $_.CommandLine.Contains($plugin))',
       '  )',
       '} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }',
       '',
