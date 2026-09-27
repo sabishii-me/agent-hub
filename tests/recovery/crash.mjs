@@ -4,7 +4,7 @@
 // when the application itself was killed.
 import fs from 'node:fs';
 import path from 'node:path';
-import { Hub, AssetServer, adapter, client, sleep, tally, contractStamp } from './lib/hub-harness.mjs';
+import { Hub, AssetServer, adapter, client, sleep, tally, contractStamp } from '../lib/hub-harness.mjs';
 
 const stamp = contractStamp();
 console.log(`crash-recovery against contract protocol=${stamp.protocol} version=${stamp.version} sha=${stamp.contractSha}`);

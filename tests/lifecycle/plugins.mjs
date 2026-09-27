@@ -1,7 +1,7 @@
 // @since hub 0.1.5 / contract v1 (see contractStamp() in the run output)
 // The plugin install/remove lifecycle under attack: concurrent work, staggered work,
 // same-id races, and a client that aborts mid-flight. Behaviour, not structure.
-import { Hub, AssetServer, adapter, client, sleep, tally, contractStamp } from './lib/hub-harness.mjs';
+import { Hub, AssetServer, adapter, client, sleep, tally, contractStamp } from '../lib/hub-harness.mjs';
 
 const stamp = contractStamp();
 console.log(`plugins-lifecycle against contract protocol=${stamp.protocol} version=${stamp.version} sha=${stamp.contractSha} build=${stamp.buildId}`);

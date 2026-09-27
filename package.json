@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "A local hub that manages agent harnesses: one HTTP+SSE surface on loopback, one plugin per harness.",
-  "repository": "sabishii-me/sabishii-dev-agent-hub",
+  "repository": "sabishii-me/agent-hub",
   "bin": {
     "agent-hub": "./cli.mjs"
   },

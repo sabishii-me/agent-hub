@@ -1,7 +1,7 @@
 // @since hub 0.1.5 / contract v1
 // The hub-level event stream: it announces plugin-set changes, survives a client dropping
 // and reconnecting, and a reconnect still receives later events.
-import { Hub, AssetServer, adapter, client, subscribe, sleep, tally, contractStamp } from './lib/hub-harness.mjs';
+import { Hub, AssetServer, adapter, client, subscribe, sleep, tally, contractStamp } from '../lib/hub-harness.mjs';
 
 const stamp = contractStamp();
 console.log(`events-reconnect against contract protocol=${stamp.protocol} version=${stamp.version} sha=${stamp.contractSha}`);

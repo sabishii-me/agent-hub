@@ -1,6 +1,6 @@
 // @since hub 0.1.5 / contract v1
 // Malformed and hostile requests: the hub refuses them as DATA and stays alive.
-import { Hub, AssetServer, adapter, client, tally, contractStamp } from './lib/hub-harness.mjs';
+import { Hub, AssetServer, adapter, client, tally, contractStamp } from '../lib/hub-harness.mjs';
 
 const stamp = contractStamp();
 console.log(`hostile-requests against contract protocol=${stamp.protocol} version=${stamp.version} sha=${stamp.contractSha}`);
