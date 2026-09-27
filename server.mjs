@@ -600,7 +600,9 @@ async function serveHarnessIcon(id, variant, res) {
       }
     }
   }
-  const entry = (catalogValue().plugins || []).find((e) => e && e.id === id);
+  // The registry entry's id is the plugin's SHORT id; the id here is the managed
+  // `<kind>-<id>`. Match on the managed id so both address the same entry.
+  const entry = (catalogValue().plugins || []).find((e) => e && e.id && managedId(e.kind, e.id) === id);
   const icon = entry && entry.icon && typeof entry.icon === 'object' ? entry.icon : null;
   const url = icon ? (variant === 'dark' ? (icon.dark ?? icon.light) : (icon.light ?? icon.dark)) : null;
   if (typeof url !== 'string' || !url) return fail(res, 404, 'not_found', `no '${variant}' icon for '${id}'`);
