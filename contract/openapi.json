@@ -7886,6 +7886,122 @@
         }
       }
     },
+    "/v1/hub/registry/refresh": {
+      "post": {
+        "operationId": "postHubRegistryRefresh",
+        "tags": [
+          "hub"
+        ],
+        "description": "Read the configured registry URL (AGENT_HUB_REGISTRY_URL) and write it where the hub reads the catalog. This is the ONLY way the URL is contacted: the hub never fetches at startup, and a missing local registry is an error, not a fetch. Called by a user action that asks to check for adapter updates. 409 when no registry URL is configured; 502 when the URL cannot be read.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "description": "the file that was written"
+                    },
+                    "plugins": {
+                      "type": "integer",
+                      "description": "how many plugin entries the fetched registry carries"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "plugins"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "error: validation_failed, invalid_cursor, provider_unauthorized, unknown_turn — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error: unauthorized (retryable), bad_token (retryable) — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "error: not_found, harness_not_found, provider_not_found, connection_not_found, model_not_found, unknown_session, approval_not_found, question_not_found — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "error: build_mismatch, harness_disabled, session_busy, requires_new_session, needs_repair, idempotency_conflict, revision_conflict, catalog_not_loaded, catalog_stale, session_closed (retryable), session_deleted, no_resume_ref, not_needs_repair (retryable), agent_preset_locked, already_exists, conflict, plugin_in_use, runtime_unavailable — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "error: harness_invalid, internal_error (retryable), plugin_remove_failed (retryable), runtime_install_failed (retryable) — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "error: not_implemented, unsupported — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "error: adapter_unreachable (retryable), adapter_crash, provider_catalog_failed, model_mismatch (retryable), repair_failed (retryable), model_not_applied (retryable), fork_failed (retryable), compact_failed (retryable), runtime_prepare_failed (retryable), plugin_install_failed (retryable), history_unavailable, artifact_download_failed (retryable), artifact_digest_mismatch, plugin_archive_invalid, runtime_download_failed (retryable), runtime_integrity_mismatch, runtime_unpack_failed, plugin_dir_busy (retryable) — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error: upstream_blocked (retryable) — the master table is contract/errors.json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/hub/plugins": {
       "get": {
         "operationId": "getHubPlugins",

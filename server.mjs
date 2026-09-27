@@ -1316,6 +1316,11 @@ const ROUTES = [
     body().then((b) => installPlugin(b, res)).catch((e) => failError(res, e)) },
   { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
     json(res, 200, catalogValue()) },
+  { method: 'POST', path: '/v1/hub/registry/refresh', handler: ({ res }) =>
+    refreshRegistry().then((r) => json(res, 200, r)).catch((e) => {
+      const status = e.code === 'registry_url_missing' ? 409 : 502;
+      return fail(res, status, e.code || 'registry_fetch_failed', e.message);
+    }) },
   { method: 'DELETE', path: '/v1/hub/plugins/{id}', handler: ({ res, params }) =>
     removePlugin(params.id, res) },
   { method: 'POST', path: '/v1/hub/plugins/{id}/prepare', handler: ({ res, params }) => {
@@ -1949,50 +1954,28 @@ const ARTIFACT_TIMEOUT = Number(process.env.AGENT_HUB_ARTIFACT_TIMEOUT_MS || 900
 // downloaded: an install names the artifact it wants (url + sha256), so the digest in
 // the request is what is verified, and a catalog that lies about its own artifact
 // fails the same way a hand-typed URL does.
-// The registry can come from a URL (the deployment names one) or from a file. A URL
-// is fetched once at startup into this hub's data dir and read from there, so the
-// catalog stays a local synchronous read and an unreachable registry degrades to
-// whatever was last fetched (or the bundled file), never to a crash.
 const REGISTRY_URL = process.env.AGENT_HUB_REGISTRY_URL || null;
-const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(HERE, 'registry.json');
-// Where a fetched registry is kept, so the URL is consulted at most once.
-const REGISTRY_CACHE = path.join(DATA_DIR, 'registry.json');
-// The registry that is read: the local file if there is one, else a previously
-// fetched copy. A local registry is authoritative - the URL is only how one is
-// obtained when none is present.
-function localRegistryFile() {
-  if (fs.existsSync(REGISTRY_FILE)) return REGISTRY_FILE;
-  if (fs.existsSync(REGISTRY_CACHE)) return REGISTRY_CACHE;
-  return null;
-}
-// Fetch the registry from the URL ONLY when there is no local one. Once a copy is
-// on disk it is used and the URL is not contacted again, so a hub that has a
-// registry never depends on the network to start or to answer.
-async function ensureRegistry() {
-  if (!REGISTRY_URL || localRegistryFile()) return;
-  try {
-    const answer = await fetch(REGISTRY_URL, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
-    if (!answer.ok) throw new Error(`HTTP ${answer.status}`);
-    const text = await answer.text();
-    const raw = JSON.parse(text);
-    if (!raw || !Array.isArray(raw.plugins)) throw new Error('no plugins array');
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(REGISTRY_CACHE, text);
-    process.stderr.write(`registry: fetched ${REGISTRY_URL} (${raw.plugins.length} entries)\n`);
-  } catch (e) {
-    process.stderr.write(`registry: could not fetch ${REGISTRY_URL} (${e.message}); no registry is in use\n`);
-  }
+const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(DATA_DIR, 'registry.json');
+async function refreshRegistry() {
+  if (!REGISTRY_URL) throw Object.assign(new Error('no registry URL is configured'), { code: 'registry_url_missing' });
+  const answer = await fetch(REGISTRY_URL, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
+  if (!answer.ok) throw Object.assign(new Error(`the registry URL answered ${answer.status}`), { code: 'registry_fetch_failed' });
+  const text = await answer.text();
+  let raw = null;
+  try { raw = JSON.parse(text); } catch (e) { throw Object.assign(new Error(`the registry URL did not return JSON: ${e.message}`), { code: 'registry_fetch_failed' }); }
+  if (!raw || !Array.isArray(raw.plugins)) throw Object.assign(new Error('the registry has no plugins array'), { code: 'registry_fetch_failed' });
+  fs.writeFileSync(REGISTRY_FILE, text);
+  return { source: REGISTRY_FILE, plugins: raw.plugins.length };
 }
 function catalogValue() {
-  const file = localRegistryFile();
-  if (!file) return { schema: 1, source: null, plugins: [] };
+  if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [] };
   let raw = null;
-  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); }
-  catch (e) { return { schema: 1, source: file, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
+  try { raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); }
+  catch (e) { return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.plugins)) {
-    return { schema: 1, source: file, plugins: [], fault: 'the registry file has no plugins array' };
+    return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: 'the registry file has no plugins array' };
   }
-  return { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: file, note: raw.note ?? null, plugins: raw.plugins };
+  return { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: REGISTRY_FILE, note: raw.note ?? null, plugins: raw.plugins };
 }
 
 // Installing a plugin. Two sources, one landing rule: what lands is a directory with
@@ -4290,7 +4273,11 @@ function selfCheck() {
     process.exit(1);
   }
 }
-await ensureRegistry();
+if (!REGISTRY_URL && !fs.existsSync(REGISTRY_FILE)) {
+  console.error(`the hub refuses to start: no registry at ${REGISTRY_FILE}`);
+  console.error('  the desktop seeds one from the file it ships; for a hub with no desktop, set AGENT_HUB_REGISTRY_FILE or AGENT_HUB_REGISTRY_URL (with an explicit refresh).');
+  process.exit(1);
+}
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
 `);
