@@ -8,3 +8,8 @@ build-id.json
 .vscode/
 .DS_Store
 *.log
+
+# Build output: the plugin zips pack-plugins.mjs writes. Publishing uploads
+# them to each plugin's own GitHub Release; the registry names those URLs, so
+# no build product belongs in this repository.
+dist/
