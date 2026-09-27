@@ -552,20 +552,48 @@ function harnessIcons(id) {
 
 // Serve one variant of a harness's icon from its manifest. 404 when the harness or
 // that variant is absent.
-function serveHarnessIcon(id, variant, res) {
+// A mark's content type, from its file name. This is why the hub serves the bytes:
+// a release host hands an SVG back as application/octet-stream with nosniff, which a
+// browser will not draw, while the same bytes under image/svg+xml draw fine.
+function iconMime(name) {
+  const ext = path.extname(name || '').toLowerCase();
+  return ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
+}
+
+// Serve one variant of a harness's icon. An installed harness has the file on disk;
+// one that is not installed has only the URL its registry entry names, fetched here.
+// Either way the bytes go out under the mark's real content type. 404 when the
+// harness declares no mark or its bytes are nowhere.
+async function serveHarnessIcon(id, variant, res) {
   const m = manifestOf(id) || {};
   const decl = m.icons && typeof m.icons === 'object' ? m.icons : null;
-  if (!decl) return fail(res, 404, 'not_found', `no icon for '${id}'`);
-  const name = variant === 'dark' ? (decl.dark ?? decl.light) : (decl.light ?? decl.dark);
-  if (typeof name !== 'string' || !name) return fail(res, 404, 'not_found', `no '${variant}' icon for '${id}'`);
-  const dir = pluginDir(id);
-  const full = path.resolve(dir, name);
-  if (full !== dir && !full.startsWith(dir + path.sep)) return fail(res, 404, 'not_found', `icon path for '${id}' is outside the plugin`);
-  let buf = null;
-  try { buf = fs.readFileSync(full); } catch { return fail(res, 404, 'not_found', `icon file for '${id}' is missing`); }
-  const ext = path.extname(full).toLowerCase();
-  const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
-  res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-cache' });
+  if (decl) {
+    const name = variant === 'dark' ? (decl.dark ?? decl.light) : (decl.light ?? decl.dark);
+    if (typeof name === 'string' && name) {
+      const dir = pluginDir(id);
+      const full = path.resolve(dir, name);
+      if (full !== dir && full.startsWith(dir + path.sep)) {
+        try {
+          const buf = fs.readFileSync(full);
+          res.writeHead(200, { 'content-type': iconMime(name), 'cache-control': 'no-cache' });
+          return res.end(buf);
+        } catch { /* not on disk: fall through to the registry URL */ }
+      }
+    }
+  }
+  const entry = (catalogValue().plugins || []).find((e) => e && e.id === id);
+  const icon = entry && entry.icon && typeof entry.icon === 'object' ? entry.icon : null;
+  const url = icon ? (variant === 'dark' ? (icon.dark ?? icon.light) : (icon.light ?? icon.dark)) : null;
+  if (typeof url !== 'string' || !url) return fail(res, 404, 'not_found', `no '${variant}' icon for '${id}'`);
+  let answer;
+  try {
+    answer = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
+    if (!answer.ok) throw new Error(`HTTP ${answer.status}`);
+  } catch (e) {
+    return fail(res, 502, 'artifact_download_failed', `${url}: ${e.message}`);
+  }
+  const buf = Buffer.from(await answer.arrayBuffer());
+  res.writeHead(200, { 'content-type': iconMime(url), 'cache-control': 'no-cache' });
   res.end(buf);
 }
 
@@ -1324,7 +1352,7 @@ const ROUTES = [
   { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
     json(res, 200, catalogValue()) },
   { method: 'GET', path: '/v1/hub/plugins/{id}/icon/{variant}', handler: ({ res, params }) =>
-    serveHarnessIcon(params.id, params.variant, res) },
+    serveHarnessIcon(params.id, params.variant, res).catch((e) => failError(res, e)) },
   { method: 'POST', path: '/v1/hub/registry/refresh', handler: ({ res }) =>
     refreshRegistry().then((r) => json(res, 200, r)).catch((e) => {
       const status = e.code === 'registry_url_missing' ? 409 : 502;
