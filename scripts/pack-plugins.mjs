@@ -138,44 +138,20 @@ for (const root of pluginDirs) {
       : release.url || null;
     if (!url) { console.error(`${dir}: no repository in release.json and no --repo-template to build a URL from`); failed = true; continue; }
 
+    // A catalog entry: enough to list the adapter and install it, and nothing more.
+    // The runtime closure is NOT here - it ships inside the artifact and is read at
+    // install time; the icon is a URL to a release asset, never inlined bytes.
     const entry = { id: manifest.id, kind };
-    // The runtime as a declaration, verbatim from the manifest: what the plugin will
-    // fetch from the official distribution when it is installed. When the entry already
-    // carries a recorded closure (sources, digests — scripts/record-runtime.mjs), that
-    // record is kept: packing a plugin must never drop the list of official bytes.
-    if (manifest.runtime && typeof manifest.runtime.package === 'string' && typeof manifest.runtime.version === 'string') {
-      const recorded = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id) : null;
-      const held = recorded && recorded.runtime && Array.isArray(recorded.runtime.sources) ? recorded.runtime : null;
-      entry.runtime = held && held.package === manifest.runtime.package && held.version === manifest.runtime.version ? held : { package: manifest.runtime.package, version: manifest.runtime.version };
-    } else {
-      const recorded = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id) : null;
-      if (recorded && recorded.runtime) entry.runtime = recorded.runtime;
-    }
     for (const key of ['name', 'summary', 'description']) if (typeof release[key] === 'string' && release[key].trim()) entry[key] = release[key];
-    // The harness's own mark, from the manifest's {light, dark} file names, inlined as
-    // data URIs. A harness that has NOT been installed has no files on disk - the
-    // registry entry is all a client sees - so the bytes travel in the entry itself
-    // rather than as a path nothing can resolve. Read from this plugin directory; a
-    // declared file that is missing is left out (the client then draws no mark).
-    if (manifest.icons && typeof manifest.icons === 'object') {
-      const inline = (name) => {
-        if (typeof name !== 'string' || !name) return null;
-        const full = path.resolve(dir, name);
-        if (full !== dir && !full.startsWith(dir + path.sep)) return null;
-        try {
-          const buf = fs.readFileSync(full);
-          const ext = path.extname(full).toLowerCase();
-          const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
-          return `data:${mime};base64,${buf.toString('base64')}`;
-        } catch { return null; }
-      };
-      const light = inline(manifest.icons.light ?? manifest.icons.dark);
-      const dark = inline(manifest.icons.dark ?? manifest.icons.light);
-      if (light || dark) entry.icons = { light: light ?? dark, dark: dark ?? light };
-    }
     if (Array.isArray(release.capabilities)) entry.capabilities = release.capabilities;
     else if (Array.isArray(manifest.capabilities)) entry.capabilities = manifest.capabilities;
-    const versionEntry = { version, url, sha256, size: bytes, ...(entry.runtime ? { runtime: entry.runtime } : {}), releasedAt: new Date().toISOString().slice(0, 10) };
+    if (manifest.icons && typeof manifest.icons === 'object' && release.repository) {
+      const asset = (name) => `${repoTemplate.replaceAll('{repository}', release.repository).replaceAll('{version}', version).replaceAll('{id}', manifest.id).replace(/[^/]+$/, path.basename(name))}`;
+      const light = typeof manifest.icons.light === 'string' ? asset(manifest.icons.light) : null;
+      const dark = typeof manifest.icons.dark === 'string' ? asset(manifest.icons.dark) : null;
+      if (light || dark) entry.icon = { light: light ?? dark, dark: dark ?? light };
+    }
+    const versionEntry = { version, url, sha256, size: bytes, releasedAt: new Date().toISOString().slice(0, 10) };
     const previous = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id) : null;
     const published = previous && Array.isArray(previous.versions) ? previous.versions.find((v) => v && v.version === version) : null;
     if (published && published.sha256 !== sha256) {
@@ -184,10 +160,12 @@ for (const root of pluginDirs) {
       failed = true;
       continue;
     }
-    const older = previous && Array.isArray(previous.versions) ? previous.versions.filter((v) => v && v.version !== version) : [];
+    const older = (previous && Array.isArray(previous.versions) ? previous.versions : [])
+      .filter((v) => v && v.version !== version)
+      .map((v) => ({ version: v.version, url: v.url, sha256: v.sha256, size: v.size ?? null, releasedAt: v.releasedAt ?? null }));
     entry.versions = [versionEntry, ...older];
     entries.push(entry);
-    packed.push({ id: manifest.id, version, file: zipPath, bytes, sha256, repository });
+    packed.push({ id: manifest.id, version, file: zipPath, bytes, sha256, repository, dir, icons: manifest.icons && typeof manifest.icons === 'object' ? manifest.icons : null });
     console.log(`${manifest.id} ${version}: ${file} (${(bytes / 1024).toFixed(0)} KB, ${files.length} files)`);
     console.log(`  sha256 ${sha256}`);
     if (entry.runtime) console.log(`  runtime: ${entry.runtime.package}@${entry.runtime.version} (fetched from the official distribution at install time)`);
@@ -213,14 +191,21 @@ if (packed.length && (flag('write') || flag('publish'))) {
 if (flag('publish')) {
   const targets = packed.filter((p) => p.repository);
   for (const p of targets) {
-    const args = ['release', 'create', `v${p.version}`, p.file, '--repo', p.repository, '--title', `${p.id} ${p.version}`, '--notes', `Plugin artifact for ${p.id} ${p.version} (sha256 ${p.sha256}).`];
+    // The mark rides beside the zip as its own asset, so the catalog can name it as
+    // a URL and a not-yet-installed adapter still has an icon.
+    const iconFiles = [];
+    for (const name of [p.icons?.light, p.icons?.dark]) {
+      if (typeof name !== 'string' || !name) continue;
+      const full = path.resolve(p.dir, name);
+      if ((full === p.dir || full.startsWith(p.dir + path.sep)) && fs.existsSync(full) && !iconFiles.includes(full)) iconFiles.push(full);
+    }
+    const assets = [p.file, ...iconFiles];
+    const args = ['release', 'create', `v${p.version}`, ...assets, '--repo', p.repository, '--title', `${p.id} ${p.version}`, '--notes', `Plugin artifact for ${p.id} ${p.version} (sha256 ${p.sha256}).`];
     if (flag('yes')) {
-      // A version that is already published is left alone: re-uploading an asset
-      // would change the bytes behind a digest somebody already verified.
       try {
         execFileSync('gh', ['release', 'view', `v${p.version}`, '--repo', p.repository], { stdio: 'pipe' });
-        console.log(`already published: ${p.repository} v${p.version} — uploading the asset to it`);
-        execFileSync('gh', ['release', 'upload', `v${p.version}`, p.file, '--repo', p.repository, '--clobber'], { stdio: 'inherit' });
+        console.log(`already published: ${p.repository} v${p.version} — uploading the assets to it`);
+        execFileSync('gh', ['release', 'upload', `v${p.version}`, ...assets, '--repo', p.repository, '--clobber'], { stdio: 'inherit' });
       } catch {
         execFileSync('gh', args, { stdio: 'inherit' });
       }

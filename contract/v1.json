@@ -1885,6 +1885,15 @@
       }
     },
     {
+      "method": "GET",
+      "path": "/v1/hub/plugins/{id}/icon/{variant}",
+      "description": "Serve one variant (light|dark) of a harness's own icon, from the file its manifest declares. This is why a catalog entry names an icon URL instead of inlining bytes: a client loads the mark asynchronously and the hub never embeds it.",
+      "response": {
+        "type": "binary",
+        "description": "the icon bytes with their content type; 404 when the harness or the variant is absent"
+      }
+    },
+    {
       "method": "POST",
       "path": "/v1/hub/registry/refresh",
       "description": "Read the configured registry URL (AGENT_HUB_REGISTRY_URL) and write it where the hub reads the catalog. This is the ONLY way the URL is contacted: the hub never fetches at startup, and a missing local registry is an error, not a fetch. Called by a user action that asks to check for adapter updates. 409 when no registry URL is configured; 502 when the URL cannot be read.",

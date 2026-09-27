@@ -1,4 +1,5 @@
-// Record a plugin's RUNTIME as the official distribution it is, into registry.json.
+// Record a plugin's RUNTIME as the official distribution it is, into the plugin's
+// own runtime.sources.json (shipped in its artifact), not the registry.
 //
 //   node scripts/record-runtime.mjs [--plugins <dir>] [--only <id,id>] [--write]
 //                                   [--lockfile <file>] [--resolve]
@@ -53,9 +54,9 @@ function toRepoRelative(target) {
   return rel;
 }
 const pluginsDir = path.resolve(arg('plugins', path.join(HERE, '..', '..', 'plugins')));
-const registryFile = path.resolve(arg('registry', path.join(HERE, 'registry.json')));
 const only = (arg('only', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
 const readJson = (file, fallback = null) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
+const recordedFromFile = (file) => JSON.stringify(readJson(file, null), null, 2);
 
 const npmView = (spec, fields) => {
   const out = execFileSync('npm', ['view', spec, ...fields, '--json'], { encoding: 'utf8', windowsHide: true, shell: process.platform === 'win32', timeout: 120_000 });
@@ -119,9 +120,6 @@ async function tarballEntries(url, log) {
   log(`vendor tarball carries ${names.size} file(s); bundle claims are checked against them`);
   return names;
 }
-
-const registry = readJson(registryFile, null);
-if (!registry || !Array.isArray(registry.plugins)) { console.error(`${registryFile}: no plugins array`); process.exit(1); }
 
 let failed = false;
 let changed = false;
@@ -285,41 +283,17 @@ for (const name of fs.readdirSync(pluginsDir).sort()) {
       recordedFrom: where,
       sources,
     };
-    const entry = registry.plugins.find((p) => p && p.id === manifest.id);
-    if (!entry) { console.error(`[${manifest.id}] is not in ${registryFile}: pack the plugin first`); failed = true; continue; }
-    if (JSON.stringify(entry.runtime || null) !== JSON.stringify(record)) changed = true;
-    const release = entry.versions?.find(v => v.version === manifest.version);
-    if (!release) throw new Error(`no release for plugin ${manifest.id}@${manifest.version}`);
-    // What must be immutable is the ARTIFACT description - the sources and their
-    // integrity - because those are the bytes an installing machine verifies.
-    // `recordedFrom` is provenance annotation that nothing reads, so it is excluded:
-    // correcting it must not demand a plugin version bump. A real change to the
-    // sources still throws.
-    const artifact = (r) => { if (!r) return null; const { recordedFrom: _omit, ...rest } = r; return rest; };
-    if (release.runtime?.sources && JSON.stringify(artifact(release.runtime)) !== JSON.stringify(artifact(record))) {
-      // This is a real difference in the artifact description, and the published
-      // record is the authority: re-running this tool on a different machine must
-      // never replace digests an installing machine may already have verified.
-      // It fires today for jouzu@0.1.2 (164 published vs 151 rebuilt). Do NOT
-      // silence it by regenerating; resolve which lockfile is correct first, or
-      // bump the plugin version so the difference is a new release.
-      const a = artifact(release.runtime).sources || [];
-      const b = artifact(record).sources || [];
-      console.error(`[${manifest.id}] published record has ${a.length} source(s); this machine rebuilds ${b.length} - refusing to overwrite a verified record`);
-      throw new Error(`runtime record for ${manifest.id}@${manifest.version} is immutable; bump the plugin version`);
-    }
-    release.runtime = record;
-    entry.runtime = record;
+    // The runtime closure is the artifact's install detail, so it is written beside
+    // the plugin's manifest - the archive carries it and the hub reads it at install
+    // time. It does NOT go into the registry, which stays a small catalog.
+    const recordFile = path.join(dir, 'runtime.sources.json');
+    if (recordedFromFile(recordFile) !== JSON.stringify(record, null, 2)) changed = true;
+    if (flag('write')) fs.writeFileSync(recordFile, JSON.stringify(record, null, 2) + '\n');
   } catch (e) {
     console.error(`[${manifest.id}] ${e.message}`);
     failed = true;
   }
 }
 
-if (changed && flag('write')) {
-  fs.writeFileSync(registryFile, `${JSON.stringify(registry, null, 2)}\n`);
-  console.log(`registry: ${registryFile} updated`);
-} else if (changed) {
-  console.log('--write was not passed: the registry was not touched');
-}
+if (changed && !flag('write')) console.log('--write was not passed: no runtime.sources.json was written');
 if (failed) process.exitCode = 1;
