@@ -1949,16 +1949,41 @@ const ARTIFACT_TIMEOUT = Number(process.env.AGENT_HUB_ARTIFACT_TIMEOUT_MS || 900
 // downloaded: an install names the artifact it wants (url + sha256), so the digest in
 // the request is what is verified, and a catalog that lies about its own artifact
 // fails the same way a hand-typed URL does.
+// The registry can come from a URL (the deployment names one) or from a file. A URL
+// is fetched once at startup into this hub's data dir and read from there, so the
+// catalog stays a local synchronous read and an unreachable registry degrades to
+// whatever was last fetched (or the bundled file), never to a crash.
+const REGISTRY_URL = process.env.AGENT_HUB_REGISTRY_URL || null;
 const REGISTRY_FILE = process.env.AGENT_HUB_REGISTRY_FILE || path.join(HERE, 'registry.json');
-function catalogValue() {
-  if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [] };
-  let raw = null;
-  try { raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); }
-  catch (e) { return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
-  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.plugins)) {
-    return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: 'the registry file has no plugins array' };
+const REGISTRY_CACHE = path.join(DATA_DIR, 'registry.json');
+function activeRegistryFile() {
+  return REGISTRY_URL && fs.existsSync(REGISTRY_CACHE) ? REGISTRY_CACHE : REGISTRY_FILE;
+}
+async function fetchRegistry() {
+  if (!REGISTRY_URL) return;
+  try {
+    const answer = await fetch(REGISTRY_URL, { redirect: 'follow', signal: AbortSignal.timeout(ARTIFACT_TIMEOUT) });
+    if (!answer.ok) throw new Error(`HTTP ${answer.status}`);
+    const text = await answer.text();
+    const raw = JSON.parse(text);
+    if (!raw || !Array.isArray(raw.plugins)) throw new Error('no plugins array');
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(REGISTRY_CACHE, text);
+    process.stderr.write(`registry: fetched ${REGISTRY_URL} (${raw.plugins.length} entries)\n`);
+  } catch (e) {
+    process.stderr.write(`registry: could not fetch ${REGISTRY_URL} (${e.message}); using ${fs.existsSync(REGISTRY_CACHE) ? 'the last fetched copy' : 'the bundled file'}\n`);
   }
-  return { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: REGISTRY_FILE, note: raw.note ?? null, plugins: raw.plugins };
+}
+function catalogValue() {
+  const file = activeRegistryFile();
+  if (!fs.existsSync(file)) return { schema: 1, source: null, plugins: [] };
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (e) { return { schema: 1, source: file, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.plugins)) {
+    return { schema: 1, source: file, plugins: [], fault: 'the registry file has no plugins array' };
+  }
+  return { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: file, note: raw.note ?? null, plugins: raw.plugins };
 }
 
 // Installing a plugin. Two sources, one landing rule: what lands is a directory with
@@ -4256,6 +4281,7 @@ function selfCheck() {
     process.exit(1);
   }
 }
+await fetchRegistry();
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
 `);
