@@ -152,6 +152,27 @@ for (const root of pluginDirs) {
       if (recorded && recorded.runtime) entry.runtime = recorded.runtime;
     }
     for (const key of ['name', 'summary', 'description']) if (typeof release[key] === 'string' && release[key].trim()) entry[key] = release[key];
+    // The harness's own mark, from the manifest's {light, dark} file names, inlined as
+    // data URIs. A harness that has NOT been installed has no files on disk - the
+    // registry entry is all a client sees - so the bytes travel in the entry itself
+    // rather than as a path nothing can resolve. Read from this plugin directory; a
+    // declared file that is missing is left out (the client then draws no mark).
+    if (manifest.icons && typeof manifest.icons === 'object') {
+      const inline = (name) => {
+        if (typeof name !== 'string' || !name) return null;
+        const full = path.resolve(dir, name);
+        if (full !== dir && !full.startsWith(dir + path.sep)) return null;
+        try {
+          const buf = fs.readFileSync(full);
+          const ext = path.extname(full).toLowerCase();
+          const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
+          return `data:${mime};base64,${buf.toString('base64')}`;
+        } catch { return null; }
+      };
+      const light = inline(manifest.icons.light ?? manifest.icons.dark);
+      const dark = inline(manifest.icons.dark ?? manifest.icons.light);
+      if (light || dark) entry.icons = { light: light ?? dark, dark: dark ?? light };
+    }
     if (Array.isArray(release.capabilities)) entry.capabilities = release.capabilities;
     else if (Array.isArray(manifest.capabilities)) entry.capabilities = manifest.capabilities;
     const versionEntry = { version, url, sha256, size: bytes, ...(entry.runtime ? { runtime: entry.runtime } : {}), releasedAt: new Date().toISOString().slice(0, 10) };

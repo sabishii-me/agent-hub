@@ -506,6 +506,7 @@ function listHarnesses() {
       id: row.id,
       name: m.name || row.id,
       base: m.base || row.id,
+      icons: harnessIcons(row.id),
       // Two facts, both published (ADR-0004). `adapterVersion` is this deployment's
       // release of the plugin; `runtimeVersion` is the harness it drives. Neither is
       // derivable from the other, so neither is dropped - and there is deliberately
@@ -534,12 +535,40 @@ function isHarnessEnabled(id) {
   return row ? row.enabled === true : false;
 }
 
+// The harness's icon, taken from its own manifest and returned as a data URI.
+// The icon is the plugin's own asset (manifest.icons: {light, dark} naming files
+// beside the manifest); the hub reads those bytes so a client draws the mark the
+// plugin ships, without the client importing adapter code or reaching the disk.
+// A harness that declares no icon returns null and the client draws none.
+function harnessIcons(id) {
+  const m = manifestOf(id) || {};
+  const decl = m.icons;
+  if (!decl || typeof decl !== 'object') return null;
+  const dir = pluginDir(id);
+  const read = (name) => {
+    if (typeof name !== 'string' || !name) return null;
+    const full = path.resolve(dir, name);
+    if (full !== dir && !full.startsWith(dir + path.sep)) return null;
+    try {
+      const buf = fs.readFileSync(full);
+      const ext = path.extname(full).toLowerCase();
+      const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
+      return `data:${mime};base64,${buf.toString('base64')}`;
+    } catch { return null; }
+  };
+  const light = read(decl.light ?? decl.dark);
+  const dark = read(decl.dark ?? decl.light);
+  if (!light && !dark) return null;
+  return { light: light ?? dark, dark: dark ?? light };
+}
+
 // The hub's view of one harness: what the plugin is, plus what the hub has
 // installed for it.
 function harnessValue(row) {
   const m = manifestOf(row.id) || {};
   return {
     id: row.id,
+    icons: harnessIcons(row.id),
     enabled: row.enabled === true,
     extensions: Array.isArray(row.extensions) ? row.extensions : [],
     skills: Array.isArray(row.skills) ? row.skills : null,
@@ -1872,6 +1901,7 @@ function pluginValue(id) {
   return {
     id,
     kind: Array.isArray(m.command) ? 'harness' : providerEntry ? 'provider' : 'invalid',
+    icons: harnessIcons(id),
     provider: m.provider ? { apiVersion: m.provider.apiVersion, module: m.provider.module, types: [...PROVIDER_TYPE_INDEX.values()].filter((x) => x.pluginId === id).map((x) => `${x.descriptor.id}@${x.descriptor.version}`), fault: providerEntry && providerEntry.error ? providerEntry.error : null } : null,
     origin: pluginOrigin(id),
     path: pluginDir(id),
