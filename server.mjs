@@ -12,6 +12,7 @@ import { listSkillResources, readSkillResource } from "./resources.mjs";
 // server-side copy. Assistant message ids are adapter-native, never forged.
 
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -175,7 +176,7 @@ const HUB_VERSION = (() => {
   catch { return null; }
 })();
 
-adoptLegacyDataDir();
+await adoptLegacyDataDir();
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
 const NL = String.fromCharCode(10);
@@ -233,19 +234,22 @@ const token = crypto.randomBytes(32).toString('hex');
 // there, and nothing about this migration is worth losing them over. Session refs point
 // at absolute paths, so sessions from before the migration keep reading from the old
 // directory — which is exactly why it is not deleted.
-function adoptLegacyDataDir() {
+async function adoptLegacyDataDir() {
   if (process.env.AGENT_HUB_DATA_DIR || fs.existsSync(DATA_DIR)) return;
   const legacy = path.join(os.homedir(), '.prts-core');
   if (!fs.existsSync(legacy)) return;
   const staging = `${DATA_DIR}.migrating-${process.pid}`;
   try {
-    fs.rmSync(staging, { recursive: true, force: true });
-    fs.mkdirSync(path.dirname(DATA_DIR), { recursive: true });
-    fs.cpSync(legacy, staging, { recursive: true });
-    fs.renameSync(staging, DATA_DIR);
+    // A copy of a whole data dir can be large: async, so a startup that adopts an old
+    // directory never holds the loop (ADR-0009 is a floor, not a request-path rule, and
+    // this runs before serving either way).
+    await fsp.rm(staging, { recursive: true, force: true });
+    await fsp.mkdir(path.dirname(DATA_DIR), { recursive: true });
+    await fsp.cp(legacy, staging, { recursive: true });
+    await fsp.rename(staging, DATA_DIR);
     process.stdout.write(`data dir: adopted ${legacy} as ${DATA_DIR} (the old directory is left untouched; delete it when nothing reads it any more)\n`);
   } catch (e) {
-    fs.rmSync(staging, { recursive: true, force: true });
+    await fsp.rm(staging, { recursive: true, force: true });
     process.stdout.write(`data dir: could not adopt ${legacy} (${e.message}); starting fresh at ${DATA_DIR}\n`);
   }
 }
@@ -800,7 +804,7 @@ function spawnAdapter(sid, harnessId, cwd, additionalDirectories = null) {
     windowsHide: true,
     cwd: dir,
     // (inherit the terminal's own login/upstream). private = isolated home.
-    env: { ...adapterEnvironment(), AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { AGENT_HUB_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), AGENT_HUB_SESSION_ID: sid, AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir, ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
+    env: { ...adapterEnvironment(), AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: cwd || process.cwd(), ...(Array.isArray(additionalDirectories) && additionalDirectories.length ? { AGENT_HUB_ADDITIONAL_DIRS: JSON.stringify(additionalDirectories) } : {}), AGENT_HUB_SESSION_ID: sid, AGENT_HUB_INSTALLED_EXTENSIONS_DIR: extensionsDirOf(harnessId), AGENT_HUB_INSTALLED_SKILLS_DIR: skillsDirOf(harnessId), ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}), ...connectionEnv() },
     // stderr is CAPTURED as well as echoed: when an adapter dies before it can
     // answer, its own last words are the only useful part of the error, and a
     // caller who forgot to materialise the runtime should be told that instead of
@@ -1458,8 +1462,18 @@ const ROUTES = [
   } },
   { method: 'GET', path: '/v1/hub/plugins', handler: ({ res }) =>
     json(res, 200, { plugins: pluginList(), roots: { given: GIVEN_PLUGINS_DIR, hub: HUB_PLUGINS_DIR, searched: pluginRoots() } }) },
-  { method: 'POST', path: '/v1/hub/plugins', handler: ({ res, body }) =>
-    body().then(async (b) => await installPlugin(b, res)).catch((e) => failError(res, e)) },
+  { method: 'POST', path: '/v1/hub/plugins', handler: async ({ res, body }) => {
+    // Long route (ADR-0009): 202 + Location now, install in the background. The Location
+    // is the COLLECTION: the plugin's id is read from its manifest during the work and is
+    // not knowable here, so the resource appears in the list when it lands - which is what
+    // Location names (the list is where the new resource can be watched). The install
+    // publishes its own progress as the plugin's state and on the event stream.
+    let b = null;
+    try { b = await body(); } catch (e) { return failError(res, e); }
+    return acceptLong(res, { location: '/v1/hub/plugins',
+      validate: () => { const v = validateInstallSource(b, res); return v.fail || null; },
+      work: (sink) => installPlugin(b, sink) });
+  } },
   { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
     json(res, 200, catalogValue()) },
   { method: 'GET', path: '/v1/hub/plugins/{id}/icon/{variant}', handler: ({ res, params }) =>
@@ -1469,8 +1483,14 @@ const ROUTES = [
       const status = e.code === 'registry_url_missing' ? 409 : 502;
       return fail(res, status, e.code || 'registry_fetch_failed', e.message);
     }) },
-  { method: 'DELETE', path: '/v1/hub/plugins/{id}', handler: ({ res, params }) =>
-    removePlugin(params.id, res).catch((e) => failError(res, e)) },
+  { method: 'DELETE', path: '/v1/hub/plugins/{id}', handler: ({ res, params }) => {
+    // Long route (ADR-0009): 202 + Location now, remove in the background. The plugin's
+    // own state shows progress and outcome; the event stream says when to re-read.
+    let dir = null;
+    return acceptLong(res, { location: `/v1/hub/plugins/${params.id}`,
+      validate: () => { const r = removePrecondition(params.id, res); if (r.fail) return r.fail; dir = r.dir; return null; },
+      work: () => runRemove(params.id, dir) });
+  } },
   { method: 'POST', path: '/v1/hub/plugins/{id}/prepare', handler: ({ res, params }) => {
     if (!manifestOf(params.id)) return fail(res, 404, 'harness_not_found', `no plugin '${params.id}'`);
     const caps = (manifestOf(params.id) || {}).capabilities || [];
@@ -1559,10 +1579,12 @@ const ROUTES = [
   // ---- skills: a directory per skill, round-tripped byte for byte ----------
   { method: 'GET', path: '/v1/hub/skills', handler: ({ res }) =>
     json(res, 200, { skills: listSkills() }) },
-  { method: 'DELETE', path: '/v1/hub/skills/{id}', handler: ({ res, params }) => {
+  { method: 'DELETE', path: '/v1/hub/skills/{id}', handler: async ({ res, params }) => {
     let dir;
     try { dir = skillDir(params.id); } catch (e) { return fail(res, 400, 'validation_failed', e.message); }
-    fs.rmSync(dir, { recursive: true, force: true });
+    // A skill is a small tree, but the floor (ADR-0009) is absolute: no synchronous I/O
+    // on a request path, so this is async like every other delete.
+    await fsp.rm(dir, { recursive: true, force: true });
     return json(res, 200, { ok: true, id: params.id });
   } },
   { method: 'GET', path: '/v1/hub/skills/{id}/files/{file...}', handler: ({ res, params }) => {
@@ -2214,24 +2236,35 @@ function catalogValue() {
 // paths share it because the only difference is whether a directory was already
 // there. An id living in a root the hub does not own (a deployment's checkout) is
 // refused: that tree is somebody else's.
-async function installPlugin(body, res) {
+// The shape a source must have, checked cheaply and with no I/O so a bad request is
+// answered 4xx BEFORE the install is accepted (a 202 for work that can never run would be
+// a lie). Returns {source} or {fail}. It changes nothing.
+function validateInstallSource(body, res) {
   const source = body && body.source;
   if (!source || typeof source !== 'object') {
-    return fail(res, 400, 'validation_failed', 'source is required: {url, ref?} for a git checkout, or {artifact:{url, sha256, id, version}} for a release artifact');
+    return { fail: fail(res, 400, 'validation_failed', 'source is required: {url, ref?} for a git checkout, or {artifact:{url, sha256, id, version}} for a release artifact') };
   }
   if (source.artifact !== undefined) {
     if (source.url !== undefined || source.ref !== undefined) {
-      return fail(res, 400, 'validation_failed', 'source names both a git url and an artifact: say one');
+      return { fail: fail(res, 400, 'validation_failed', 'source names both a git url and an artifact: say one') };
     }
-    return await installArtifact(source.artifact, res);
+    return { source };
   }
   if (typeof source.url !== 'string' || !source.url.trim()) {
-    return fail(res, 400, 'validation_failed', 'source.url is required (a git URL or a local path)');
+    return { fail: fail(res, 400, 'validation_failed', 'source.url is required (a git URL or a local path)') };
   }
   if (source.ref !== undefined && typeof source.ref !== 'string') {
-    return fail(res, 400, 'validation_failed', 'source.ref must be a string');
+    return { fail: fail(res, 400, 'validation_failed', 'source.ref must be a string') };
   }
-  fs.mkdirSync(HUB_PLUGINS_DIR, { recursive: true });
+  return { source };
+}
+
+async function installPlugin(body, res) {
+  const source = body && body.source;
+  if (source.artifact !== undefined) {
+    return await installArtifact(source.artifact, res);
+  }
+  await fsp.mkdir(HUB_PLUGINS_DIR, { recursive: true });
   const staging = path.join(HUB_PLUGINS_DIR, `.staging-${process.pid}-${Date.now()}`);
   const argv = ['clone', '--depth', '1', ...(source.ref ? ['--branch', source.ref] : []), source.url, staging];
   try {
@@ -2239,18 +2272,18 @@ async function installPlugin(body, res) {
     // hub for the whole of it. The hub answers everything else while a clone runs.
     await execFileAsync('git', argv, { windowsHide: true, timeout: 600_000, maxBuffer: 16 * 1024 * 1024 });
   } catch (e) {
-    fs.rmSync(staging, { recursive: true, force: true });
+    await fsp.rm(staging, { recursive: true, force: true });
     const said = String((e.stderr || e.stdout || e.message || '')).trim().split(NL).filter(Boolean).pop() || 'git failed';
     return fail(res, 502, 'plugin_install_failed', `git clone failed: ${said}`);
   }
   const mf = path.join(staging, 'manifest.json');
   if (!fs.existsSync(mf)) {
-    fs.rmSync(staging, { recursive: true, force: true });
+    await fsp.rm(staging, { recursive: true, force: true });
     return fail(res, 502, 'plugin_install_failed', 'the repository has no manifest.json at its root, so it is not a plugin');
   }
   const m = readJson(mf, null) || {};
   if (typeof m.id !== 'string' || !PLUGIN_ID_RE.test(m.id)) {
-    fs.rmSync(staging, { recursive: true, force: true });
+    await fsp.rm(staging, { recursive: true, force: true });
     return fail(res, 502, 'plugin_install_failed', `the manifest declares an unusable id (${JSON.stringify(m.id)})`);
   }
   let commit = null;
@@ -2321,38 +2354,38 @@ async function installArtifact(a, res) {
     try {
       got = await downloadArtifact(a.url, file);
     } catch (e) {
-      return fail(res, 502, 'artifact_download_failed', `${a.url}: ${e.message}`);
+      return failOp(res, key, 502, 'artifact_download_failed', `${a.url}: ${e.message}`);
     }
     if (a.size !== undefined && got.bytes !== a.size) {
-      return fail(res, 502, 'artifact_digest_mismatch', `the artifact says ${a.size} bytes, this download is ${got.bytes}: it is not the release it claims to be`);
+      return failOp(res, key, 502, 'artifact_digest_mismatch', `the artifact says ${a.size} bytes, this download is ${got.bytes}: it is not the release it claims to be`);
     }
     if (got.sha256 !== a.sha256.toLowerCase()) {
-      return fail(res, 502, 'artifact_digest_mismatch', `sha256 mismatch: the artifact says ${a.sha256}, this download hashes to ${got.sha256}`);
+      return failOp(res, key, 502, 'artifact_digest_mismatch', `sha256 mismatch: the artifact says ${a.sha256}, this download hashes to ${got.sha256}`);
     }
     const staging = path.join(HUB_PLUGINS_DIR, `.staging-${process.pid}-${Date.now()}`);
     try {
       extractZipTo(file, staging);
     } catch (e) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 502, 'plugin_archive_invalid', e.message);
+      await fsp.rm(staging, { recursive: true, force: true });
+      return failOp(res, key, 502, 'plugin_archive_invalid', e.message);
     }
     const mf = path.join(staging, 'manifest.json');
     if (!fs.existsSync(mf)) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 502, 'plugin_archive_invalid', 'the archive has no manifest.json at its root, so it is not a plugin');
+      await fsp.rm(staging, { recursive: true, force: true });
+      return failOp(res, key, 502, 'plugin_archive_invalid', 'the archive has no manifest.json at its root, so it is not a plugin');
     }
     const m = readJson(mf, null) || {};
     if (typeof m.id !== 'string' || !PLUGIN_ID_RE.test(m.id)) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 502, 'plugin_archive_invalid', `the manifest declares an unusable id (${JSON.stringify(m.id)})`);
+      await fsp.rm(staging, { recursive: true, force: true });
+      return failOp(res, key, 502, 'plugin_archive_invalid', `the manifest declares an unusable id (${JSON.stringify(m.id)})`);
     }
     if (m.id !== a.id) {
-      fs.rmSync(staging, { recursive: true, force: true });
+      await fsp.rm(staging, { recursive: true, force: true });
       return fail(res, 502, 'plugin_archive_invalid', `the archive declares id '${m.id}' but the artifact was for '${a.id}'`);
     }
     if (typeof m.pluginType !== 'string' || !m.pluginType) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 502, 'plugin_archive_invalid', `the archive declares no kind`);
+      await fsp.rm(staging, { recursive: true, force: true });
+      return failOp(res, key, 502, 'plugin_archive_invalid', `the archive declares no kind`);
     }
     // The version is the manifest's, or the plugin's package.json when the manifest
     // states none (a provider plugin may carry its version there - pack-plugins reads
@@ -2360,12 +2393,12 @@ async function installArtifact(a, res) {
     const mVersion = typeof m.version === 'string' && m.version ? m.version
       : (() => { try { return JSON.parse(fs.readFileSync(path.join(staging, 'package.json'), 'utf8')).version || null; } catch { return null; } })();
     if (mVersion !== a.version) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 502, 'plugin_archive_invalid', `plugin version '${mVersion}' does not match artifact '${a.version}'`);
+      await fsp.rm(staging, { recursive: true, force: true });
+      return failOp(res, key, 502, 'plugin_archive_invalid', `plugin version '${mVersion}' does not match artifact '${a.version}'`);
     }
     return await landPlugin(staging, m.id, { source: a.url, ref: null, commit: null, artifact: { id: a.id, version: a.version, url: a.url, sha256: a.sha256.toLowerCase(), size: a.size ?? null } }, res);
   } finally {
-    fs.rmSync(work, { recursive: true, force: true });
+    await fsp.rm(work, { recursive: true, force: true });
   }
   } finally {
     leaveState(key, 'installing');
@@ -2398,8 +2431,8 @@ async function landPluginBody(staging, id, record, res) {
   const dest = path.join(HUB_PLUGINS_DIR, id);
   const owner = pluginRootOf(id);
   if (owner && owner !== HUB_PLUGINS_DIR) {
-    fs.rmSync(staging, { recursive: true, force: true });
-    return fail(res, 409, 'conflict', `plugin '${id}' is already installed in a directory this hub does not own (${owner}): replacing a deployment's plugin is that deployment's business`);
+    await fsp.rm(staging, { recursive: true, force: true });
+    return failOp(res, id, 409, 'conflict', `plugin '${id}' is already installed in a directory this hub does not own (${owner}): replacing a deployment's plugin is that deployment's business`);
   }
   // A directory at dest is a replace even when it has no manifest: an interrupted
   // install leaves exactly that, and pluginRootOf cannot see it (it looks for a
@@ -2421,8 +2454,8 @@ async function landPluginBody(staging, id, record, res) {
     // nobody can act on. Refused here, by name, exactly like removal.
     const live = openSessions(id);
     if (live.length) {
-      fs.rmSync(staging, { recursive: true, force: true });
-      return fail(res, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
+      await fsp.rm(staging, { recursive: true, force: true });
+      return failOp(res, id, 409, 'plugin_in_use', `harness '${id}' has ${live.length} open session(s) (${live.map((s) => s.id).join(', ')}): close them first`);
     }
   }
   if (destExists && !destHasManifest) {
@@ -2433,13 +2466,13 @@ async function landPluginBody(staging, id, record, res) {
     if (carriedRuntime) {
       try { fs.renameSync(path.join(dest, 'runtime'), carriedRuntime); }
       catch (error) {
-        fs.rmSync(staging, { recursive: true, force: true });
-        return fail(res, 502, 'plugin_dir_busy', `the interrupted install at ${dest} could not be read: ${error.message} — close anything using that harness and retry`);
+        await fsp.rm(staging, { recursive: true, force: true });
+        return failOp(res, id, 502, 'plugin_dir_busy', `the interrupted install at ${dest} could not be read: ${error.message} — close anything using that harness and retry`);
       }
     }
     const held = await rmRetrying(dest);
     if (held) {
-      fs.rmSync(staging, { recursive: true, force: true });
+      await fsp.rm(staging, { recursive: true, force: true });
       if (carriedRuntime) {
         try { fs.mkdirSync(dest, { recursive: true }); fs.renameSync(carriedRuntime, path.join(dest, 'runtime')); } catch { /* the message below is the fact */ }
       }
@@ -2469,7 +2502,7 @@ async function landPluginBody(staging, id, record, res) {
     // would prevent the old directory from being restored after a failed rename.
     try {
       if (aside && fs.existsSync(aside)) {
-        if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+        if (fs.existsSync(dest)) await fsp.rm(dest, { recursive: true, force: true });
         fs.renameSync(aside, dest);
       }
       if (carriedRuntime && fs.existsSync(carriedRuntime)) {
@@ -2479,8 +2512,8 @@ async function landPluginBody(staging, id, record, res) {
     } catch (restoreError) {
       e.message += `; rollback failed: ${restoreError.message}; retained old plugin: ${aside}; runtime: ${carriedRuntime}`;
     }
-    fs.rmSync(staging, { recursive: true, force: true });
-    return fail(res, 502, 'plugin_install_failed', `the plugin could not be put in place: ${e.message}`);
+    await fsp.rm(staging, { recursive: true, force: true });
+    return failOp(res, id, 502, 'plugin_install_failed', `the plugin could not be put in place: ${e.message}`);
   }
   if (aside) {
     // Same Windows reality: the outgoing copy's files may be a moment from being released.
@@ -2508,12 +2541,24 @@ function openSessions(harnessId) {
 // deployment put on the search path is read-only to the hub, and a harness with open
 // sessions is refused rather than yanked out from under them: both refusals name the
 // thing that has to change first.
-async function removePlugin(id, res) {
+// What a removal requires to even begin, checked cheaply so a bad request is answered
+// 4xx BEFORE the work is accepted (a 202 for work that can never run would be a lie).
+// Returns {dir} or {fail}. It changes nothing.
+function removePrecondition(id, res) {
   const dir = pluginDir(id);
-  if (!dir || !fs.existsSync(dir) || !manifestOf(id)) return fail(res, 404, 'not_found', `no plugin '${id}'`);
+  if (!dir || !fs.existsSync(dir) || !manifestOf(id)) return { fail: fail(res, 404, 'not_found', `no plugin '${id}'`) };
   if (pluginOrigin(id) !== 'hub') {
-    return fail(res, 409, 'conflict', `plugin '${id}' is in a directory this hub does not own (${dir}): removing it is that deployment's business`);
+    return { fail: fail(res, 409, 'conflict', `plugin '${id}' is in a directory this hub does not own (${dir}): removing it is that deployment's business`) };
   }
+  return { dir };
+}
+
+// The removal itself. Runs as an accepted, detached command (see acceptLong): it answers
+// nothing. Its progress and its outcome are the plugin's OWN state - the plugin reads
+// `removing` while this runs and `absent` when it is gone - pushed on the event stream.
+// This is the fix ADR-0009 requires: the work no longer holds the caller's connection, so
+// it cannot freeze anyone.
+async function runRemove(id, dir) {
   enterState(id, 'removing');
   try {
   
@@ -2574,8 +2619,10 @@ async function removePlugin(id, res) {
     if (failed) {
       // The files are still there. The intent stays - the removal is unfinished, not
       // cancelled - so a retry or a restart continues it. The record keeps the plugin's
-      // origin, and the row keeps its identity.
-      return fail(res, 409, 'plugin_in_use', `plugin '${id}' is still in use by a process that did not stop: ${failed.message} — its ${closed} session(s) were closed; the removal is unfinished and will continue on retry or restart`);
+      // origin. The failure is published as the plugin's own state (failState -> SSE):
+      // there is no connection left to answer, and the resource is the truth.
+      failState(id, `still in use by a process that did not stop: ${failed.message} — its ${closed} session(s) were closed; the removal is unfinished and will continue on retry or restart`);
+      return;
     }
     // The files are gone. The record follows, which clears the intent; then the registry.
     mutateJson(PLUGINS_FILE, {}, (records) => { delete records[id]; });
@@ -2584,7 +2631,6 @@ async function removePlugin(id, res) {
     // is no longer here.
     await loadProviderPlugins();
     announcePluginsChanged(id);
-    json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: pluginList() });
   } finally { leaveState(id, 'removing'); }
 }
 
@@ -2932,7 +2978,7 @@ function configRpc(harnessId, method, params, { prepared = false } = {}) {
     const proc = spawn(cmd, args, {
     windowsHide: true,
       cwd: dir,
-      env: { ...adapterEnvironment(), AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: process.cwd(), ...(historyOnly ? {} : { AGENT_HUB_INSTALLED_EXTENSIONS_DIR: installExtensions(harnessId).dir, AGENT_HUB_INSTALLED_SKILLS_DIR: installSkills(harnessId).dir }), ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
+      env: { ...adapterEnvironment(), AGENT_HUB_HARNESS_DIR: agentDir, AGENT_HUB_CWD: process.cwd(), ...(historyOnly ? {} : { AGENT_HUB_INSTALLED_EXTENSIONS_DIR: extensionsDirOf(harnessId), AGENT_HUB_INSTALLED_SKILLS_DIR: skillsDirOf(harnessId) }), ...(presetsArgv(harnessId) ? { AGENT_HUB_PRESETS_DIR: presetsArgv(harnessId) } : {}), ...(runtimeArgv ? { AGENT_HUB_RUNTIME_COMMAND: JSON.stringify(runtimeArgv) } : {}) },
       stdio: ['pipe', 'pipe', 'inherit'],
     });
     let buf = '';
@@ -3393,13 +3439,13 @@ function readBundle(baseDir, id) {
 // where its harness reads it. This is the hub's installing job: an adapter
 // never chooses what to install, so adding an extension to a harness is a
 // registry change, not a code change in three adapters.
-function copyTree(src, dst) {
-  fs.mkdirSync(dst, { recursive: true });
-  for (const name of fs.readdirSync(src)) {
+async function copyTree(src, dst) {
+  await fsp.mkdir(dst, { recursive: true });
+  for (const name of await fsp.readdir(src)) {
     const from = path.join(src, name);
     const to = path.join(dst, name);
-    if (fs.statSync(from).isDirectory()) copyTree(from, to);
-    else fs.copyFileSync(from, to);
+    if ((await fsp.stat(from)).isDirectory()) await copyTree(from, to);
+    else await fsp.copyFile(from, to);
   }
 }
 // The hub installs a harness's extensions: the registry says which, and the hub
@@ -3407,16 +3453,22 @@ function copyTree(src, dst) {
 // The set is exact each time — an extension removed from the registry is removed
 // from the install — and the adapter only places what it finds there into the
 // layout its harness reads.
-function installExtensions(harnessId) {
-  const dir = path.join(DATA_DIR, 'agents', harnessId, 'extensions');
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
+// The path an adapter is told to read its extensions from. A pure function of the harness
+// id (no I/O), so building an adapter's env does no work and blocks nothing (ADR-0009).
+// The INSTALL (the audit, below) writes into this path.
+const extensionsDirOf = (harnessId) => path.join(DATA_DIR, 'agents', harnessId, 'extensions');
+// The install is a side effect with I/O, so it is async and runs where a harness is being
+// prepared (initAdapter), not inline while an env object is built.
+async function installExtensions(harnessId) {
+  const dir = extensionsDirOf(harnessId);
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.mkdir(dir, { recursive: true });
   const row = harnessRow(harnessId);
   const wanted = row && Array.isArray(row.extensions) ? row.extensions : [];
   const available = availableExtensions(harnessId);
   const installed = [];
   for (const id of wanted.filter((e) => available.includes(e))) {
-    copyTree(path.join(pluginExtensionsDir(harnessId), id), path.join(dir, id));
+    await copyTree(path.join(pluginExtensionsDir(harnessId), id), path.join(dir, id));
     installed.push(id);
   }
   return { dir, installed };
@@ -3426,16 +3478,17 @@ function installExtensions(harnessId) {
 // only points its harness at the result (pi/jouzu: --skill; dsh: DSH_AGENTS_HOME).
 // The set is exact each time — a skill removed from the registry is removed from the
 // install — and nothing is written near the user's own skill directories.
-function installSkills(harnessId) {
-  const dir = path.join(DATA_DIR, 'agents', harnessId, 'skills');
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  const held = fs.existsSync(SKILLS_DIR) ? fs.readdirSync(SKILLS_DIR) : [];
+const skillsDirOf = (harnessId) => path.join(DATA_DIR, 'agents', harnessId, 'skills');
+async function installSkills(harnessId) {
+  const dir = skillsDirOf(harnessId);
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.mkdir(dir, { recursive: true });
+  const held = fs.existsSync(SKILLS_DIR) ? await fsp.readdir(SKILLS_DIR) : [];
   const row = harnessRow(harnessId);
   const wanted = row && Array.isArray(row.skills) ? row.skills : held;   // null/absent = all
   const installed = [];
   for (const id of wanted.filter((s) => held.includes(s))) {
-    copyTree(path.join(SKILLS_DIR, id), path.join(dir, id));
+    await copyTree(path.join(SKILLS_DIR, id), path.join(dir, id));
     installed.push(id);
   }
   return { dir, installed };
@@ -3575,7 +3628,12 @@ function initAdapter(conn, s, { modelProviderId, modelId, presetId, plan, review
   // where to branch from, and the ref that comes back is the child's own. The
   // source session is never touched, so no adapter of the source needs to be
   // running — the child's process reads the source itself.
-  conn.initializing = ensureRuntime(s.harnessId, conn)
+  // The harness's extensions and skills are installed into its own data dir before the
+  // adapter is started, so the paths the env names (extensionsDirOf/skillsDirOf) hold the
+  // right content. Async I/O: this runs as part of preparing the adapter, not inline while
+  // an env object is built (ADR-0009).
+  conn.initializing = Promise.all([installExtensions(s.harnessId), installSkills(s.harnessId)])
+    .then(() => ensureRuntime(s.harnessId, conn))
     .then(() => (fork
     ? rpc(conn, 'session/fork', { sid: s.id, from: fork.from, ...(fork.throughTurn !== undefined ? { throughTurn: fork.throughTurn } : {}) }, TURN_TIMEOUT)
     : rpc(conn, 'session/start', { sid: s.id, ...(resumeRef ? { resume: resumeRef } : {}) }, TURN_TIMEOUT)))
@@ -4509,6 +4567,63 @@ function fail(res, httpCode, code, message) {
   json(res, httpCode, errorBody(code, message));
 }
 
+// A failure of an operation that may be running DETACHED (ADR-0009): the answer goes to
+// `res` (a no-op sink when detached, the real response otherwise), and the same fact is
+// published as the plugin's own state, so a client reading the resource sees it. One
+// failure, one place it is recorded - never only in a connection that may be gone.
+function failOp(res, id, httpCode, code, message) {
+  if (id) { try { failState(id, message); } catch { /* the state is best-effort; the answer is not */ } }
+  return fail(res, httpCode, code, message);
+}
+
+// ---------------------------------------------------------------------------
+// The model: long work is a command, not a call (ADR-0009).
+//
+// A route whose work can take more than a moment does NOT hold its connection until the
+// work finishes. It answers 202 Accepted with a Location naming the resource whose state
+// will show the outcome (RFC 9110 15.3.3 "accepted for processing, but ... not completed";
+// 10.2.2 Location), and the work runs as an independent async task on the same event loop.
+// Progress and the final state reach a client the way every other change does: the
+// resource's OWN state (GET the Location) pushed on the event stream. There is no second
+// object - no "operation", no job id, no third source of truth.
+//
+// The request still FAILS FAST for a bad one: validate() runs before the 202 and may
+// answer 4xx itself (return the fail(...) result). A caller that named a plugin that does
+// not exist gets 404, not a 202 for work that can never run. Only after validation is the
+// work accepted and detached.
+function accepted(res, location) {
+  if (res.writableEnded) return;
+  res.writeHead(202, { 'content-type': 'application/json', location });
+  res.end(JSON.stringify({ accepted: true, location }));
+}
+// A sink for a detached command whose original function still writes a final result to
+// `res` (installPlugin does). The 202 has already been sent, so those writes are
+// discarded - the resource's state is the truth. Importantly this is the SAME shape as a
+// real res, so the function runs unchanged, and a late failure is swallowed into the
+// state, not into a connection that is gone.
+function sinkRes() {
+  return {
+    writableEnded: true,      // a write after the 202 is a no-op by construction
+    writeHead() { return this; },
+    write() { return true; },
+    end() { return this; },
+    on() { return this; },
+  };
+}
+// `work` is called with the sink so a command written to answer a request can run detached.
+function acceptLong(res, { location, validate, work }) {
+  let early = null;
+  try { early = validate ? validate() : null; } catch (e) { return failError(res, e); }
+  if (early) return early;               // validate() answered the request itself (4xx)
+  accepted(res, location);
+  // Detached on purpose: the request is answered. This must not block it. A failure here
+  // is not lost - the work publishes its own failure as the resource's state
+  // (failState -> SSE), which is the truth a client reads at Location.
+  Promise.resolve().then(() => work(sinkRes())).catch((e) => {
+    try { process.stderr.write(`accepted work failed: ${(e && e.stack) || e}` + NL); } catch {}
+  });
+}
+
 // An error carries its own status: contract/errors.json is the master table, so a
 // caught error is answered with the status its code declares there instead of a
 // default the table would disagree with. (The session routes used to flatten
@@ -4525,7 +4640,11 @@ function fail(res, httpCode, code, message) {
 async function rmRetrying(target, { tries = 6, delayMs = 200 } = {}) {
   for (let attempt = 1; attempt <= tries; attempt++) {
     try {
-      fs.rmSync(target, { recursive: true, force: true });
+      // ASYNC, and actually so: fs.promises.rm runs the delete off the event loop, so a
+      // large tree (this was 363 MB / 28,582 files) does not stop the hub answering.
+      // The synchronous `fs.rmSync` that used to be here held the loop for the whole
+      // delete - the reproduced freeze (ADR-0009).
+      await fs.promises.rm(target, { recursive: true, force: true });
       return null;
     } catch (e) {
       if (attempt === tries) return e;

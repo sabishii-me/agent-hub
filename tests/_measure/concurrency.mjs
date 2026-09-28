@@ -123,9 +123,18 @@ async function main() {
     if (!base.ok) throw new Error(`baseline poll failed: ${base.error || base.status}`);
     log(`baseline poll: ${base.ms}ms`);
 
-    // Start the long operation (the removal) and, at once, poll on a loop.
+    // Issue the removal and, from the moment it is accepted, poll on a loop UNTIL THE
+    // RESOURCE SETTLES (the plugin is gone). This is the measurement that matters now
+    // the route is 202: the request returns at once, but the WORK still runs, and if the
+    // work blocks the loop a concurrent poll still times out. So the poll must cover the
+    // whole lifetime of the work, not just the request.
     const samples = [];
+    const settled = (body) => {
+      try { const j = JSON.parse(body); return !(j.plugins || []).some((p) => p.id === plugin.id); }
+      catch { return false; }
+    };
     let stopped = false;
+    let saw202 = null;
     const poller = (async () => {
       let last = Date.now();
       while (!stopped) {
@@ -138,6 +147,15 @@ async function main() {
     })();
 
     const del = await request(hub.port, hub.token, 'DELETE', `/v1/hub/plugins/${plugin.id}`, { timeout: 60000 });
+    saw202 = del.status;
+    // Wait (bounded) for the plugin to leave the list, still polling.
+    const deadline = Date.now() + 60000;
+    let gone = false;
+    while (Date.now() < deadline) {
+      const r = await request(hub.port, hub.token, 'GET', '/v1/hub/plugins');
+      if (r.ok && settled(r.body)) { gone = true; break; }
+      await new Promise((r2) => setTimeout(r2, 150));
+    }
     stopped = true;
     await poller;
 
@@ -146,7 +164,8 @@ async function main() {
     const worst = Math.max(0, ...samples.map((s) => s.gap));
 
     log('');
-    log(`DELETE -> ${del.ok ? del.status : del.error} in ${del.ms}ms`);
+    log(`DELETE -> ${del.ok ? del.status : del.error} in ${del.ms}ms${saw202 === 202 ? ' (202 Accepted: request returned at once)' : ''}`);
+    log(`resource settled (plugin gone): ${gone}`);
     log(`polls: ${samples.length}`);
     log(`  timeouts (>${POLL_TIMEOUT_MS}ms no answer): ${timeouts.length}`);
     log(`  gaps > ${FREEZE_THRESHOLD_MS}ms: ${bigGaps.length}`);

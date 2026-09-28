@@ -64,11 +64,47 @@ export class Hub {
   /** Kill it as a power cut would: no cleanup, no chance to finish anything. */
   kill() { if (this.child && this.child.exitCode === null) { try { spawnSync('taskkill', ['/PID', String(this.child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* */ } this.child.kill('SIGKILL'); } return sleep(300); }
   async stop() { if (this.child && this.child.exitCode === null) this.child.kill(); await sleep(300); }
-  api() { const base = `http://127.0.0.1:${this.ep.port}`; const H = { authorization: `Bearer ${this.ep.token}`, 'content-type': 'application/json' }; return {
-    plugins: async () => (await (await fetch(`${base}/v1/hub/plugins`, { headers: H })).json()).plugins || [],
-    install: async (a) => await (await fetch(`${base}/v1/hub/plugins`, { method: 'POST', headers: H, body: JSON.stringify({ source: { artifact: a } }) })).json(),
-    remove: async (id) => await (await fetch(`${base}/v1/hub/plugins/${id}`, { method: 'DELETE', headers: H })).json(),
-  }; }
+  api() { const base = `http://127.0.0.1:${this.ep.port}`; const H = { authorization: `Bearer ${this.ep.token}`, 'content-type': 'application/json' };
+    const plugins = async () => (await (await fetch(`${base}/v1/hub/plugins`, { headers: H })).json()).plugins || [];
+    const get = async (p) => await (await fetch(`${base}${p}`, { headers: H })).json();
+    // A long route is a command, not a call (ADR-0009): the request is ACCEPTED (202 +
+    // Location) and the work runs in the background. A caller that wants the finished
+    // resource issues the command, then reads the resource until it settles - which is
+    // what a real client does. `settle` is that read loop; it never assumes the old
+    // synchronous answer.
+    const settle = async (pred, { tries = 600, delay = 100 } = {}) => {
+      for (let i = 0; i < tries; i++) { const list = await plugins(); const hit = list.find(pred); if (hit) return hit; await sleep(delay); }
+      return null;
+    };
+    return {
+      plugins,
+      status: async () => await get('/v1/hub/status'),
+      // Returns the ACCEPTED answer (its `location` is the contract), and waits for the
+      // plugin to SETTLE (ready/failed) so a test asserts the real outcome, not the 202.
+      // A replace settles on the same id, so the wait is on the state, not on presence.
+      install: async (a) => {
+        const before = await plugins();
+        const res = await fetch(`${base}/v1/hub/plugins`, { method: 'POST', headers: H, body: JSON.stringify({ source: { artifact: a } }) });
+        const body = await res.json();
+        // The registry/artifact names the SHORT id; the hub lists the storage key it
+        // built (`<pluginType>-<id>`). Wait on the key, which is what the list carries.
+        const wanted = a.pluginType && a.id ? `${a.pluginType}-${a.id}` : (a.id || a.pluginId);
+        let plugin = null;
+        for (let i = 0; i < 900 && wanted; i++) {
+          const p = (await plugins()).find((x) => x.id === wanted);
+          if (p && ['ready', 'failed'].includes(p.state)) { plugin = p; break; }
+          await sleep(100);
+        }
+        return { ...body, status: res.status, updated: before.some((p) => p.id === wanted), plugin };
+      },
+      // Waits until the plugin is gone, so a caller sees the removal complete.
+      remove: async (id) => {
+        const res = await fetch(`${base}/v1/hub/plugins/${id}`, { method: 'DELETE', headers: H });
+        const body = await res.json();
+        for (let i = 0; i < 600; i++) { if (!(await plugins()).some((p) => p.id === id)) return { ...body, status: res.status, gone: true }; await sleep(100); }
+        return { ...body, status: res.status, gone: false };
+      },
+    }; }
 }
 
 export function tally() { let f = 0; const check = (ok, n, d = '') => { console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${n}${d ? ' - ' + d : ''}`); if (!ok) f++; }; return { check, get failures() { return f; } }; }
