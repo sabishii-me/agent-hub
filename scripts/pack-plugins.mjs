@@ -120,17 +120,20 @@ for (const root of pluginDirs) {
       if (only.includes(manifest.id)) { console.error(what); failed = true; } else console.log(`skipped ${manifest.id}: ${what.split(': ')[1]}`);
       continue;
     }
-    const kind = typeof manifest.kind === 'string' ? manifest.kind : null;
-    if (!kind) { console.error(`${dir}: manifest declares no kind`); failed = true; continue; }
-    const dirId = `${kind}-${manifest.id}`;
+    const pluginType = typeof manifest.pluginType === 'string' ? manifest.pluginType : null;
+    if (!pluginType) { console.error(`${dir}: manifest declares no pluginType`); failed = true; continue; }
+    // Two independent facts: the manifest's `id` (the plugin's own name) and its
+    // `pluginType` (its type). The release FILE is named with both, only so a human can
+    // tell the zips apart - it is a file name, never an id. The hub composes its storage
+    // key at use time from the two; the build does not do that composition.
+    const label = `${pluginType}-${manifest.id}`;
 
     const exclude = Array.isArray(release.exclude) ? release.exclude : [];
     const files = collectFiles(dir, exclude);
     const known = readJson(registryFile, null);
-    // The artifact carries the plugin's own id, which already states what it is
-    // (a `harness-adapter-` or `model-provider-` name): a manifest's id is its
-    // directory name, and the directory is the plugin.
-    const file = `${dirId}-${version}.zip`;
+    // A release file name carries the type and id so the zips are tellable apart; the
+    // id and the type themselves travel as their own fields in the manifest and entry.
+    const file = `${label}-${version}.zip`;
     fs.mkdirSync(outDir, { recursive: true });
     const zipPath = path.join(outDir, file);
     // --keep reuses a zip this exact version already produced, so a registry-only
@@ -152,7 +155,7 @@ for (const root of pluginDirs) {
     // A catalog entry: enough to list the adapter and install it, and nothing more.
     // The runtime closure is NOT here - it ships inside the artifact and is read at
     // install time; the icon is a URL to a release asset, never inlined bytes.
-    const entry = { id: manifest.id, kind };
+    const entry = { id: manifest.id, pluginType };
     for (const key of ['name', 'summary', 'description']) if (typeof release[key] === 'string' && release[key].trim()) entry[key] = release[key];
     if (Array.isArray(release.capabilities)) entry.capabilities = release.capabilities;
     else if (Array.isArray(manifest.capabilities)) entry.capabilities = manifest.capabilities;
@@ -163,9 +166,10 @@ for (const root of pluginDirs) {
       if (light || dark) entry.icon = { light: light ?? dark, dark: dark ?? light };
     }
     const versionEntry = { version, url, sha256, size: bytes, releasedAt: new Date().toISOString().slice(0, 10) };
-    // An entry is (kind, id): a harness-adapter and a model-provider may share a short
-    // id, so an id-only lookup would find the other one's entry.
-    const previous = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id && p.kind === kind) : null;
+    // An entry is (pluginType, id) - two fields, because that is what a plugin is. A
+    // harness-adapter and a model-provider may share an id, and the type is what keeps
+    // them apart, so the match names both.
+    const previous = known && Array.isArray(known.plugins) ? known.plugins.find((p) => p && p.id === manifest.id && p.pluginType === pluginType) : null;
     const published = previous && Array.isArray(previous.versions) ? previous.versions.find((v) => v && v.version === version) : null;
     if (published && published.sha256 !== sha256) {
       console.error(`${manifest.id} ${version} is already in ${registryFile} with sha256 ${published.sha256};`);
@@ -210,7 +214,12 @@ if (flag('publish')) {
     for (const name of [p.icons?.light, p.icons?.dark]) {
       if (typeof name !== 'string' || !name) continue;
       const full = path.resolve(p.dir, name);
-      if ((full === p.dir || full.startsWith(p.dir + path.sep)) && fs.existsSync(full) && !iconFiles.includes(full)) iconFiles.push(full);
+      // Compare RESOLVED paths: p.dir may come from the command line with forward
+      // slashes, and path.sep is a backslash on Windows, so `p.dir + path.sep` never
+      // matched and every icon was silently dropped from the release. Resolve the root
+      // the same way and compare like for like.
+      const root = path.resolve(p.dir);
+      if ((full === root || full.startsWith(root + path.sep)) && fs.existsSync(full) && !iconFiles.includes(full)) iconFiles.push(full);
     }
     const assets = [p.file, ...iconFiles];
     const args = ['release', 'create', `v${p.version}`, ...assets, '--repo', p.repository, '--title', `${p.id} ${p.version}`, '--notes', `Plugin artifact for ${p.id} ${p.version} (sha256 ${p.sha256}).`];

@@ -106,9 +106,14 @@ function unpackInWorker({ file, into, strip, kind, integrity, size }) {
   });
 }
 
-async function download(url, file) {
+// One fetch, no retry. An HTTP status that is not ok, or a body that stops early, throws.
+async function fetchOnce(url, file) {
   const answer = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT) });
-  if (!answer.ok || !answer.body) throw new Error(`${url} answered ${answer.status}${answer.statusText ? ` ${answer.statusText}` : ''}`);
+  if (!answer.ok || !answer.body) {
+    const e = new Error(`${url} answered ${answer.status}${answer.statusText ? ` ${answer.statusText}` : ''}`);
+    e.status = answer.status;
+    throw e;
+  }
   const out = fs.createWriteStream(file);
   let bytes = 0;
   try {
@@ -121,6 +126,31 @@ async function download(url, file) {
     await new Promise((r) => out.end(r));
   }
   return bytes;
+}
+
+// Download ONE recorded source, retrying the failures that a second attempt can fix.
+//
+// A runtime closure is hundreds of small tarballs fetched over the network (deepseek
+// records 235). Without a retry, one dropped connection anywhere in those hundreds fails
+// the WHOLE runtime - the install then reports a failure a person cannot act on, and
+// retrying the install re-downloads everything. So a transient failure (a network error,
+// a 5xx, a timeout - NOT a 404, which will answer the same way forever) is retried a few
+// times with a short backoff before it is called a failure.
+const RETRIES = Number(process.env.AGENT_HUB_RUNTIME_RETRIES || 4);
+const retryable = (e) => e && (e.status === undefined || e.status >= 500 || e.status === 408 || e.status === 429);
+async function download(url, file) {
+  let last;
+  for (let attempt = 0; attempt < RETRIES; attempt++) {
+    try {
+      return await fetchOnce(url, file);
+    } catch (e) {
+      last = e;
+      fs.rmSync(file, { force: true });
+      if (!retryable(e)) throw e;
+      await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+    }
+  }
+  throw last;
 }
 
 /**

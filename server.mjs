@@ -75,19 +75,15 @@ function pluginDir(id) {
   return path.join(PLUGINS_DIR, id);
 }
 // A plugin's MANAGED ID is `<kind>-<id>`: the kind states what the plugin is
-// (harness-adapter or model-provider) and the id is the plugin's own short name. The
-// directory under a plugins root is named by the managed id, so a harness and a model
-// provider may share a short id without colliding - they are different things. The
-// manifest inside keeps its own short `id` and states its `kind`; this is the only
-// place that joins them.
-function managedId(kind, id) {
-  return kind && id ? `${kind}-${id}` : id;
-}
-// The manifest's `kind` for a plugin directory whose managed id this is. Read from
-// the manifest, never guessed from the shape of other fields.
-function kindOf(dirId) {
-  const m = manifestOf(dirId);
-  return m && typeof m.kind === 'string' ? m.kind : null;
+// The manifest states two independent things: its `id` (the plugin's own name) and its
+// `kind` (its type). Neither is derived from the other. The hub's storage KEY is those two
+// joined - `<kind>-<id>` - and this is the ONE place that join happens. Everywhere else a
+// plugin is addressed by that key as an OPAQUE string: nothing splits it back apart, and
+// nothing validates that the kind is inside it, because the kind is read from the manifest
+// when it is needed. An id format may change freely; the type is unaffected.
+function storageKey(kind, id) {
+  if (!kind || !id) throw new Error(`a plugin needs both a kind and an id to be stored (got kind=${JSON.stringify(kind)} id=${JSON.stringify(id)})`);
+  return `${kind}-${id}`;
 }
 // which root a plugin was found in (the writable one is the hub's own)
 function pluginRootOf(id) {
@@ -187,6 +183,20 @@ const writeJson = (p, v, mode) => {
   fs.writeFileSync(tmp, JSON.stringify(v, null, 2), mode ? { mode } : undefined);
   fs.renameSync(tmp, p);
   if (mode) { try { fs.chmodSync(p, mode); } catch {} }
+};
+// Changing a state file is READ-MODIFY-WRITE, and that is only safe as one indivisible
+// step: if anything could run between the read and the write, two changes to different
+// keys would each write a file holding only their own, and one would silently vanish.
+// Node's single thread gives that indivisibility for free - but only as long as nothing
+// in the middle awaits, which is an invisible rule to break. So a change goes through
+// HERE, `fn` is a plain synchronous function of the current value, and the goal is
+// enforced by the shape of the call rather than by remembering not to await. `writeJson`
+// then only ever sees a complete value.
+const mutateJson = (p, fallback, fn) => {
+  const value = readStateJson(p, fallback);
+  const next = fn(value);
+  writeJson(p, next === undefined ? value : next);
+  return next === undefined ? value : next;
 };
 // And a state file that cannot be parsed is not "empty": keep it (an operator can
 // see what happened) and say so, instead of starting from nothing in silence.
@@ -428,12 +438,16 @@ function errorBody(code, message, extra) {
 function manifestFault(id) {
   const m = manifestOf(id);
   if (!m) return 'no manifest.json';
-  // The directory is the plugin's MANAGED id (`<kind>-<id>`); the manifest states the
-  // plugin's own short `id` and its `kind`. The managed id must equal kind-id, so a
-  // mismatch between the manifest and the directory is still caught.
-  if (typeof m.kind !== 'string' || !m.kind) return `manifest declares no kind`;
-  if (m.id !== id && managedId(m.kind, m.id) !== id) return `manifest id '${m.id}' with kind '${m.kind}' is not the plugin directory '${id}'`;
-  const isHarness = m.kind === 'harness-adapter';
+  // The manifest states the plugin's own `id` (its name) and its `pluginType` (its type);
+  // the directory is the two joined. The directory must be exactly that join, so a
+  // manifest that does not belong to this directory is caught - and the id is never
+  // compared to the directory alone, because the id does not carry the type.
+  if (typeof m.pluginType !== 'string' || !m.pluginType) return `manifest declares no pluginType`;
+  // The storage key is `<pluginType>-<id>`, built once at install; the directory must be
+  // that key. This compares the JOIN, not the id alone: the id is the plugin's own name
+  // and says nothing about its type.
+  if (storageKey(m.pluginType, m.id) !== id) return `manifest id '${m.id}' with pluginType '${m.pluginType}' is not the plugin directory '${id}'`;
+  const isHarness = m.pluginType === 'harness-adapter';
   if (m.provider !== undefined) {
     const entry = providerModuleEntry(id);
     if (entry && entry.error) return entry.error;
@@ -603,9 +617,10 @@ async function serveHarnessIcon(id, variant, res) {
       }
     }
   }
-  // The registry entry's id is the plugin's SHORT id; the id here is the managed
-  // `<kind>-<id>`. Match on the managed id so both address the same entry.
-  const entry = (catalogValue().plugins || []).find((e) => e && e.id && managedId(e.kind, e.id) === id);
+  // `id` here is the plugin's storage key (`<kind>-<id>`); a registry entry carries the
+  // two fields separately. Match by composing each entry the same way, so an UNINSTALLED
+  // plugin (no directory, no manifest) still finds the icon its entry names.
+  const entry = (catalogValue().plugins || []).find((e) => e && e.id && e.pluginType && storageKey(e.pluginType, e.id) === id);
   const icon = entry && entry.icon && typeof entry.icon === 'object' ? entry.icon : null;
   const url = icon ? (variant === 'dark' ? (icon.dark ?? icon.light) : (icon.light ?? icon.dark)) : null;
   if (typeof url !== 'string' || !url) return fail(res, 404, 'not_found', `no '${variant}' icon for '${id}'`);
@@ -1091,10 +1106,24 @@ function emitHubEvent(event, data) {
   }
 }
 
-// The hub's plugin view changed; say so, and let every subscriber re-read what it shows.
-function announcePluginsChanged(reason) {
-  try { emitHubEvent('hub.plugins.changed', { reason, at: new Date().toISOString() }); }
-  catch { /* an event nobody can receive is not a reason to fail the change */ }
+// The hub's plugin view changed. The event names WHICH plugin and WHAT state it is now
+// in, so a subscriber shows the change directly. Before this it carried only a loose
+// `reason` ('installed' | 'runtime' | 'install' | 'idle' | ...), which is the same word
+// for a step and for its completion and names no plugin - so every client had to re-read
+// and re-derive what was happening, which is how several disagreeing copies of one fact
+// grew. One event, one id, one state.
+function announcePluginsChanged(id) {
+  const row = pluginList().find((r) => r.id === id);
+  // A plugin that is no longer in the list is ABSENT: that is the one state a client can
+  // draw for an id the hub changes and then does not list. Never null - null is not a
+  // state, and a client that tried to draw it would have to invent one.
+  try {
+    emitHubEvent('hub.plugins.changed', {
+      id: row ? row.id : id,
+      state: row ? row.state : 'absent',
+      at: new Date().toISOString(),
+    });
+  } catch { /* an event nobody can receive is not a reason to fail the change */ }
 }
 
 function emitSessionEvent(sid, event, data) {
@@ -1401,7 +1430,12 @@ const ROUTES = [
   { method: 'GET', path: '/v1/hub/events', handler: ({ res }) => {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     hubEventClients.add(res);
-    sseWrite(res, { event: 'hub.plugins.changed', data: { reason: 'subscribed', at: new Date().toISOString() } });
+    // The contract says this stream announces on subscribe. It stays, and it stays a
+    // hub.plugins.changed: the subscribe frame carries no plugin id (there is no single
+    // plugin it is about), so a client reads that as "re-read", exactly as before. Do not
+    // make a general stream carry one feature's shape - {id, state} belongs to a real
+    // change, not to the handshake.
+    sseWrite(res, { event: 'hub.plugins.changed', data: { at: new Date().toISOString() } });
     const drop = () => hubEventClients.delete(res);
     res.on('close', drop);
     res.on('error', drop);
@@ -2000,22 +2034,57 @@ function secretName(providerId) { return `provider-${providerId}-token`; }
 // asking "what is happening" must. The in-progress one is a minimal row: its id and busy).
 function pluginList() {
   const rows = installedPlugins().map(pluginValue);
-  for (const [id, op] of pluginOps) {
-    if (rows.some((r) => r.id === id)) continue;
-    rows.push({ id, kind: id.split('-').slice(0, -1).join('-') || null, busy: op.what, installed: false });
+  for (const [id, held] of pluginState) {
+    // A plugin being installed has no directory yet, so the rows above cannot show it.
+    // Its state is the highest-priority operation in its set (never empty here - an
+    // empty set is what removes the entry and falls back to the disk fact).
+    const op = stateOfOps(held.ops);
+    if (!op || rows.some((r) => r.id === id)) continue;
+    rows.push({ id, pluginType: pluginTypeOf(id), state: op, detail: held.detail ?? null });
   }
   return rows;
+}
+
+// ONE state per plugin. Before this a plugin had three independent facts a client had
+// to combine - `busy` (install|remove), `prepare.state` (running|ready|failed), and
+// whether it was installed at all - so two clients could describe the same plugin
+// differently and a single client could show two things at once (a removal in progress
+// AND a runtime preparing). The state is the hub's own verdict, like a session's turn
+// state: a client renders it and derives nothing.
+//
+//   absent     - the catalog carries it; nothing is on disk; it can be installed
+//   installing - the hub is fetching and landing it
+//   removing   - the hub is removing it
+//   preparing  - the hub is materialising the runtime its manifest pins
+//   failed     - its runtime could not be prepared; it can be retried
+//   ready      - it is on disk and the hub is doing nothing to it
+function pluginStateOf(id, hasDir) {
+  const held = pluginState.get(id);
+  if (held) {
+    const op = stateOfOps(held.ops);
+    if (op) return op;                       // removing | installing | preparing | failed
+    // ops is empty: nothing is being done - fall through to the disk fact.
+  }
+  return hasDir ? 'ready' : 'absent';
+}
+
+// A plugin's TYPE, read from its manifest's own `pluginType` field. It is never inferred
+// from the storage key's shape or from which other fields happen to be present: the type
+// is a declared fact, not a guess. An absent or unusable one reads as `invalid`.
+function pluginTypeOf(key) {
+  const m = manifestOf(key) || {};
+  return typeof m.pluginType === 'string' && m.pluginType ? m.pluginType : 'invalid';
 }
 
 function pluginValue(id) {
   const m = manifestOf(id) || {};
   const installed = readJson(PLUGINS_FILE, {}) || {};
   const rec = installed[id] || null;
-  const prep = runtimePrepare.get(id) || null;
+  const held = pluginState.get(id) || null;
   const providerEntry = providerModuleEntry(id);
   return {
     id,
-    kind: typeof m.kind === 'string' ? m.kind : (Array.isArray(m.command) ? 'harness-adapter' : providerEntry ? 'model-provider' : 'invalid'),
+    pluginType: pluginTypeOf(id),
     icons: harnessIcons(id),
     provider: m.provider ? { apiVersion: m.provider.apiVersion, module: m.provider.module, types: [...PROVIDER_TYPE_INDEX.values()].filter((x) => x.pluginId === id).map((x) => `${x.descriptor.id}@${x.descriptor.version}`), fault: providerEntry && providerEntry.error ? providerEntry.error : null } : null,
     origin: pluginOrigin(id),
@@ -2038,16 +2107,22 @@ function pluginValue(id) {
     runtime: m.runtime ? { package: m.runtime.package, version: m.runtime.version, target: runtimeTarget(id), installed: installedRuntime(id), orphaned: false } : null,
     // Where the runtime is being installed from: the catalog's recorded official sources
     // for a registry install, the adapter itself for a development entry.
-    runtimeSource: (runtimePrepare.get(id) || {}).source ?? null,
+    runtimeSource: held ? held.source ?? null : null,
     // Sources the recorded runtime left out on this machine (another platform, or an
     // optional one that could not be fetched). Named, because a runtime quietly missing
     // a piece is worse than one that says what it left out.
-    runtimeSkip: ((runtimePrepare.get(id) || {}).result || {}).skipped ?? null,
+    runtimeSkip: held && held.result ? (held.result.skipped ?? null) : null,
     runtimeReady: runtimeReady(id),
-    prepare: prep ? { state: prep.state, detail: prep.detail, startedAt: prep.startedAt, finishedAt: prep.finishedAt } : null,
-    // The hub's own fact about what it is doing to this plugin right now: an install or a
-    // removal in progress. A client renders THIS, not a flag it kept from its own click.
-    busy: pluginOps.get(id)?.what || null,
+    // The hub's ONE verdict on this plugin, like a session's turn state. A client renders
+    // it; it never combines `busy` with `prepare.state` again, because there is no such
+    // pair any more.
+    // "on disk" is whether the plugin's DIRECTORY exists, not whether a record of an
+    // install does: a plugin put there by hand, or cloned from git, has a directory and
+    // no record, and calling it absent was wrong. The record says WHERE it came from.
+    state: pluginStateOf(id, fs.existsSync(path.join(pluginDir(id), 'manifest.json'))),
+    // The current state's own words, when it has any (what is downloading, why it failed).
+    // INFORMATION about `state`, never a second state.
+    detail: held ? held.detail : null,
     invalid: manifestFault(id),
   };
 }
@@ -2179,6 +2254,13 @@ async function installArtifact(a, res) {
   if (typeof a.id !== 'string' || !PLUGIN_ID_RE.test(a.id)) {
     return fail(res, 400, 'validation_failed', `source.artifact.id must be a plugin id (got ${JSON.stringify(a.id)})`);
   }
+  // The artifact states its TYPE. Without it the hub cannot compose the plugin's storage
+  // key before the bytes arrive, and would have to guess or fall back to the bare id -
+  // which is how one install announced itself under two different names. A type that is
+  // not stated is refused, like a version or a digest that is not stated.
+  if (typeof a.pluginType !== 'string' || !a.pluginType.trim()) {
+    return fail(res, 400, 'validation_failed', 'source.artifact.pluginType is required: a plugin states its type');
+  }
   if (typeof a.version !== 'string' || !a.version.trim()) {
     return fail(res, 400, 'validation_failed', 'source.artifact.version is required: which release this artifact is');
   }
@@ -2186,12 +2268,11 @@ async function installArtifact(a, res) {
     return fail(res, 400, 'validation_failed', `source.artifact.size must be a positive integer of bytes (got ${JSON.stringify(a.size)})`);
   }
   fs.mkdirSync(HUB_PLUGINS_DIR, { recursive: true });
-  // The busy fact covers the WHOLE install, download included - that is what a user sees as
-  // "installing". The kind is not in the request, but the registry entry for this id names
-  // it, so the managed id (and the busy key) is known before a byte is fetched.
-  const known = (catalogValue().plugins || []).find((e) => e && e.id === a.id);
-  const busyId = known && known.kind ? managedId(known.kind, a.id) : a.id;
-  beginPluginOp(busyId, 'install');
+  // The storage key is the kind joined with the id - built HERE, once, before a byte is
+  // fetched, so the state this starts already has the key the plugin will have on disk.
+  // The kind comes from the registry entry's own field; it is never read out of the id.
+  const key = storageKey(a.pluginType, a.id);
+  enterState(key, 'installing');
   try {
   const work = fs.mkdtempSync(path.join(HUB_PLUGINS_DIR, '.download-'));
   const file = path.join(work, 'artifact.zip');
@@ -2229,7 +2310,7 @@ async function installArtifact(a, res) {
       fs.rmSync(staging, { recursive: true, force: true });
       return fail(res, 502, 'plugin_archive_invalid', `the archive declares id '${m.id}' but the artifact was for '${a.id}'`);
     }
-    if (typeof m.kind !== 'string' || !m.kind) {
+    if (typeof m.pluginType !== 'string' || !m.pluginType) {
       fs.rmSync(staging, { recursive: true, force: true });
       return fail(res, 502, 'plugin_archive_invalid', `the archive declares no kind`);
     }
@@ -2247,7 +2328,7 @@ async function installArtifact(a, res) {
     fs.rmSync(work, { recursive: true, force: true });
   }
   } finally {
-    endPluginOp(busyId);
+    leaveState(key, 'installing');
   }
 }
 
@@ -2257,22 +2338,23 @@ async function installArtifact(a, res) {
 // Put an install in progress on the record for the WHOLE of it - every return path,
 // success or refusal - so a client reads "installing" from the hub, never from its own
 // memory of the click. The body below does the work.
-async function landPlugin(staging, shortId, record, res) {
+async function landPlugin(staging, id, record, res) {
   const m = readJson(path.join(staging, 'manifest.json'), null) || {};
-  const id = m.kind && m.id ? managedId(m.kind, m.id) : shortId;
-  beginPluginOp(id, 'install');
+  // The key is composed here, at use time: the manifest's own `id` and `kind`, joined
+  // once. `id` is the plugin's name; `kind` is its type. Neither is the other.
+  const key = storageKey(m.pluginType, m.id || id);
+  enterState(key, 'installing');
   try {
-    return await landPluginBody(staging, shortId, record, res);
+    return await landPluginBody(staging, key, record, res);
   } finally {
-    endPluginOp(id);
+    leaveState(key, 'installing');
   }
 }
 
-async function landPluginBody(staging, shortId, record, res) {
-  // Everything below works in the plugin's MANAGED id (kind + its short id): that is
-  // the directory, and it is the id the rest of the hub addresses the plugin by.
+async function landPluginBody(staging, id, record, res) {
+  // `id` here is the storage KEY (`<kind>-<id>`), the directory and the map key. It is
+  // opaque below this line: nothing splits it, and the kind is read from the manifest.
   const m = readJson(path.join(staging, 'manifest.json'), null) || {};
-  const id = m.kind && m.id ? managedId(m.kind, m.id) : shortId;
   const dest = path.join(HUB_PLUGINS_DIR, id);
   const owner = pluginRootOf(id);
   if (owner && owner !== HUB_PLUGINS_DIR) {
@@ -2365,12 +2447,12 @@ async function landPluginBody(staging, shortId, record, res) {
     const failed = await rmRetrying(aside);
     if (failed) console.error(`plugin '${id}': the previous copy at ${aside} could not be removed yet (${failed.message})`);
   }
-  const records = readJson(PLUGINS_FILE, {}) || {};
-  records[id] = { ...record, installedAt: new Date().toISOString() };
-  writeJson(PLUGINS_FILE, records);
+  mutateJson(PLUGINS_FILE, {}, (records) => {
+    records[id] = { ...record, installedAt: new Date().toISOString() };
+  });
   reconcileHarnesses();
   ensureRuntimeFor(id).catch(() => {});
-  announcePluginsChanged('installed');
+  announcePluginsChanged(id);
   json(res, replacing ? 200 : 201, { plugin: pluginValue(id), updated: replacing });
 }
 
@@ -2390,7 +2472,7 @@ async function removePlugin(id, res) {
   if (pluginOrigin(id) !== 'hub') {
     return fail(res, 409, 'conflict', `plugin '${id}' is in a directory this hub does not own (${dir}): removing it is that deployment's business`);
   }
-  beginPluginOp(id, 'remove');
+  enterState(id, 'removing');
   try {
   
     // Removal is the caller's decision, so nothing here asks again. The user stated
@@ -2409,7 +2491,7 @@ async function removePlugin(id, res) {
     // every install). It is writing hundreds of files under the plugin directory the
     // moment we try to delete, which is what the EPERM was: a removal must not race the
     // plugin's own prepare. Wait for it to finish, then stop processes.
-    const preparing = runtimePrepare.get(id);
+    const preparing = pluginState.get(id);
     if (preparing && preparing.inFlight) { try { await preparing.inFlight; } catch { /* its failure is not the removal's */ } }
     await stopHarnessProcesses(id);
     let failed = null;
@@ -2429,12 +2511,11 @@ async function removePlugin(id, res) {
     }
     // The files are gone. The records follow in the same request, so the hub never
     // answers "removed" while a stale record still claims the plugin exists.
-    const records = readJson(PLUGINS_FILE, {}) || {};
-    if (records[id]) { delete records[id]; writeJson(PLUGINS_FILE, records); }
+    mutateJson(PLUGINS_FILE, {}, (records) => { delete records[id]; });
     reconcileHarnesses();
-    announcePluginsChanged('removed');
+    announcePluginsChanged(id);
     json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: pluginList() });
-  } finally { endPluginOp(id); }
+  } finally { leaveState(id, 'removing'); }
 }
 
 // Close every open session of one harness and kill the adapter processes the hub
@@ -2529,12 +2610,13 @@ function runtimeDeclaration(id) {
 }
 
 function installCatalogRuntime(id) {
-  const held = runtimePrepare.get(id);
+  const held = pluginState.get(id);
   if (held && held.inFlight) return held.inFlight;
   const manifest = manifestOf(id) || {};
   const declared = !!(manifest.runtime && Array.isArray(manifest.capabilities) && manifest.capabilities.includes('runtime'));
-  const state = { state: 'running', detail: null, startedAt: new Date().toISOString(), finishedAt: null, source: 'catalog' };
-  runtimePrepare.set(id, state);
+  enterState(id, 'preparing', 'installing the runtime this plugin pins');
+  const state = pluginState.get(id);
+  state.source = 'catalog';
   const installedVersion = manifest.version;
   const runtime = runtimeDeclaration(id);
   // Where the runtime goes: the directory the catalog names, resolved inside THIS
@@ -2548,10 +2630,7 @@ function installCatalogRuntime(id) {
   const inFlight = Promise.resolve()
     .then(() => {
       if (!declared) {
-        state.state = 'ready';
-        state.detail = 'this plugin declares no runtime';
-        state.finishedAt = new Date().toISOString();
-        return { ready: true, detail: state.detail };
+        return { ready: true, detail: 'this plugin declares no runtime' };
       }
       if (!runtime) {
         throw Object.assign(new Error(`'${id}' ships no runtime.sources.json, so the hub cannot install its runtime (it runs no package manager)`), { code: 'runtime_unavailable' });
@@ -2564,9 +2643,6 @@ function installCatalogRuntime(id) {
       // same directory would be busy-work with a network bill.
       const held = runtimeMarker(target);
       if (held && held.package === runtime.package && held.version === runtime.version && held.sourcesDigest === sourcesDigest(runtime.sources) && runtimeReady(id)) {
-        state.state = 'ready';
-        state.detail = `already installed from ${runtime.package}@${runtime.version}`;
-        state.finishedAt = new Date().toISOString();
         state.result = { package: runtime.package, version: runtime.version, sources: 0, skipped: held.skipped || [], bytes: 0, already: true };
         return { ready: true, ...state.result };
       }
@@ -2582,17 +2658,17 @@ function installCatalogRuntime(id) {
       });
     })
     .then((result) => {
-      state.state = 'ready';
-      state.finishedAt = new Date().toISOString();
+      // Done: the plugin is ready. leaveState drops the entry, and pluginStateOf() reads
+      // a plugin on disk with no entry as ready - one truth, one place.
+      leaveState(id, 'preparing');
       return result;
     })
     .catch((e) => {
-      state.state = 'failed';
-      state.detail = e.message;
-      state.finishedAt = new Date().toISOString();
+      // A failed runtime is a STATE, not a cleared busy flag: the plugin stays failed
+      // (visible, retryable) instead of silently looking ready.
+      failState(id, e.message);
       throw Object.assign(new Error(e.message), { code: e.code || 'runtime_install_failed' });
-    })
-    .finally(() => { state.inFlight = null; announcePluginsChanged('runtime'); });
+    });
   state.inFlight = inFlight;
   return inFlight;
 }
@@ -2610,31 +2686,82 @@ function ensureRuntimeFor(id) {
 // packages, registries or tarball layouts. State is kept per harness so a client can
 // see a long install happening (GET /v1/hub/plugins) and so two callers share one.
 const PREPARE_TIMEOUT = Number(process.env.AGENT_HUB_PREPARE_TIMEOUT_MS || 900_000);
-const runtimePrepare = new Map();   // harnessId -> {state, detail, startedAt, finishedAt, inFlight}
+// ONE state machine per plugin. This map is the plugin's only state: whether it is
+// absent, being installed, being removed, having its runtime prepared, ready, or failed.
+// There used to be two - a `pluginOps` for install/remove and a `runtimePrepare` for the
+// runtime - plus the on-disk record, so a plugin could be "removing" and "preparing" at
+// once and a client had to combine them. Now nothing else decides a plugin's state; the
+// install, the removal and the prepare each MOVE this one value.
+//
+//   { state, detail, since, inFlight }
+//
+// `detail` is the state's own words (a download line, a failure reason). `inFlight` is the
+// pending work, so a second caller joins it instead of starting a rival. A plugin with no
+// entry is `ready` when it is on disk and `absent` when it is not - see pluginState().
+const pluginState = new Map();   // id -> { state, detail, since, inFlight }
 
 // What the hub is DOING to a plugin right now, as the hub's own fact - the same kind of
 // fact as prepare.state, and for the same reason: whether an install or a removal is in
 // progress belongs to the process doing it, not to a client's memory of its own click. A
 // client that keeps its own flag loses it on a refresh and overwrites it when a second
-// plugin is acted on. Keyed by the managed id.
-const pluginOps = new Map();   // managedId -> { what, depth }
-function beginPluginOp(id, what) {
-  const held = pluginOps.get(id);
-  if (held && held.what === what) { held.depth++; return; }
-  pluginOps.set(id, { what, depth: 1 });
-  announcePluginsChanged(what);
+// plugin is acted on. Keyed by the storage key (`<kind>-<id>`).
+// What a plugin is doing right now is a SET of operations, not one counter. A landing
+// also starts a runtime prepare, and a prepare can still be running when a later install
+// begins; with a single refcount, one operation finishing decremented another's count and
+// a plugin that was still preparing was published as ready. Each operation owns its own
+// entry, and the state a client sees is the highest-priority one in the set:
+//
+//   removing > installing > preparing > failed > ready
+//
+// Entering and leaving are exact inverses per operation, so an operation can finish while
+// another runs without touching it.
+const OP_RANK = { removing: 3, installing: 2, preparing: 1, failed: 0 };
+function stateOfOps(ops) {
+  let best = null;
+  for (const op of ops) if (best === null || OP_RANK[op] > OP_RANK[best]) best = op;
+  return best;
 }
-function endPluginOp(id) {
-  const held = pluginOps.get(id);
+function enterState(id, op, detail = null) {
+  const held = pluginState.get(id) || { ops: new Set(), detail: null, since: new Date().toISOString(), inFlight: null };
+  const before = stateOfOps(held.ops);
+  held.ops.add(op);
+  held.detail = detail ?? held.detail;
+  held.since = new Date().toISOString();
+  pluginState.set(id, held);
+  const after = stateOfOps(held.ops);
+  if (after !== before) announcePluginsChanged(id);
+}
+// `failState` records a failure that OUTLIVES the operation: the plugin stays failed
+// until something moves it, because "its runtime could not be prepared" is a fact about
+// the plugin, not about the request that discovered it.
+function failState(id, detail) {
+  const held = pluginState.get(id) || { ops: new Set(), since: new Date().toISOString(), inFlight: null };
+  held.ops = new Set(['failed']);
+  held.detail = detail;
+  held.since = new Date().toISOString();
+  pluginState.set(id, held);
+  announcePluginsChanged(id);
+}
+function leaveState(id, op) {
+  const held = pluginState.get(id);
   if (!held) return;
-  held.depth--;
-  if (held.depth > 0) return;
-  pluginOps.delete(id);
-  announcePluginsChanged('idle');
+  const before = stateOfOps(held.ops);
+  held.ops.delete(op);
+  const after = stateOfOps(held.ops);
+  if (after === null) {
+    // The last operation finished: the plugin is now ready (or absent, if it never
+    // landed). That is a change too - the one a client most wants - so the entry goes and
+    // the change is announced, rather than the plugin silently appearing ready.
+    pluginState.delete(id);
+    announcePluginsChanged(id);
+  } else if (after !== before) {
+    held.since = new Date().toISOString();
+    announcePluginsChanged(id);
+  }
 }
 
 function prepareRuntime(harnessId, conn = null) {
-  const held = runtimePrepare.get(harnessId);
+  const held = pluginState.get(harnessId);
   if (held && held.inFlight) return held.inFlight;
   const caps = (manifestOf(harnessId) || {}).capabilities || [];
   if (!caps.includes('runtime')) {
@@ -2643,30 +2770,25 @@ function prepareRuntime(harnessId, conn = null) {
     // truth about that plugin.
     return Promise.resolve({ ready: runtimeReady(harnessId), unsupported: true });
   }
-  const state = { state: 'running', detail: null, startedAt: new Date().toISOString(), finishedAt: null };
-  runtimePrepare.set(harnessId, state);
+  enterState(harnessId, 'preparing');
+  const state = pluginState.get(harnessId);
   const call = conn
     ? rpc(conn, 'runtime/prepare', {}, PREPARE_TIMEOUT)
     : configRpc(harnessId, 'runtime/prepare', {});
   const inFlight = withTimeout(call, PREPARE_TIMEOUT, `runtime/prepare did not answer within ${Math.round(PREPARE_TIMEOUT / 1000)}s`)
     .then((r) => {
       const ready = r && r.ready !== false && runtimeReady(harnessId);
-      state.state = ready ? 'ready' : 'failed';
-      state.detail = (r && r.detail) || null;
       state.result = r || null;
-      state.finishedAt = new Date().toISOString();
       if (!ready) {
-        throw Object.assign(new Error(state.detail || `the plugin answered that the runtime is not ready`), { code: 'runtime_prepare_failed' });
+        throw Object.assign(new Error((r && r.detail) || `the plugin answered that the runtime is not ready`), { code: 'runtime_prepare_failed' });
       }
+      leaveState(harnessId, 'preparing');
       return state.result || { ready: true };
     })
     .catch((e) => {
-      state.state = 'failed';
-      state.detail = e.message;
-      state.finishedAt = new Date().toISOString();
+      failState(harnessId, e.message);
       throw Object.assign(new Error(e.message), { code: 'runtime_prepare_failed' });
-    })
-    .finally(() => { state.inFlight = null; announcePluginsChanged('runtime'); });
+    });
   state.inFlight = inFlight;
   return inFlight;
 }
@@ -4367,7 +4489,18 @@ if (PARENT_PID > 0) {
 }
 
 function selfCheck() {
+  // Two KINDS of problem, kept apart on purpose (ADR-0002):
+  //   `problems`      - this hub's own surface disagrees with its own contract. That is
+  //                     a bug in the product, and refusing to start is right: a hub that
+  //                     answers routes it does not declare is broken.
+  //   `pluginFaults`  - something under the plugins directory is wrong: a third-party
+  //                     plugin, or an install that was interrupted. That is DATA, not the
+  //                     product. One bad plugin must degrade - be marked invalid and left
+  //                     out - and must never take the whole hub down with it. Mixing the
+  //                     two into one list is what made a single bad manifest stop the hub
+  //                     from starting at all.
   const problems = [];
+  const pluginFaults = [];
   const key = (m, p) => `${m} ${p}`;
   const declared = new Set(CONTRACT_DOC.endpoints.map((e) => key(e.method, e.path)));
   const implemented = new Set(ROUTES.map((r) => key(r.method, r.path)));
@@ -4423,41 +4556,41 @@ function selfCheck() {
     // pick one, and "which adapter drives this harness" must never be a coin toss.
     for (const id of installedPlugins()) {
       const found = pluginRoots().filter((root) => fs.existsSync(path.join(root, id, 'manifest.json')));
-      if (found.length > 1) problems.push(`plugin '${id}' is in ${found.length} roots (${found.join(' and ')}); one harness, one directory`);
+      if (found.length > 1) pluginFaults.push(`plugin '${id}' is in ${found.length} roots (${found.join(' and ')}); one harness, one directory`);
     }
     for (const id of installedPlugins()) {
       const dir = pluginDir(id);
       let m = null;
-      try { m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch (e) { problems.push(`${id}: manifest.json is not JSON`); continue; }
-      if (typeof m.kind !== 'string' || !m.kind) problems.push(`${id}: manifest declares no kind`);
-      else if (m.id !== id && managedId(m.kind, m.id) !== id) problems.push(`${id}: manifest id '${m.id}' with kind '${m.kind}' is not the plugin directory name`);
-      const isHarness = m.kind === 'harness-adapter';
+      try { m = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch (e) { pluginFaults.push(`${id}: manifest.json is not JSON`); continue; }
+      if (typeof m.pluginType !== 'string' || !m.pluginType) pluginFaults.push(`${id}: manifest declares no pluginType`);
+      else if (storageKey(m.pluginType, m.id) !== id) pluginFaults.push(`${id}: manifest id '${m.id}' with pluginType '${m.pluginType}' is not the plugin directory name`);
+      const isHarness = m.pluginType === 'harness-adapter';
       const hasProvider = m.provider !== undefined;
-      if (!isHarness && !hasProvider) problems.push(`${id}: declares neither command (harness adapter) nor provider (hub provider module)`);
+      if (!isHarness && !hasProvider) pluginFaults.push(`${id}: declares neither command (harness adapter) nor provider (hub provider module)`);
       if (isHarness) {
-        if (m.protocol !== ADAPTER_PROTOCOL) problems.push(`${id}: speaks adapter protocol ${m.protocol}, this hub speaks ${ADAPTER_PROTOCOL}`);
-        for (const req of adapterContract.manifest.required) if (m[req] === undefined) problems.push(`${id}: manifest is missing required field '${req}'`);
+        if (m.protocol !== ADAPTER_PROTOCOL) pluginFaults.push(`${id}: speaks adapter protocol ${m.protocol}, this hub speaks ${ADAPTER_PROTOCOL}`);
+        for (const req of adapterContract.manifest.required) if (m[req] === undefined) pluginFaults.push(`${id}: manifest is missing required field '${req}'`);
       }
       if (hasProvider) {
         const entry = providerModuleEntry(id);
-        if (entry && entry.error) problems.push(`${id}: ${entry.error}`);
+        if (entry && entry.error) pluginFaults.push(`${id}: ${entry.error}`);
       }
-      for (const k of Object.keys(m)) if (!fields.has(k)) problems.push(`${id}: manifest field '${k}' is not declared in adapter-v1.json`);
+      for (const k of Object.keys(m)) if (!fields.has(k)) pluginFaults.push(`${id}: manifest field '${k}' is not declared in adapter-v1.json`);
       let src = '';
       for (const f of fs.readdirSync(dir)) if (f.endsWith('-adapter.cjs')) src = fs.readFileSync(path.join(dir, f), 'utf8');
       if (!src) continue;
       const handled = new Set((src.match(/case\s+'([\w./]+)'\s*:/g) || []).map((s2) => s2.replace(/.*case\s+'|'\s*:/g, '')));
       for (const cap of (isHarness ? m.capabilities || [] : [])) {
-        if (!capSurface[cap]) { problems.push(`${id}: declares capability '${cap}', which adapter-v1.json does not define`); continue; }
+        if (!capSurface[cap]) { pluginFaults.push(`${id}: declares capability '${cap}', which adapter-v1.json does not define`); continue; }
         for (const method of capSurface[cap].methods || []) {
-          if (!handled.has(method)) problems.push(`${id}: declares '${cap}' but its adapter does not handle '${method}'`);
+          if (!handled.has(method)) pluginFaults.push(`${id}: declares '${cap}' but its adapter does not handle '${method}'`);
         }
       }
       const emitted = new Set([
         ...(src.match(/emit\(\{\s*type:\s*'([\w.]+)'/g) || []).map((s2) => s2.replace(/.*'([\w.]+)'$/s, '$1')),
         ...(src.match(/data:\s*\{\s*type:\s*'([\w.]+)'/g) || []).map((s2) => s2.replace(/.*'([\w.]+)'$/s, '$1')),
       ]);
-      for (const ev of emitted) if (!declaredAdapterEvents.has(ev)) problems.push(`${id}: emits adapter event '${ev}', which adapter-v1.json does not declare`);
+      for (const ev of emitted) if (!declaredAdapterEvents.has(ev)) pluginFaults.push(`${id}: emits adapter event '${ev}', which adapter-v1.json does not declare`);
     }
   }
 
@@ -4466,6 +4599,10 @@ function selfCheck() {
     for (const p of problems) console.error(`  - ${p}`);
     process.exit(1);
   }
+  // A fault under the plugins directory is recorded and the hub STARTS. The plugin is
+  // marked invalid where it is read (manifestFault) and left out of what runs; the
+  // operator can see why here.
+  for (const f of pluginFaults) process.stderr.write(`plugin fault (the hub starts anyway): ${f}` + NL);
 }
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
