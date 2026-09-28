@@ -444,6 +444,15 @@ Known places where a hand-run covers less than it looks like, kept visible:
 
 ## Decided, not built yet
 
+**The concurrency reconstruction.** The hub is a single-thread synchronous RPC server, so
+one operation freezes every user (reproduced: a plugin removal timed out 8 concurrent polls
+with `os error 10054`). ADR-0009 (the hub is a concurrent, non-blocking service) and
+ADR-0010 (transport/infrastructure use mature components) decide the fix. The migration
+plan, for review, is [`docs/CONCURRENCY-RECONSTRUCTION.md`](docs/CONCURRENCY-RECONSTRUCTION.md):
+long write routes become `202 + operation handle` reporting on SSE; no request path blocks;
+the transport moves to Hono; the surface and the contract change together. Do not patch
+individual blocking calls (that was PR #10, closed).
+
 The order these land in is the order they are written here. Each one is a decision
 already taken, not a wish: recorded so it cannot be quietly forgotten.
 
