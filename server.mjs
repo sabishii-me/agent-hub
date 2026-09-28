@@ -303,7 +303,13 @@ function providerModuleEntry(pluginId) {
   if (!fs.existsSync(modulePath)) return { error: `provider.module not found: ${decl.module}` };
   return { modulePath };
 }
+// Load the provider modules the INSTALLED plugins declare. It is re-entrant: a plugin
+// installed or removed while the hub runs must change what the provider surface offers,
+// and a loader that only ever runs at boot leaves a freshly installed provider with no
+// types - the plugin reads `ready` and cannot be used.
 async function loadProviderPlugins() {
+  PROVIDER_TYPE_INDEX.clear();
+  PROVIDER_PLUGIN_FAULTS.length = 0;
   for (const pluginId of installedPlugins()) {
     const entry = providerModuleEntry(pluginId);
     if (!entry) continue;
@@ -2105,6 +2111,7 @@ async function finishInterruptedRemovals() {
     }
     mutateJson(PLUGINS_FILE, {}, (r) => { delete r[id]; });
     reconcileHarnesses();
+    await loadProviderPlugins();
     announcePluginsChanged(id);
   }
 }
@@ -2501,6 +2508,8 @@ async function landPluginBody(staging, id, record, res) {
     records[id] = { ...record, installedAt: new Date().toISOString() };
   });
   reconcileHarnesses();
+  // A provider a moment ago was not here: its types must exist for anyone to use it.
+  await loadProviderPlugins();
   ensureRuntimeFor(id).catch(() => {});
   announcePluginsChanged(id);
   json(res, replacing ? 200 : 201, { plugin: pluginValue(id), updated: replacing });
@@ -2588,6 +2597,9 @@ async function removePlugin(id, res) {
     // The files are gone. The record follows, which clears the intent; then the registry.
     mutateJson(PLUGINS_FILE, {}, (records) => { delete records[id]; });
     reconcileHarnesses();
+    // A removed provider's types must go with it, or a client keeps offering one that
+    // is no longer here.
+    await loadProviderPlugins();
     announcePluginsChanged(id);
     json(res, 200, { ok: true, id, sessionsClosed: closed, plugins: pluginList() });
   } finally { leaveState(id, 'removing'); }
