@@ -169,7 +169,18 @@ async function resolveWithPnpm(spec, log) {
   const y = readPnpmLock(text);
 
   // Peel "<name>@<version>" and, for snapshots, a peer suffix "(...)".
-  const split = (k) => { const at = k.lastIndexOf('@'); return at <= 0 ? null : { name: k.slice(0, at), version: k.slice(at + 1).split('(')[0] }; };
+  //
+  // STRIP THE PARENTHESES FIRST. A peer suffix can itself contain an `@`
+  // (`jouzu@0.1.13(ws@8.22.0)`), and `lastIndexOf('@')` then lands inside the peer
+  // suffix and returns name `jouzu@0.1.13(ws`, version `8.22.0)`. The snapshot is
+  // filed under a key nothing else names, its `dependencies` are lost, and the walk
+  // from the real `jouzu@0.1.13` sees an empty tree - which is how a runtime that
+  // imports `@sinclair/typebox` was recorded with one source and no dependency at all.
+  const split = (k) => {
+    const plain = k.includes('(') ? k.slice(0, k.indexOf('(')) : k;
+    const at = plain.lastIndexOf('@');
+    return at <= 0 ? null : { name: plain.slice(0, at), version: plain.slice(at + 1) };
+  };
   const byVersion = new Map();   // "name@version" -> {integrity, deps}
   for (const [k, v] of Object.entries(y.packages)) {
     const p2 = split(k); if (!p2) continue;
