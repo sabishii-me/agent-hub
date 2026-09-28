@@ -21,10 +21,17 @@
         "skills"
       ],
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.7/logo.svg",
-        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.7/logo.svg"
+        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.8/logo.svg",
+        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.8/logo.svg"
       },
       "versions": [
+        {
+          "version": "0.1.8",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.8/harness-adapter-deepseek-0.1.8.zip",
+          "sha256": "da6cb19f23d6651efe0fc797d2fd199ac4925918da43d803e838776f72c4d6de",
+          "size": 87114,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.7",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.7/harness-adapter-deepseek-0.1.7.zip",
@@ -75,10 +82,17 @@
         "history-readonly"
       ],
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.8/logo.png",
-        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.8/logo.png"
+        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.9/logo.png",
+        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.9/logo.png"
       },
       "versions": [
+        {
+          "version": "0.1.9",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.9/harness-adapter-jouzu-0.1.9.zip",
+          "sha256": "5fd8c08bb722d92a35463776cf61c78fc092074f55da07a8c6aaa1c637e619da",
+          "size": 635045,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.8",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.8/harness-adapter-jouzu-0.1.8.zip",
@@ -128,10 +142,17 @@
         "history-readonly"
       ],
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.7/logo-light.svg",
-        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.7/logo-dark.svg"
+        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/logo-light.svg",
+        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/logo-dark.svg"
       },
       "versions": [
+        {
+          "version": "0.1.8",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/harness-adapter-pi-0.1.8.zip",
+          "sha256": "aa8a345f143704a53f10d96a80b4a770f74a49dbaed57c459bc9b785b55f50b8",
+          "size": 54566,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.7",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.7/harness-adapter-pi-0.1.7.zip",
