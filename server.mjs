@@ -2088,6 +2088,14 @@ function pluginValue(id) {
   return {
     id,
     pluginType: pluginTypeOf(id),
+    // The plugin's own metadata, from the manifest on disk - a FEW small fields, never the
+    // install configuration (runtime.sources is hundreds of entries; it lives in the
+    // artifact and is read when the runtime is materialised, never in a listing). A client
+    // that shows what a plugin IS reads it here; it does not have to find the registry
+    // entry and join two sources to learn a name.
+    name: typeof m.name === 'string' ? m.name : null,
+    summary: typeof m.summary === 'string' ? m.summary : null,
+    capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
     icons: harnessIcons(id),
     provider: m.provider ? { apiVersion: m.provider.apiVersion, module: m.provider.module, types: [...PROVIDER_TYPE_INDEX.values()].filter((x) => x.pluginId === id).map((x) => `${x.descriptor.id}@${x.descriptor.version}`), fault: providerEntry && providerEntry.error ? providerEntry.error : null } : null,
     origin: pluginOrigin(id),

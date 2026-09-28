@@ -5,9 +5,16 @@
     {
       "id": "compatible",
       "pluginType": "model-provider",
-      "name": "Compatible",
+      "name": "Compatible upstream (hub provider)",
       "summary": "A hub model provider.",
       "versions": [
+        {
+          "version": "0.1.2",
+          "url": "https://github.com/sabishii-me/agent-hub-model-provider-compatible/releases/download/v0.1.2/model-provider-compatible-0.1.2.zip",
+          "sha256": "2f3e8ea2f5bc9d01d651c631187c0f6305aed2bc7a92b10ecf62120d4492bdf4",
+          "size": 2320,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.1",
           "url": "https://github.com/sabishii-me/agent-hub-model-provider-compatible/releases/download/v0.1.1/model-provider-compatible-0.1.1.zip",
@@ -43,10 +50,17 @@
         "skills"
       ],
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.5/logo.svg",
-        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.5/logo.svg"
+        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.6/logo.svg",
+        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.6/logo.svg"
       },
       "versions": [
+        {
+          "version": "0.1.6",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.6/harness-adapter-deepseek-0.1.6.zip",
+          "sha256": "e16eab414529d100e2fe8d70c2aa33b2053c3cb38f2d3358248b0b7b34bf544e",
+          "size": 64867,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.5",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.5/harness-adapter-deepseek-0.1.5.zip",
@@ -66,13 +80,20 @@
     {
       "id": "deepseek",
       "pluginType": "model-provider",
-      "name": "Deepseek",
+      "name": "DeepSeek (hub provider)",
       "summary": "A hub model provider.",
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v0.1.1/logo.svg",
-        "dark": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v0.1.1/logo.svg"
+        "light": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v0.1.2/logo.svg",
+        "dark": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v0.1.2/logo.svg"
       },
       "versions": [
+        {
+          "version": "0.1.2",
+          "url": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v0.1.2/model-provider-deepseek-0.1.2.zip",
+          "sha256": "c1c7cf74f81f57e3a7de61de239e722defdec3bf6fcdd64b60d8828d81ab8a72",
+          "size": 2450,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.1",
           "url": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v0.1.1/model-provider-deepseek-0.1.1.zip",
@@ -109,10 +130,17 @@
         "history-readonly"
       ],
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.6/logo.png",
-        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.6/logo.png"
+        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.7/logo.png",
+        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.7/logo.png"
       },
       "versions": [
+        {
+          "version": "0.1.7",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.7/harness-adapter-jouzu-0.1.7.zip",
+          "sha256": "86cb763c59f4a37813dcd27531cd69bd05cdb7db02c11efb5522fd97e374c93e",
+          "size": 622806,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.6",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.6/harness-adapter-jouzu-0.1.6.zip",
@@ -148,10 +176,17 @@
         "history-readonly"
       ],
       "icon": {
-        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.5/logo-light.svg",
-        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.5/logo-dark.svg"
+        "light": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.6/logo-light.svg",
+        "dark": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.6/logo-dark.svg"
       },
       "versions": [
+        {
+          "version": "0.1.6",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.6/harness-adapter-pi-0.1.6.zip",
+          "sha256": "2a8ce5b6fe743d5b2ecd96c00a3275a78be1fd6d9dfae27945d26c5f0c247f02",
+          "size": 41238,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.5",
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.5/harness-adapter-pi-0.1.5.zip",
@@ -171,9 +206,16 @@
     {
       "id": "shisa",
       "pluginType": "model-provider",
-      "name": "Shisa",
+      "name": "Shisa (hub provider)",
       "summary": "A hub model provider.",
       "versions": [
+        {
+          "version": "0.1.2",
+          "url": "https://github.com/sabishii-me/agent-hub-model-provider-shisa/releases/download/v0.1.2/model-provider-shisa-0.1.2.zip",
+          "sha256": "9c6f9ce624b1a7de411a11c836eee2b72a1777ac7447f431b79f2b1553d13c1b",
+          "size": 5665,
+          "releasedAt": "2026-09-28"
+        },
         {
           "version": "0.1.1",
           "url": "https://github.com/sabishii-me/agent-hub-model-provider-shisa/releases/download/v0.1.1/model-provider-shisa-0.1.1.zip",

@@ -5,12 +5,15 @@
 //                                 [--registry <file>] [--repo-template <template>]
 //                                 [--only <id,id>] [--write] [--publish --yes]
 //
-// The FORMAT is the hub's (zip.mjs writes exactly what the hub reads). Where a
-// plugin's release lands, and what it is called in a list, are the plugin's own
-// business, so a plugin may carry a `release.json` beside its manifest:
+// The FORMAT is the hub's (zip.mjs writes exactly what the hub reads). ONE file describes
+// a plugin: its `manifest.json`. What it is (`id`, `pluginType`, `name`, `summary`,
+// `capabilities`, `version`) and how it is released (a `release` section) are both the
+// plugin's own statement about itself:
 //
-//   { "name": "Pi", "summary": "…", "repository": "sabishii-me/sabishii-dev-harness-pi",
-//     "exclude": ["docs", "examples", "*.md"] }
+//   { "id": "pi", "pluginType": "harness-adapter", "name": "Pi", "summary": "…",
+//     "version": "0.1.6", …,
+//     "release": { "repository": "sabishii-me/agent-hub-harness-adapter-pi",
+//                  "exclude": ["runtime/docs", "runtime/examples"] } }
 //
 // Nothing here invents metadata: fields the plugin does not state are left out, and
 // the registry file keeps whatever the plugins said, verbatim.
@@ -51,8 +54,8 @@ const only = (arg('only', '') || '').split(',').map((s) => s.trim()).filter(Bool
 const pluginDirs = (arg('plugins', path.join(HERE, '..', '..', 'plugins')) || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 // What never ships: version control, installed dependencies, caches, and the locally
-// materialised runtime. A plugin that needs something else excluded says so in
-// release.json; the runtime is not negotiable.
+// materialised runtime. A plugin that needs something else excluded says so in its
+// manifest release section; the runtime is not negotiable.
 const ALWAYS_EXCLUDED = ['.git', '.github', 'node_modules', 'runtime', '.venv', '__pycache__', '.cache', '.DS_Store'];
 
 function matchesAny(relPath, patterns) {
@@ -108,8 +111,13 @@ for (const root of pluginDirs) {
     const manifest = readJson(manifestFile, null);
     if (!manifest || typeof manifest.id !== 'string') { console.error(`${dir}: manifest.json has no id — not a plugin`); failed = true; continue; }
     if (only.length && !only.includes(manifest.id)) continue;
-    const release = readJson(path.join(dir, 'release.json'), {}) || {};
-    if (release.name && typeof release.name === 'object') { console.error(`${dir}: release.json name must be a string`); failed = true; continue; }
+    // ONE file describes a plugin. Its manifest states what it is (`id`, `pluginType`,
+    // `name`, `summary`, `capabilities`, `version`) and how it is released (a `release`
+    // section: `repository`, `exclude`). There is no second config beside it - a plugin
+    // that needed a `release.json` to say its own name split one description across two
+    // files and made every reader join them.
+    const release = (manifest && typeof manifest.release === 'object' && manifest.release) || {};
+    if (release.name && typeof release.name === 'object') { console.error(`${dir}: release.name must be a string`); failed = true; continue; }
 
     const version = versionOf(dir, manifest);
     // A plugin with no version cannot be a release: it is a directory somebody else
@@ -150,15 +158,20 @@ for (const root of pluginDirs) {
       .replaceAll('{file}', assetName)
       .replace(/[^/]+$/, assetName);
     const url = repository ? fill(repoTemplate, file) : release.url || null;
-    if (!url) { console.error(`${dir}: no repository in release.json and no --repo-template to build a URL from`); failed = true; continue; }
+    if (!url) { console.error(`${dir}: the manifest states no release.repository and no --repo-template was given, so there is no URL to publish at`); failed = true; continue; }
 
     // A catalog entry: enough to list the adapter and install it, and nothing more.
     // The runtime closure is NOT here - it ships inside the artifact and is read at
     // install time; the icon is a URL to a release asset, never inlined bytes.
+    // The plugin's own metadata, from its manifest (a plugin that is not installed yet
+    // still has to say what it is), plus the release section's packaging parameters.
     const entry = { id: manifest.id, pluginType };
-    for (const key of ['name', 'summary', 'description']) if (typeof release[key] === 'string' && release[key].trim()) entry[key] = release[key];
-    if (Array.isArray(release.capabilities)) entry.capabilities = release.capabilities;
-    else if (Array.isArray(manifest.capabilities)) entry.capabilities = manifest.capabilities;
+    for (const key of ['name', 'summary', 'description']) {
+      const v = typeof manifest[key] === 'string' ? manifest[key] : (typeof release[key] === 'string' ? release[key] : null);
+      if (v && v.trim()) entry[key] = v;
+    }
+    if (Array.isArray(manifest.capabilities)) entry.capabilities = manifest.capabilities;
+    else if (Array.isArray(release.capabilities)) entry.capabilities = release.capabilities;
     if (manifest.icons && typeof manifest.icons === 'object' && release.repository) {
       const asset = (name) => fill(repoTemplate, path.basename(name));
       const light = typeof manifest.icons.light === 'string' ? asset(manifest.icons.light) : null;
@@ -235,7 +248,7 @@ if (flag('publish')) {
       console.log(`gh ${args.join(' ')}`);
     }
   }
-  if (!targets.length) console.log('nothing to publish: no plugin stated a repository in release.json');
+  if (!targets.length) console.log('nothing to publish: no plugin states a release.repository in its manifest');
   if (!flag('yes')) console.log('\n--yes was not passed: nothing was uploaded.');
 }
 

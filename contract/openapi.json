@@ -11821,6 +11821,23 @@
           "id": {
             "type": "string"
           },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "the plugin's own display name, from its manifest; null when the manifest states none. A few small fields like this travel with every listing; the install configuration does not."
+          },
+          "summary": {
+            "type": "string",
+            "nullable": true,
+            "description": "one line about the plugin, from its manifest; null when none is stated"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "what the plugin declares it can do, from its manifest. Empty when it declares none."
+          },
           "pluginType": {
             "type": "string",
             "description": "'harness-adapter' or 'model-provider', from the plugin's manifest; 'invalid' when the manifest declares none. A field of the plugin, never derived from the id."
@@ -11888,6 +11905,9 @@
         },
         "required": [
           "id",
+          "name",
+          "summary",
+          "capabilities",
           "pluginType",
           "origin",
           "path",
