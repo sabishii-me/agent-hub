@@ -253,8 +253,33 @@ if (flag('publish')) {
       console.log(`gh ${args.join(' ')}`);
     }
   }
+  // The registry is published ON ITS OWN, at an address that never moves: a plugin
+  // release must not require a hub release, and the pointer the desktop carries must not
+  // go stale because the catalog changed. The release is created once; every publish
+  // overwrites the single asset in place.
+  const regRepo = arg('registry-repo', null);
+  if (regRepo && (flag('write') || flag('publish'))) {
+    const regFile = path.resolve(registryFile);
+    if (flag('yes')) {
+      const have = (() => { try { execFileSync('gh', ['release', 'view', 'registry', '--repo', regRepo], { stdio: 'pipe' }); return true; } catch { return false; } })();
+      if (!have) execFileSync('gh', ['release', 'create', 'registry', '--repo', regRepo, '--title', 'Plugin registry', '--notes', 'The plugin catalog, published on its own. Overwritten in place on every plugin release; its URL never changes.'], { stdio: 'inherit' });
+      // `gh release upload file#name` does NOT rename here: the asset lands under the
+      // file's own name and the release ends up with two. Delete any asset by that name
+      // and upload through the API with an explicit name.
+      const id = execFileSync('gh', ['api', `repos/${regRepo}/releases/tags/registry`, '--jq', '.id'], { encoding: 'utf8' }).trim();
+      try { execFileSync('gh', ['release', 'delete-asset', 'registry', 'registry.json', '--repo', regRepo, '--yes'], { stdio: 'ignore' }); } catch { /* absent */ }
+      const token = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8' }).trim();
+      execFileSync('curl', ['-s', '-X', 'POST',
+        '-H', `Authorization: token ${token}`,
+        '-H', 'Content-Type: application/json',
+        `https://uploads.github.com/repos/${regRepo}/releases/${id}/assets?name=registry.json`,
+        '--data-binary', `@${regFile}`], { stdio: 'inherit' });
+      console.log(`registry published: https://github.com/${regRepo}/releases/download/registry/registry.json`);
+    } else {
+      console.log(`gh release upload registry ${regFile}#registry.json --repo ${regRepo} --clobber`);
+    }
+  }
   if (!targets.length) console.log('nothing to publish: no plugin states a release.repository in its manifest');
-  if (!flag('yes')) console.log('\n--yes was not passed: nothing was uploaded.');
 }
 
 if (failed) process.exitCode = 1;
