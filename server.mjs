@@ -4552,9 +4552,13 @@ function fail(res, httpCode, code, message) {
 // wait between tries is a real wait, and a synchronous spin on the event loop is what
 // stopped the hub from answering anything else during a removal.
 async function rmRetrying(target, { tries = 6, delayMs = 200 } = {}) {
+  // fs.promises.rm, NOT fs.rmSync: a plugin's runtime is tens of thousands of files, and a
+  // synchronous recursive delete blocks the event loop for seconds - the hub cannot answer
+  // a request, a client sees the connection drop (os error 10054), and the removal looks
+  // like a hang. The delete yields instead, so the hub stays responsive WHILE it removes.
   for (let attempt = 1; attempt <= tries; attempt++) {
     try {
-      fs.rmSync(target, { recursive: true, force: true });
+      await fs.promises.rm(target, { recursive: true, force: true });
       return null;
     } catch (e) {
       if (attempt === tries) return e;
