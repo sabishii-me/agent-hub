@@ -1653,7 +1653,7 @@
         "tags": [
           "hub"
         ],
-        "description": "The hub-level SSE stream: plugin-set changes (an install, a removal, or a runtime prepare finishing). A client that shows plugins subscribes once and re-reads on hub.plugins.changed, instead of polling. Sends hub.plugins.changed immediately on subscribe.",
+        "description": "The hub-level SSE stream: plugin-set changes (an install, a removal, or a runtime prepare finishing). A client that shows plugins subscribes once; every hub.plugins.changed names the plugin that changed and the state it is in now, so the client can draw it directly. The frame sent on subscribe carries neither id nor state - it is the handshake that says the client is attached, not a change to any plugin.",
         "parameters": [],
         "responses": {
           "200": {
@@ -1662,7 +1662,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "description": "SSE: no JSON body; frames carry {reason, at}."
+                  "description": "SSE: no JSON body. A change frame carries {id, state, at}; the frame sent on subscribe carries {at} alone, because a subscription is not a change to any plugin."
                 }
               },
               "text/event-stream": {
@@ -8369,7 +8369,7 @@
         "tags": [
           "hub"
         ],
-        "description": "install a plugin. Two sources, one landing rule: what lands is a directory with a manifest, under the id that manifest declares, in the hub's OWN plugins root (<DATA_DIR>/plugins). `{source:{url, ref?}}` clones a git repository (a URL or a local path); `{source:{artifact:{url, sha256, id, version, size?}}}` downloads a release zip and verifies it — size first, then sha256 — before anything is unpacked. An id the hub already installed is REPLACED: that is what updating is, and it is the same primitive because the only difference is whether a directory was already there. The old copy is moved aside first and removed only after the new one is in place, so a failure at any step leaves the previous plugin exactly as it was. An id living in a directory this hub does not own (AGENT_HUB_PLUGINS_DIR, a deployment's checkout) is refused with 409: that tree is somebody else's. A harness with open sessions is refused (409 `plugin_in_use`, naming them) rather than replaced under a running process. The response says `updated`, and the plugin's runtime is prepared by the adapter in the background.",
+        "description": "install a plugin. Two sources, one landing rule: what lands is a directory with a manifest, under the id that manifest declares, in the hub's OWN plugins root (<DATA_DIR>/plugins). `{source:{url, ref?}}` clones a git repository (a URL or a local path); `{source:{artifact:{url, sha256, id, pluginType, version, size?}}}` downloads a release zip and verifies it — size first, then sha256 — before anything is unpacked. An id the hub already installed is REPLACED: that is what updating is, and it is the same primitive because the only difference is whether a directory was already there. The old copy is moved aside first and removed only after the new one is in place, so a failure at any step leaves the previous plugin exactly as it was. An id living in a directory this hub does not own (AGENT_HUB_PLUGINS_DIR, a deployment's checkout) is refused with 409: that tree is somebody else's. A harness with open sessions is refused (409 `plugin_in_use`, naming them) rather than replaced under a running process. The response says `updated`, and the plugin's runtime is prepared by the adapter in the background.",
         "parameters": [],
         "responses": {
           "200": {
@@ -11821,6 +11821,10 @@
           "id": {
             "type": "string"
           },
+          "pluginType": {
+            "type": "string",
+            "description": "'harness-adapter' or 'model-provider', from the plugin's manifest; 'invalid' when the manifest declares none. A field of the plugin, never derived from the id."
+          },
           "origin": {
             "type": "string",
             "description": "'deployment' when it came from the plugins directory this hub was given, 'hub' when the hub installed it into its own root"
@@ -11858,9 +11862,16 @@
             "type": "boolean",
             "description": "whether the declared runtime command exists on disk — a filesystem fact, not a claim that the harness works"
           },
+          "state": {
+            "type": "string",
+            "description": "the hub's ONE verdict on this plugin — absent (the catalog carries it, nothing is on disk), installing (fetching and landing it), removing, preparing (materialising its runtime), failed (its runtime could not be prepared; retryable), or ready (on disk, nothing being done to it). A client renders this and derives nothing: there is no separate busy flag or prepare-state to combine, because two of them let one plugin be shown as removing AND preparing at the same time."
+          },
           "prepare": {
-            "type": "object",
-            "description": "{state: running|ready|failed, detail, startedAt, finishedAt} of the last runtime/prepare for this plugin, or null when none ran in this process"
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "{detail, startedAt, finishedAt} of the last runtime/prepare for this plugin, or null when none ran in this process. INFORMATION about how `state` was reached (what is being fetched, why it failed) — never a second state; the state itself is only ever `state`."
           },
           "invalid": {
             "type": "string",
@@ -11877,6 +11888,7 @@
         },
         "required": [
           "id",
+          "pluginType",
           "origin",
           "path",
           "source",
@@ -11885,6 +11897,7 @@
           "installedAt",
           "runtime",
           "runtimeReady",
+          "state",
           "prepare",
           "invalid",
           "artifact"
@@ -11932,9 +11945,9 @@
           "id": {
             "type": "string"
           },
-          "kind": {
+          "pluginType": {
             "type": "string",
-            "description": "'harness' or 'provider' — what the plugin is, as the registry declares it"
+            "description": "'harness-adapter' or 'model-provider' — what the plugin IS, as its own manifest declares it. A plugin's type is independent of its id: the id is the plugin's own name and carries no type. The hub composes its storage key from the two (<pluginType>-<id>)."
           },
           "name": {
             "type": "string",
@@ -12336,15 +12349,18 @@
       },
       "event_hub_plugins_changed": {
         "type": "object",
+        "description": "the set of installed plugins changed (installed | removed | runtime | subscribed); re-read what you show",
         "properties": {
-          "reason": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
             "type": "string"
           },
           "at": {
             "type": "string"
           }
-        },
-        "description": "the set of installed plugins changed (installed | removed | runtime | subscribed); re-read what you show"
+        }
       }
     }
   }

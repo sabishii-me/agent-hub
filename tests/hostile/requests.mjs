@@ -1,6 +1,6 @@
 // @since hub 0.1.5 / contract v1
 // Malformed and hostile requests: the hub refuses them as DATA and stays alive.
-import { Hub, AssetServer, adapter, client, tally, contractStamp } from '../lib/hub-harness.mjs';
+import { Hub, AssetServer, release, HARNESSES, client, tally, contractStamp } from '../lib/hub-harness.mjs';
 
 const stamp = contractStamp();
 console.log(`hostile-requests against contract protocol=${stamp.protocol} version=${stamp.version} sha=${stamp.contractSha}`);
@@ -8,7 +8,8 @@ const t = tally();
 const check = t.check;
 
 const assets = await new AssetServer().start();
-const A = assets.asset(adapter('alpha'));
+const A = assets.asset(release(HARNESSES[0]));
+const AKEY = `${release(HARNESSES[0]).pluginType}-${release(HARNESSES[0]).id}`;
 
 const hub = new Hub();
 const ep = await hub.endpoint();
@@ -33,7 +34,7 @@ await c.install(A);
 }
 
 check('the hub is alive after all of it', Array.isArray(await c.plugins()));
-check('the installed plugin is untouched by the refusals', (await c.plugins()).some((p) => p.id === 'harness-adapter-alpha'));
+check('the installed plugin is untouched by the refusals', (await c.plugins()).some((p) => p.id === AKEY), AKEY);
 
 await hub.stop();
 await assets.stop();

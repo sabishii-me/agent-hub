@@ -46,7 +46,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:<port>/v1/hub/catalog
 # 2. install a release artifact: the digest in the request is what is verified
 curl -s -X POST \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"source":{"artifact":{"id":"pi","version":"0.85.1","url":"https://.../pi-0.85.1.zip","sha256":"<64 hex>","size":32125300}}}' \
+  -d '{"source":{"artifact":{"id":"pi","kind":"harness-adapter","version":"0.85.1","url":"https://.../pi-0.85.1.zip","sha256":"<64 hex>","size":32125300}}}' \
   http://127.0.0.1:<port>/v1/hub/plugins
 
 # 2b. ...or a git checkout, into the hub's own root (<AGENT_HUB_DATA_DIR>/plugins)
@@ -70,7 +70,34 @@ exactly as it was. A harness with open sessions is refused first (`409 plugin_in
 naming them) rather than pulled out from under a running process.
 
 A **plugin** is a directory carrying a `manifest.json`; every harness lives in its own
-repository and this repository contains none. A harness runtime (an official release, a
+repository and this repository contains none.
+
+### A plugin's identity, and its state
+
+A manifest states two independent things: its `id` (the plugin's own name) and its `kind`
+(its type - `harness-adapter` or `model-provider`). Neither is derived from the other: the
+id may be any valid name, and the kind is never read out of it. The hub's storage key for
+a plugin is those two joined once, `<kind>-<id>`; that key is the directory name, the key
+in every map, and the id every route takes. Below the join it is opaque - nothing splits it
+back apart.
+
+Every plugin carries ONE `state`, the hub's own verdict, never a thing a client assembles
+from several fields:
+
+| state | meaning |
+|---|---|
+| `absent` | the catalog names it; nothing is on disk |
+| `installing` | the hub is fetching and landing it |
+| `removing` | the hub is removing it |
+| `preparing` | it is materialising the runtime its manifest pins |
+| `failed` | its runtime could not be prepared; it can be retried |
+| `ready` | it is on disk and the hub is doing nothing to it |
+
+The state is the highest-priority operation in progress (removing > installing >
+preparing), so a runtime that is still being materialised while a later operation begins
+is never reported as ready too soon. A plugin whose manifest the hub cannot honour is
+`invalid`: it is marked, left out of what runs, and the hub still STARTS (ADR-0002 - a bad
+plugin degrades, it does not take the product down). A harness runtime (an official release, a
 build product) is **not committed** anywhere and is **not installed by the hub either**:
 the plugin's own `runtime/prepare` method materialises exactly the version its manifest
 pins under `<plugin>/runtime/`, and the hub asks for that, waits, and verifies the
@@ -112,7 +139,7 @@ that knows what is installed).
 ```
 GET    /v1/hub/catalog                # the registry file this hub carries, verbatim
 GET    /v1/hub/plugins                # what the hub can see, from which root, runtime on disk?
-POST   /v1/hub/plugins                # {source:{url,ref?}} clone, or {source:{artifact:{url,sha256,id,version}}} -> <DATA_DIR>/plugins/<id>
+POST   /v1/hub/plugins                # {source:{url,ref?}} clone, or {source:{artifact:{url,sha256,id,kind,version}}} -> <DATA_DIR>/plugins/<kind>-<id>
 DELETE /v1/hub/plugins/{id}           # remove what the hub installed (never a deployment's tree)
 POST   /v1/hub/plugins/{id}/prepare   # ask the plugin to materialise its runtime
 ```
