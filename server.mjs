@@ -640,7 +640,7 @@ async function serveHarnessIcon(id, variant, res) {
   // `id` here is the plugin's storage key (`<kind>-<id>`); a registry entry carries the
   // two fields separately. Match by composing each entry the same way, so an UNINSTALLED
   // plugin (no directory, no manifest) still finds the icon its entry names.
-  const entry = (catalogValue().plugins || []).find((e) => e && e.id && e.pluginType && storageKey(e.pluginType, e.id) === id);
+  const entry = ((await catalogValue()).plugins || []).find((e) => e && e.id && e.pluginType && storageKey(e.pluginType, e.id) === id);
   const icon = entry && entry.icon && typeof entry.icon === 'object' ? entry.icon : null;
   const url = icon ? (variant === 'dark' ? (icon.dark ?? icon.light) : (icon.light ?? icon.dark)) : null;
   if (typeof url !== 'string' || !url) return fail(res, 404, 'not_found', `no '${variant}' icon for '${id}'`);
@@ -1116,14 +1116,36 @@ const SURFACE_EVENT_SET = new Set(SURFACE_EVENTS);
 
 // Clients subscribed to the hub-level event stream (GET /v1/hub/events).
 const hubEventClients = new Set();
+// The recent events, so a client that dropped its connection can resync from where it
+// left off. This is what the WHATWG Server-sent-events standard's `Last-Event-ID` is for:
+// a reconnecting EventSource sends the id of the last event it saw, and the server
+// continues from there instead of leaving a gap. Bounded (a client away longer than this
+// simply re-reads the resource, which is always the truth - ADR-0001).
+const HUB_EVENT_LOG_MAX = 256;
+const hubEventLog = [];
 function emitHubEvent(event, data) {
   if (!SURFACE_EVENT_SET.has(event)) {
     throw new Error(`undeclared SSE event '${event}': add it to SURFACE_EVENTS and to contract/v1.json`);
   }
-  const id = `hub-${++eventSeq}`;
+  const seq = ++eventSeq;
+  const id = `hub-${seq}`;
+  hubEventLog.push({ seq, id, event, data });
+  if (hubEventLog.length > HUB_EVENT_LOG_MAX) hubEventLog.shift();
   for (const res of hubEventClients) {
     try { sseWrite(res, { id, event, data }); } catch { hubEventClients.delete(res); }
   }
+}
+// The events a reconnecting client missed, by the id it last saw (`hub-<n>`). An id the
+// log no longer holds (or none) means "I cannot say what you missed", which the client
+// resolves by re-reading - so null is returned and the caller sends a fresh handshake.
+function hubEventsSince(lastEventId) {
+  if (!lastEventId) return null;
+  const m = /^hub-(\d+)$/.exec(String(lastEventId));
+  if (!m) return null;
+  const after = Number(m[1]);
+  const first = hubEventLog.length ? hubEventLog[0].seq : 0;
+  if (after < first - 1) return null;         // too far behind: the client must re-read
+  return hubEventLog.filter((e) => e.seq > after);
 }
 
 // The hub's plugin view changed. The event names WHICH plugin and WHAT state it is now
@@ -1447,15 +1469,26 @@ const ROUTES = [
   // says which is which, because a client that installs has to know where it landed.
   // The hub-level event stream: whatever the plugin set does, once, to every client that
   // shows plugins. One subscription replaces polling for an install or a prepare.
-  { method: 'GET', path: '/v1/hub/events', handler: ({ res }) => {
+  { method: 'GET', path: '/v1/hub/events', handler: ({ res, req }) => {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     hubEventClients.add(res);
-    // The contract says this stream announces on subscribe. It stays, and it stays a
-    // hub.plugins.changed: the subscribe frame carries no plugin id (there is no single
-    // plugin it is about), so a client reads that as "re-read", exactly as before. Do not
-    // make a general stream carry one feature's shape - {id, state} belongs to a real
-    // change, not to the handshake.
-    sseWrite(res, { event: 'hub.plugins.changed', data: { at: new Date().toISOString() } });
+    // Standard reconnect (WHATWG Server-sent events): a client that dropped its connection
+    // reconnects with `Last-Event-ID`, and the events it missed are replayed before the
+    // live stream continues - so a change that happened while it was away is not lost.
+    // When the gap cannot be filled from the log (too far behind, or no id), the stream
+    // opens with the ordinary handshake and the client re-reads the resource, which is
+    // always the truth (ADR-0001).
+    const missed = hubEventsSince(req.headers['last-event-id']);
+    if (missed && missed.length) {
+      for (const e of missed) sseWrite(res, e);
+    } else {
+      // The contract says this stream announces on subscribe. It stays a
+      // hub.plugins.changed: the subscribe frame carries no plugin id (there is no single
+      // plugin it is about), so a client reads that as "re-read", exactly as before. Do not
+      // make a general stream carry one feature's shape - {id, state} belongs to a real
+      // change, not to the handshake.
+      sseWrite(res, { event: 'hub.plugins.changed', data: { at: new Date().toISOString() } });
+    }
     const drop = () => hubEventClients.delete(res);
     res.on('close', drop);
     res.on('error', drop);
@@ -1474,15 +1507,21 @@ const ROUTES = [
       validate: () => { const v = validateInstallSource(b, res); return v.fail || null; },
       work: (sink) => installPlugin(b, sink) });
   } },
-  { method: 'GET', path: '/v1/hub/catalog', handler: ({ res }) =>
-    json(res, 200, catalogValue()) },
+  { method: 'GET', path: '/v1/hub/catalog', handler: async ({ res }) =>
+    json(res, 200, await catalogValue()) },
   { method: 'GET', path: '/v1/hub/plugins/{id}/icon/{variant}', handler: ({ res, params }) =>
     serveHarnessIcon(params.id, params.variant, res).catch((e) => failError(res, e)) },
-  { method: 'POST', path: '/v1/hub/registry/refresh', handler: ({ res }) =>
-    refreshRegistry().then((r) => json(res, 200, r)).catch((e) => {
-      const status = e.code === 'registry_url_missing' ? 409 : 502;
-      return fail(res, status, e.code || 'registry_fetch_failed', e.message);
-    }) },
+  { method: 'POST', path: '/v1/hub/registry/refresh', handler: ({ res }) => {
+    // Long route (ADR-0009): a network fetch. 202 + Location now; the refreshed catalog is
+    // read at GET /v1/hub/catalog. The registry is the resource whose state the refresh
+    // changes, and it is already published there - no new object.
+    return acceptLong(res, { location: '/v1/hub/catalog',
+      validate: () => null,
+      work: (sink) => refreshRegistry().then((r) => json(sink, 200, r)).catch((e) => {
+        const status = e.code === 'registry_url_missing' ? 409 : 502;
+        return fail(sink, status, e.code || 'registry_fetch_failed', e.message);
+      }) });
+  } },
   { method: 'DELETE', path: '/v1/hub/plugins/{id}', handler: ({ res, params }) => {
     // Long route (ADR-0009): 202 + Location now, remove in the background. The plugin's
     // own state shows progress and outcome; the event stream says when to re-read.
@@ -1558,12 +1597,18 @@ const ROUTES = [
       return selectProviderModels(params.id, b.enabledModelIds, res);
     })
       .catch((e) => fail(res, 400, 'validation_failed', e.message)) },
-  { method: 'POST', path: '/v1/hub/providers/{id}/models/refresh', handler: ({ res, params }) =>
-    refreshProviderCatalog(params.id).then((r) => json(res, 200, r)).catch((e) => {
-      const status = e.code === 'unsupported' ? 501 : e.code === 'provider_not_found' ? 404 : e.code === 'revision_conflict' ? 409 : e.code === 'provider_unauthorized' || e.code === 'validation_failed' ? 400 : 502;
-      const row = loadProviders().find((p) => p.id === params.id);
-      return json(res, status, { ...errorBody(e.code || 'provider_catalog_failed', e.code ? e.message : 'catalog unavailable'), catalog: row ? catalogView(row) : null });
-    }) },
+  { method: 'POST', path: '/v1/hub/providers/{id}/models/refresh', handler: ({ res, params }) => {
+    // Long route (ADR-0009): a network fetch. 202 + Location now; the refreshed catalog is
+    // read at GET /v1/hub/providers/{id}/models. A provider that does not exist is still
+    // refused fast (404) before the request is accepted.
+    return acceptLong(res, { location: `/v1/hub/providers/${params.id}/models`,
+      validate: () => (loadProviders().find((p) => p.id === params.id) ? null : fail(res, 404, 'provider_not_found', 'no such provider')),
+      work: (sink) => refreshProviderCatalog(params.id).then((r) => json(sink, 200, r)).catch((e) => {
+        const status = e.code === 'unsupported' ? 501 : e.code === 'provider_not_found' ? 404 : e.code === 'revision_conflict' ? 409 : e.code === 'provider_unauthorized' || e.code === 'validation_failed' ? 400 : 502;
+        const row = loadProviders().find((p) => p.id === params.id);
+        return json(sink, status, { ...errorBody(e.code || 'provider_catalog_failed', e.code ? e.message : 'catalog unavailable'), catalog: row ? catalogView(row) : null });
+      }) });
+  } },
 
   { method: 'GET', path: '/v1/sessions/{id}/resources', handler: (c) =>
     withSession(c.params.id, c.res, () => {
@@ -1587,12 +1632,15 @@ const ROUTES = [
     await fsp.rm(dir, { recursive: true, force: true });
     return json(res, 200, { ok: true, id: params.id });
   } },
-  { method: 'GET', path: '/v1/hub/skills/{id}/files/{file...}', handler: ({ res, params }) => {
+  { method: 'GET', path: '/v1/hub/skills/{id}/files/{file...}', handler: async ({ res, params }) => {
     const rel = params.file.join('/');
     let target;
     try { target = skillPath(params.id, rel); } catch (e) { return fail(res, 400, 'validation_failed', e.message); }
-    if (!fs.existsSync(target)) return fail(res, 404, 'not_found', 'no such skill file');
-    return json(res, 200, { skillId: params.id, path: rel, content: fs.readFileSync(target, 'utf8') });
+    // A skill file can be arbitrarily large; read it off the loop (ADR-0009 rule 1).
+    let content;
+    try { content = await fsp.readFile(target, 'utf8'); }
+    catch { return fail(res, 404, 'not_found', 'no such skill file'); }
+    return json(res, 200, { skillId: params.id, path: rel, content });
   } },
   { method: 'PUT', path: '/v1/hub/skills/{id}/files/{file...}', handler: ({ res, params, body }) =>
     body().then((b) => {
@@ -1643,8 +1691,17 @@ const ROUTES = [
   } },
 
   // ---- sessions ------------------------------------------------------------
-  { method: 'POST', path: '/v1/sessions', handler: ({ res, body }) =>
-    body().then((b) => createSession(b, res)).catch((e) => failError(res, e)) },
+  { method: 'POST', path: '/v1/sessions', handler: async ({ res, body }) => {
+    // Long route (ADR-0009): spawn the adapter, handshake, prepare - 202 + Location now,
+    // the work detached. The Location is the COLLECTION: the session id is minted inside
+    // createSession, so the list is where the new session is watched. The session's own
+    // state (status/activeTurn) is the truth; it appears in GET /v1/sessions.
+    let b = null;
+    try { b = await body(); } catch (e) { return failError(res, e); }
+    return acceptLong(res, { location: '/v1/sessions',
+      validate: () => validateCreateSession(b, res),
+      work: (sink) => createSession(b, sink) });
+  } },
   { method: 'GET', path: '/v1/sessions', handler: ({ res, url }) => {
     // ACP session/list: a deleted session is not listed, and neither is a
     // closed one — not appearing is what closing means, as opposed to deleting.
@@ -1669,18 +1726,19 @@ const ROUTES = [
     withSession(c.params.id, c.res, (s) => readHarnessSkills(c.params.id, s, c.res)) },
   { method: 'GET', path: '/v1/sessions/{id}/stats', handler: (c) =>
     withSession(c.params.id, c.res, (s) => readStats(c.params.id, s, c.res)) },
-  { method: 'POST', path: '/v1/sessions/{id}/fork', handler: (c) =>
-    withSession(c.params.id, c.res, () => c.body()
-      .then((b) => forkSession(c.params.id, b, c.res))
-      .catch((e) => failError(c.res, e))) },
-  { method: 'POST', path: '/v1/sessions/{id}/compact', handler: (c) =>
-    withSession(c.params.id, c.res, () => c.body()
-      .then((b) => compactSession(c.params.id, b, c.res))
-      .catch((e) => failError(c.res, e))) },
+  { method: 'POST', path: '/v1/sessions/{id}/fork', handler: async (c) => {
+    let b; try { b = await c.body(); } catch (e) { return failError(c.res, e); }
+    return sessionLong(c.res, c.params.id, (_s, sink) => forkSession(c.params.id, b, sink));
+  } },
+  { method: 'POST', path: '/v1/sessions/{id}/compact', handler: async (c) => {
+    let b; try { b = await c.body(); } catch (e) { return failError(c.res, e); }
+    return sessionLong(c.res, c.params.id, (_s, sink) => compactSession(c.params.id, b, sink));
+  } },
   { method: 'POST', path: '/v1/sessions/{id}/close', handler: (c) =>
-    withSession(c.params.id, c.res, () => closeSession(c.params.id, c.res)) },
+    sessionLong(c.res, c.params.id, (_s, sink) => closeSession(c.params.id, sink)) },
   { method: 'POST', path: '/v1/sessions/{id}/reopen', handler: (c) =>
-    withSession(c.params.id, c.res, () => reopenSession(c.params.id, c.res)) },
+    sessionLong(c.res, c.params.id, (_s, sink) => reopenSession(c.params.id, sink),
+      (s) => (s.deleted === true ? fail(c.res, 409, 'session_deleted', 'session was deleted from the list; it cannot be reopened') : null)) },
   { method: 'GET', path: '/v1/sessions/{id}/turns', handler: (c) =>
     withSession(c.params.id, c.res, () => listTurns(c.params.id, c.res)) },
   { method: 'GET', path: '/v1/sessions/{id}/messages', handler: (c) =>
@@ -1690,11 +1748,13 @@ const ROUTES = [
       .then((b) => sendTurn(c.params.id, b, c.req, c.res))
       .catch((e) => failError(c.res, e))) },
   { method: 'POST', path: '/v1/sessions/{id}/cancel', handler: (c) =>
-    withSession(c.params.id, c.res, () => cancelTurn(c.params.id, c.res)) },
-  { method: 'POST', path: '/v1/sessions/{id}/repair', handler: (c) =>
-    withSession(c.params.id, c.res, () => c.body()
-      .then((b) => repairSession(c.params.id, b, c.res))
-      .catch((e) => failError(c.res, e))) },
+    sessionLong(c.res, c.params.id, (_s, sink) => cancelTurn(c.params.id, sink),
+      (s) => { const a = s.activeTurn; const done = a && (a.state === 'ended' || a.state === 'unknown' || a.state === 'idle' || a.state === 'cancelling'); if (done) return null; const conn = connFor(c.params.id); return conn ? null : fail(c.res, 502, 'adapter_unreachable', 'adapter not running'); }) },
+  { method: 'POST', path: '/v1/sessions/{id}/repair', handler: async (c) => {
+    let b; try { b = await c.body(); } catch (e) { return failError(c.res, e); }
+    return sessionLong(c.res, c.params.id, (_s, sink) => repairSession(c.params.id, b, sink),
+      (s) => (configuringSessions.has(c.params.id) ? fail(c.res, 409, 'session_busy', 'session configuration is in progress') : null));
+  } },
   { method: 'GET', path: '/v1/sessions/{id}/approvals', handler: (c) =>
     withSession(c.params.id, c.res, () =>
       json(c.res, 200, { approvals: [...approvals.values()].filter((a) => a.sid === c.params.id).map(({ conn: _c, timer: _t, adapterRequestId: _r, ...a }) => a) })) },
@@ -2214,18 +2274,28 @@ async function refreshRegistry() {
   let raw = null;
   try { raw = JSON.parse(text); } catch (e) { throw Object.assign(new Error(`the registry URL did not return JSON: ${e.message}`), { code: 'registry_fetch_failed' }); }
   if (!raw || !Array.isArray(raw.plugins)) throw Object.assign(new Error('the registry has no plugins array'), { code: 'registry_fetch_failed' });
-  fs.writeFileSync(REGISTRY_FILE, text);
+  // The registry can be large; write it off the loop (ADR-0009 rule 1).
+  await fsp.writeFile(REGISTRY_FILE, text);
   return { source: REGISTRY_FILE, plugins: raw.plugins.length };
 }
-function catalogValue() {
-  if (!fs.existsSync(REGISTRY_FILE)) return { schema: 1, source: null, plugins: [], fault: `no registry at ${REGISTRY_FILE}` };
+// The registry can be large (it once carried inlined icons and runtime closures), and it
+// is read to answer a request - so it is read OFF the loop (ADR-0009 rule 1) and cached
+// by mtime, so a request does not re-read megabytes. refreshRegistry writes the file, so
+// its mtime changes and the next read sees the new value.
+let catalogCache = { mtimeMs: -1, value: null };
+async function catalogValue() {
+  let stat = null;
+  try { stat = await fsp.stat(REGISTRY_FILE); } catch { return { schema: 1, source: null, plugins: [], fault: `no registry at ${REGISTRY_FILE}` }; }
+  if (catalogCache.value && catalogCache.mtimeMs === stat.mtimeMs) return catalogCache.value;
   let raw = null;
-  try { raw = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); }
+  try { raw = JSON.parse(await fsp.readFile(REGISTRY_FILE, 'utf8')); }
   catch (e) { return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: `the registry file is not readable JSON: ${e.message}` }; }
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.plugins)) {
     return { schema: 1, source: REGISTRY_FILE, plugins: [], fault: 'the registry file has no plugins array' };
   }
-  return { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: REGISTRY_FILE, note: raw.note ?? null, plugins: raw.plugins };
+  const value = { schema: typeof raw.schema === 'number' ? raw.schema : 1, source: REGISTRY_FILE, note: raw.note ?? null, plugins: raw.plugins };
+  catalogCache = { mtimeMs: stat.mtimeMs, value };
+  return value;
 }
 
 // Installing a plugin. Two sources, one landing rule: what lands is a directory with
@@ -3316,10 +3386,10 @@ function startProviderAuth(id, res) {
   if (typeof plugin.beginAuth !== 'function' || !methods.some((m) => m !== 'api-key')) {
     return fail(res, 501, 'unsupported', 'this provider type has no authorization flow');
   }
-  if ([...providerAuthOps.values()].some((op) => op.providerId === id && op.state === 'pending')) {
-    const existing = [...providerAuthOps.values()].find((op) => op.providerId === id && op.state === 'pending');
-    return json(res, 200, { operationId: existing.id, ...(existing.next ? { next: existing.next } : {}) , pending: true });
-  }
+  // An authorization already running answers 202 pointing at ITS step resource: the flow
+  // is one resource, and a second start does not create a second one.
+  const running = [...providerAuthOps.values()].find((op) => op.providerId === id && op.state === 'pending');
+  if (running) return accepted(res, `/v1/hub/providers/${id}/auth/${running.id}`);
   const op = { id: `op-${crypto.randomBytes(6).toString('hex')}`, providerId: id, state: 'pending', next: null, error: null, abort: new AbortController(), startedAt: new Date().toISOString() };
   providerAuthOps.set(op.id, op);
   const report = (info) => { if (!op.next && info && typeof info === 'object') op.next = info; };
@@ -3350,23 +3420,11 @@ function startProviderAuth(id, res) {
       op.state = 'failed';
       op.error = e && e.message ? e.message : String(e);
     });
-  // The caller gets the first declared step; the flow keeps running in the hub.
-  const deadline = Date.now() + 20000;
-  return (async () => {
-    while (Date.now() < deadline) {
-      if (op.next) return json(res, 200, { operationId: op.id, next: op.next });
-      if (op.state !== 'pending') {
-        return op.state === 'failed'
-          ? fail(res, 502, 'upstream_blocked', op.error || 'authorization failed')
-          : fail(res, 400, 'validation_failed', 'the authorization ended before it produced steps');
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    op.abort.abort();
-    op.state = 'failed';
-    op.error = 'the authorization did not produce steps in time';
-    return fail(res, 502, 'upstream_blocked', op.error);
-  })();
+  // The flow runs in the hub and is watched at its own resource: the caller is answered
+  // 202 + Location NOW (ADR-0009) instead of being held up to 20s while the provider
+  // produces its first step. GET /v1/hub/providers/{id}/auth/{op} carries the steps, the
+  // outcome and any error, which is the auth flow's own state - not a second object.
+  return accepted(res, `/v1/hub/providers/${id}/auth/${op.id}`);
 }
 function providerAuthStatus(id, opId, res) {
   const op = providerAuthOps.get(opId);
@@ -3748,6 +3806,25 @@ function rejectUnknownFields(res, body, allowed, route) {
   fail(res, 400, 'validation_failed',
     `${route}: unknown field${unknown.length > 1 ? 's' : ''} ${unknown.map((k) => `'${k}'`).join(', ')}; accepts ${allowed.map((k) => `'${k}'`).join(', ')}`);
   return true;
+}
+
+// The checks that must FAIL the request before the session work is accepted (ADR-0009):
+// unknown fields, a harness that does not exist or is disabled, a cwd that is not an
+// absolute existing directory. Cheap, and they answer 4xx directly. Returns null (ok) or
+// the fail(...) result. createSession runs the same checks again for the detached path, so
+// the two never disagree.
+function validateCreateSession(b, res) {
+  if (rejectUnknownFields(res, b, ['harnessId', 'modelProviderId', 'connectionId', 'modelId', 'title', 'presetId', 'plan', 'review', 'thinkingLevel', 'cwd', 'additionalDirectories', ], 'POST /v1/sessions')) return true;
+  const harnessId = b && b.harnessId;
+  if (!harnessId || !manifestOf(harnessId)) return fail(res, 404, 'harness_not_found', 'no such harness');
+  if (!isHarnessEnabled(harnessId)) return fail(res, 409, 'harness_disabled', `harness ${harnessId} is deactivated; activate it before use`);
+  if (b.cwd != null && typeof b.cwd !== 'string') return fail(res, 400, 'validation_failed', 'cwd must be a directory path');
+  if (typeof b.cwd === 'string' && b.cwd.trim()) {
+    if (!path.isAbsolute(b.cwd)) return fail(res, 400, 'validation_failed', 'cwd must be an absolute directory path');
+    try { if (!fs.statSync(fs.realpathSync(b.cwd)).isDirectory()) throw new Error('not a directory'); }
+    catch { return fail(res, 400, 'validation_failed', 'cwd must be an existing directory'); }
+  }
+  return null;
 }
 
 function createSession(b, res) {
@@ -4622,6 +4699,21 @@ function acceptLong(res, { location, validate, work }) {
   Promise.resolve().then(() => work(sinkRes())).catch((e) => {
     try { process.stderr.write(`accepted work failed: ${(e && e.stack) || e}` + NL); } catch {}
   });
+}
+
+// A long SESSION command (ADR-0009): the session must exist first (404 if not), then the
+// request is answered 202 + Location /v1/sessions/{id} and the work runs detached. The
+// session's own state (status/activeTurn) - read at GET /v1/sessions/{id} - is the truth,
+// and the change is pushed on the session's event stream. `run` receives the session and
+// a sink for the detached call.
+function sessionLong(res, sid, run, precheck) {
+  const s = sessions.get(sid);
+  if (!s) return fail(res, 404, 'unknown_session', 'no such session; never silently created');
+  return acceptLong(res, { location: `/v1/sessions/${sid}`,
+    // A precondition that must fail the request before it is accepted (409 busy/closed,
+    // etc). It answers 4xx directly with the same refusal the detached work would give.
+    validate: () => (precheck ? precheck(s) : null),
+    work: (sink) => run(s, sink) });
 }
 
 // An error carries its own status: contract/errors.json is the master table, so a

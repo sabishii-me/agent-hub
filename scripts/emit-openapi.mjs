@@ -210,7 +210,18 @@ for (const e of contract.endpoints) {
       description: `Each SSE frame is "event: <name>\\ndata: <json>\\n\\n" — the JSON is the frame object below, whose "event" is the name and whose "data" is the payload. This stream carries: ${e.events.join(', ')}.`,
     };
   }
-  op.responses['200'] = { description: 'ok', content };
+  if (e.accepted) {
+    // A long route (ADR-0009): the request is ACCEPTED, not answered with the finished
+    // resource. 202 + Location, per e.accepted (RFC 9110 15.3.3 / 10.2.2). The finished
+    // resource is at the Location instead.
+    op.responses[String(e.accepted.status)] = {
+      description: e.accepted.description || 'accepted; the work runs in the background',
+      headers: { location: { description: 'where the resource whose state shows the outcome is read', schema: { type: 'string' }, example: e.accepted.location } },
+      content: { 'application/json': { schema: { type: 'object', properties: { accepted: { type: 'boolean' }, location: { type: 'string' } } } } },
+    };
+  } else {
+    op.responses['200'] = { description: 'ok', content };
+  }
   Object.assign(op.responses, errorResponses);
   paths[openapiPath] = { ...(paths[openapiPath] || {}), [e.method.toLowerCase()]: op };
 }

@@ -1264,7 +1264,12 @@
           "$ref": "#/defs/session"
         }
       },
-      "description": " A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and — worst — let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back."
+      "description": " A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and — worst — let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back.",
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
+      }
     },
     {
       "method": "GET",
@@ -1416,6 +1421,11 @@
         "turn": {
           "$ref": "#/defs/turnState"
         }
+      },
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions/{id}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
       }
     },
     {
@@ -1436,7 +1446,12 @@
         "proven": "boolean?",
         "recoverable": "boolean?"
       },
-      "description": "Recover a session whose cancelled turn never confirmed its end. preview:true returns the exact steps and leaves state untouched. The real call re-aborts, replaces the adapter process so no late events from the old turn can arrive, then re-attaches via session/start(resume). If the session cannot be re-established it STAYS needs-repair with repair_failed; a repair that cannot be proven is not reported as one. response.proven is true only when the re-attach succeeded."
+      "description": "Recover a session whose cancelled turn never confirmed its end. preview:true returns the exact steps and leaves state untouched. The real call re-aborts, replaces the adapter process so no late events from the old turn can arrive, then re-attaches via session/start(resume). If the session cannot be re-established it STAYS needs-repair with repair_failed; a repair that cannot be proven is not reported as one. response.proven is true only when the re-attach succeeded.",
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions/{id}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
+      }
     },
     {
       "method": "GET",
@@ -1663,6 +1678,11 @@
           "sessionId": "string",
           "afterTurnId": "string|null"
         }
+      },
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
       }
     },
     {
@@ -1674,6 +1694,11 @@
         "session": {
           "$ref": "#/defs/session"
         }
+      },
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions/{id}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
       }
     },
     {
@@ -1686,6 +1711,11 @@
           "$ref": "#/defs/session"
         },
         "reopened": "boolean?"
+      },
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions/{id}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
       }
     },
     {
@@ -1861,7 +1891,12 @@
         "stale": "boolean",
         "models": "array"
       },
-      "request": {}
+      "request": {},
+      "accepted": {
+        "status": 202,
+        "location": "/v1/hub/providers/{id}/models",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
+      }
     },
     {
       "method": "PATCH",
@@ -1898,7 +1933,12 @@
       "events": [
         "session.compacting",
         "session.compacted"
-      ]
+      ],
+      "accepted": {
+        "status": 202,
+        "location": "/v1/sessions/{id}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
+      }
     },
     {
       "method": "GET",
@@ -1950,6 +1990,11 @@
           "type": "integer",
           "description": "how many plugin entries the fetched registry carries"
         }
+      },
+      "accepted": {
+        "status": 202,
+        "location": "/v1/hub/catalog",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
       }
     },
     {
@@ -2009,7 +2054,12 @@
         "artifact_download_failed",
         "artifact_digest_mismatch",
         "plugin_archive_invalid"
-      ]
+      ],
+      "accepted": {
+        "status": 202,
+        "location": "/v1/hub/plugins",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
+      }
     },
     {
       "method": "DELETE",
@@ -2040,7 +2090,12 @@
         "conflict",
         "plugin_in_use",
         "plugin_remove_failed"
-      ]
+      ],
+      "accepted": {
+        "status": 202,
+        "location": "/v1/hub/plugins/{id}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
+      }
     },
     {
       "method": "POST",
@@ -2296,6 +2351,11 @@
       "response": {
         "operationId": "string",
         "next": "object"
+      },
+      "accepted": {
+        "status": 202,
+        "location": "/v1/hub/providers/{id}/auth/{op}",
+        "description": "Long work is a command, not a call (ADR-0009): the request is accepted with 202 and a Location header naming the resource whose state will show the outcome, and the work runs in the background. Progress and the outcome are that resource's OWN state, pushed on the event stream. A client issues the command, then reads the resource; it never holds the connection for the work. A bad request is still refused 4xx before acceptance."
       }
     },
     {
