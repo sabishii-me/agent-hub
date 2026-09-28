@@ -11,7 +11,6 @@ import { listSkillResources, readSkillResource } from "./resources.mjs";
 // speak /v1 (v1.json). History is read-through from the adapter, never a
 // server-side copy. Assistant message ids are adapter-native, never forged.
 
-import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -23,6 +22,8 @@ import { getBuildId } from './build-id.mjs';
 import { extractZipTo } from './zip.mjs';
 import { installRuntime, platformKey, runtimeMarker, sourcesDigest } from './runtime.mjs';
 import { storeSecret, getSecret, deleteSecret, listSecretNames } from './secret-store.mjs';
+import { buildApp, matchPath, makeRes } from './transport.mjs';
+import { serve } from '@hono/node-server';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.AGENT_HUB_DATA_DIR || path.join(os.homedir(), '.sabishii-me', 'agent-hub');
@@ -1750,52 +1751,22 @@ function surfaceValue() {
   };
 }
 
-// Path matching: exact in segment count, first row wins. {name} captures one
-// segment; a trailing {name...} captures the rest. Values arrive decoded, once.
-function matchPath(pattern, pathname) {
-  const want = pattern.split('/').filter(Boolean);
-  const got = pathname.split('/').filter(Boolean);
-  const params = {};
-  for (let i = 0; i < want.length; i += 1) {
-    const w = want[i];
-    if (w.endsWith('...}')) {
-      params[w.slice(1, -4)] = got.slice(i).map(decodeURIComponent);
-      return params;
-    }
-    if (i >= got.length) return null;
-    if (w.startsWith('{') && w.endsWith('}')) { params[w.slice(1, -1)] = decodeURIComponent(got[i]); continue; }
-    if (w !== got[i]) return null;
-  }
-  return got.length === want.length ? params : null;
-}
-
-function route(req, res) {
-  const url = new URL(req.url, 'http://core');
-  const body = () => new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (d) => { raw += d; if (raw.length > 1_000_000) req.destroy(); });
-    req.on('end', () => { try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(Object.assign(new Error('bad json'), { code: 'validation_failed' })); } });
-  });
-
-  let matched = null;
-  let params = null;
-  for (const row of ROUTES) {
-    if (row.method !== req.method) continue;
-    const p = matchPath(row.path, url.pathname);
-    if (p) { matched = row; params = p; break; }
-  }
-  // No route: the path is not part of the surface (404 not_found, whatever the
-  // token). A route that exists but is not for this caller is 401 instead.
-  if (!matched) return fail(res, 404, 'not_found', `no route ${req.method} ${url.pathname}`);
-  if (matched.auth !== false && (req.headers.authorization || '') !== `Bearer ${token}`) {
-    return fail(res, 401, 'unauthorized', 'bad token');
-  }
-  try {
-    return matched.handler({ req, res, url, params, body });
-  } catch (e) {
-    return failError(res, e, 'internal_error');
-  }
-}
+// The transport (server, routing, dispatch, streaming) is Hono's, built in transport.mjs
+// (ADR-0010). The ROUTES table stays the single description of the surface; Hono is the
+// mechanism that matches it. A handler is unchanged: it receives { req, res, url, params,
+// body } and answers through `res`, whose Node-ServerResponse shape transport.mjs builds
+// on top of a streaming Response.
+//
+// Auth is the hub's own (a bearer token from the endpoint file), so it is passed in rather
+// than delegating to a framework middleware: the token is the hub's contract material, and
+// a route marked auth:false (discovery) answers without it.
+const app = buildApp({
+  routes: ROUTES,
+  authCheck: (req) => {
+    if ((req.headers.authorization || '') === `Bearer ${token}`) return null;
+    return { status: 401, body: errorBody('unauthorized', 'bad token') };
+  },
+});
 
 // A provider's models are declared by the caller and stored as declared: the
 // core is the road the declaration travels on, not a judge of it. A declaration
@@ -4570,9 +4541,9 @@ function failError(res, e, fallbackCode = 'validation_failed') {
   return fail(res, declared || 400, code, (e && e.message) || 'request failed');
 }
 
-const server = http.createServer((req, res) => {
-  try { route(req, res); } catch (e) { fail(res, 500, 'internal_error', e.message); }
-});
+// The listener is Hono's (ADR-0010). `serve` returns the underlying Node http.Server, so
+// server.address()/port keep working and the endpoint file is written exactly as before.
+let server = null;
 
 // The contract is enforced where it cannot be skipped: at boot. A hub that answers a
 // route the contract does not declare, that promises one it does not answer, that can
@@ -4728,7 +4699,7 @@ selfCheck();
 loadSessions();
 // remove a stale endpoint file before binding (see the note where it is declared)
 fs.rmSync(ENDPOINT, { force: true });
-server.listen(0, '127.0.0.1', () => {
+server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, () => {
   // The client's connection material. Written atomically (temp + rename) so a
   // reader never sees half a file, and 0600 so another account on the machine
   // cannot read the token — it is the only thing standing between a local
