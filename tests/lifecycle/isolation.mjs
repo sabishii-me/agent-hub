@@ -79,8 +79,30 @@ console.log('a sample never contradicts itself, under load');
   check('no read ever showed a plugin in two states, or carried a second state field', bad.length === 0, bad.slice(0, 3).join(' | '));
 }
 
+console.log('a plugin that is still arriving still knows what it is');
+{
+  // Reported by the UI: while a plugin was installing, the hub told it the type was
+  // `invalid` (there is no manifest yet), and the screen filtered the not-yet-installed
+  // plugin OUT - so the one moment a person wants to see progress, the row vanished. The
+  // type the INSTALL REQUEST stated must be what a not-yet-landed plugin reports.
+  const spec = assets.asset(release(HARNESSES[0]));
+  const watching = [];
+  const watcher = (async () => { for (let i = 0; i < 40; i++) { watching.push(await c.plugins()); await sleep(20); } })();
+  await c.install(spec);
+  await watcher;
+  const key = `${spec.pluginType}-${spec.id}`;
+  const wrong = watching.flatMap((sample) => {
+    const row = sample.find((p) => p.id === key);
+    return row && row.pluginType !== spec.pluginType ? [`${row.id}: ${row.pluginType}`] : [];
+  });
+  check('a plugin being installed reports its real type, never "invalid"', wrong.length === 0, wrong.slice(0, 3).join(' | '));
+}
+
 console.log('a plugin is in exactly one state it has a right to be in');
 {
+  // Every plugin has been handed to the hub; wait for them ALL to settle before checking
+  // that none is left working. A real runtime (deepseek's is 235 sources) takes a while.
+  await until(async () => (await c.plugins()).every((p) => ['ready', 'failed', 'absent'].includes(p.state)), { timeoutMs: 300000 });
   const final = await c.plugins();
   const states = final.map((p) => `${p.id}:${p.state}`).join(' ');
   // The test does not predict which plugin succeeds. Whether a plugin ends READY or

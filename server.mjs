@@ -2040,7 +2040,10 @@ function pluginList() {
     // empty set is what removes the entry and falls back to the disk fact).
     const op = stateOfOps(held.ops);
     if (!op || rows.some((r) => r.id === id)) continue;
-    rows.push({ id, pluginType: pluginTypeOf(id), state: op, detail: held.detail ?? null });
+    // The type is what the OPERATION stated (the install request names it). A plugin that
+    // has not landed has no manifest to read a type from, and reporting `invalid` for one
+    // that is simply still arriving made a client that filters by type drop the row.
+    rows.push({ id, pluginType: held.type || pluginTypeOf(id), state: op, detail: held.detail ?? null });
   }
   return rows;
 }
@@ -2272,7 +2275,7 @@ async function installArtifact(a, res) {
   // fetched, so the state this starts already has the key the plugin will have on disk.
   // The kind comes from the registry entry's own field; it is never read out of the id.
   const key = storageKey(a.pluginType, a.id);
-  enterState(key, 'installing');
+  enterState(key, 'installing', null, a.pluginType);
   try {
   const work = fs.mkdtempSync(path.join(HUB_PLUGINS_DIR, '.download-'));
   const file = path.join(work, 'artifact.zip');
@@ -2340,10 +2343,10 @@ async function installArtifact(a, res) {
 // memory of the click. The body below does the work.
 async function landPlugin(staging, id, record, res) {
   const m = readJson(path.join(staging, 'manifest.json'), null) || {};
-  // The key is composed here, at use time: the manifest's own `id` and `kind`, joined
-  // once. `id` is the plugin's name; `kind` is its type. Neither is the other.
+  // The key is composed here, at use time: the manifest's own `id` and `pluginType`,
+  // joined once. `id` is the plugin's name; `pluginType` is its type. Neither is the other.
   const key = storageKey(m.pluginType, m.id || id);
-  enterState(key, 'installing');
+  enterState(key, 'installing', null, m.pluginType);
   try {
     return await landPluginBody(staging, key, record, res);
   } finally {
@@ -2721,9 +2724,10 @@ function stateOfOps(ops) {
   for (const op of ops) if (best === null || OP_RANK[op] > OP_RANK[best]) best = op;
   return best;
 }
-function enterState(id, op, detail = null) {
-  const held = pluginState.get(id) || { ops: new Set(), detail: null, since: new Date().toISOString(), inFlight: null };
+function enterState(id, op, detail = null, pluginType = null) {
+  const held = pluginState.get(id) || { ops: new Set(), detail: null, type: null, since: new Date().toISOString(), inFlight: null };
   const before = stateOfOps(held.ops);
+  if (pluginType) held.type = pluginType;
   held.ops.add(op);
   held.detail = detail ?? held.detail;
   held.since = new Date().toISOString();
