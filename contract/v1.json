@@ -848,7 +848,9 @@
       },
       "capabilities": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "what the plugin declares it can do, from its manifest. Empty when it declares none."
       },
       "pluginType": {
@@ -1543,6 +1545,10 @@
         "startedAt": {
           "type": "string",
           "description": "ISO timestamp of this boot"
+        },
+        "version": {
+          "type": "string",
+          "description": "the hub's OWN product version (its package.json version), e.g. 0.1.9 - WHICH hub this is. Distinct from `protocol.version` (the wire protocol) and `buildId` (the build marker). null when the hub cannot read its own package.json."
         },
         "buildId": "string",
         "protocol": {

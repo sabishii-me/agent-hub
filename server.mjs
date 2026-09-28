@@ -164,6 +164,15 @@ function readOpenapi() {
 }
 const PROTOCOL = { name: CONTRACT.protocol, version: CONTRACT.version };
 const BUILD_ID = getBuildId();
+// The hub's OWN product version (the release it was cut from). It is read from the hub's
+// own package.json, which every packed artifact carries. Exposed on /v1/hub/status so a
+// client can show WHICH hub it is talking to; distinct from `protocol.version` (the wire
+// protocol) and `buildId` (the build marker). null when the file is unreadable - a missing
+// version is reported as absent, never invented.
+const HUB_VERSION = (() => {
+  try { const v = JSON.parse(fs.readFileSync(path.join(HERE, 'package.json'), 'utf8')).version; return typeof v === 'string' && v ? v : null; }
+  catch { return null; }
+})();
 
 adoptLegacyDataDir();
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -1588,6 +1597,9 @@ const ROUTES = [
       pid: process.pid,
       port: server.address() ? server.address().port : null,
       startedAt: STARTED_AT,
+      // The hub's own product version (its package.json version). A client shows this to
+      // say WHICH hub it is talking to. Distinct from the protocol version and buildId.
+      version: HUB_VERSION,
       buildId: BUILD_ID,
       protocol: PROTOCOL,
       contract: CONTRACT,
