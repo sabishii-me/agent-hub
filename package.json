@@ -1,6 +1,6 @@
 {
   "name": "sabishii-me-agent-hub",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "description": "A local hub that manages agent harnesses: one HTTP+SSE surface on loopback, one plugin per harness.",
