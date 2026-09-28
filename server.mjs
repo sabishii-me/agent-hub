@@ -2043,7 +2043,16 @@ function pluginList() {
     // The type is what the OPERATION stated (the install request names it). A plugin that
     // has not landed has no manifest to read a type from, and reporting `invalid` for one
     // that is simply still arriving made a client that filters by type drop the row.
-    rows.push({ id, pluginType: held.type || pluginTypeOf(id), state: op, detail: held.detail ?? null });
+    const identity = held.identity || {};
+    rows.push({
+      id,
+      pluginType: identity.pluginType || pluginTypeOf(id),
+      name: identity.name ?? null,
+      summary: identity.summary ?? null,
+      capabilities: Array.isArray(identity.capabilities) ? identity.capabilities : [],
+      state: op,
+      detail: held.detail ?? null,
+    });
   }
   return rows;
 }
@@ -2068,7 +2077,36 @@ function pluginStateOf(id, hasDir) {
     if (op) return op;                       // removing | installing | preparing | failed
     // ops is empty: nothing is being done - fall through to the disk fact.
   }
+  // A record marked `deleting` is an UNFINISHED removal: the hub was killed (or the files
+  // could not go yet). It reads as removing until the files are gone and the record is
+  // cleared - at boot, and while a retry is pending.
+  const rec = (readJson(PLUGINS_FILE, {}) || {})[id];
+  if (rec && rec.deleting && hasDir) return 'removing';
   return hasDir ? 'ready' : 'absent';
+}
+
+// Finish removals a previous life left half-done. A `deleting` record means files were
+// about to be removed: remove them now, then drop the record and reconcile. Runs at boot,
+// before the surface is served, so a client never sees the half state.
+async function finishInterruptedRemovals() {
+  const records = readJson(PLUGINS_FILE, {}) || {};
+  const pending = Object.keys(records).filter((id) => records[id] && records[id].deleting);
+  for (const id of pending) {
+    const dir = pluginDir(id);
+    process.stderr.write(`removal of '${id}' was interrupted; finishing it` + NL);
+    try { await stopHarnessProcesses(id); } catch { /* nothing to stop */ }
+    if (fs.existsSync(dir)) {
+      const failed = await rmRetrying(dir, { tries: 1 });
+      if (failed) {
+        // Still cannot go: keep the intent so the next boot (or a retry) tries again.
+        process.stderr.write(`the files at '${dir}' could not be removed yet (${failed.message}); the removal stays pending` + NL);
+        continue;
+      }
+    }
+    mutateJson(PLUGINS_FILE, {}, (r) => { delete r[id]; });
+    reconcileHarnesses();
+    announcePluginsChanged(id);
+  }
 }
 
 // A plugin's TYPE, read from its manifest's own `pluginType` field. It is never inferred
@@ -2087,15 +2125,16 @@ function pluginValue(id) {
   const providerEntry = providerModuleEntry(id);
   return {
     id,
-    pluginType: pluginTypeOf(id),
-    // The plugin's own metadata, from the manifest on disk - a FEW small fields, never the
-    // install configuration (runtime.sources is hundreds of entries; it lives in the
-    // artifact and is read when the runtime is materialised, never in a listing). A client
-    // that shows what a plugin IS reads it here; it does not have to find the registry
-    // entry and join two sources to learn a name.
-    name: typeof m.name === 'string' ? m.name : null,
-    summary: typeof m.summary === 'string' ? m.summary : null,
-    capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
+    // What the plugin IS. While the hub is operating on it, this is the identity captured
+    // when the operation began - a removal deletes the manifest, and the plugin's own name
+    // and type must not disappear while a person watches. At rest it is the manifest on
+    // disk. Either way it is a FEW small fields, never the install configuration
+    // (runtime.sources is hundreds of entries, lives in the artifact, and is read when the
+    // runtime is materialised - never in a listing).
+    pluginType: (held && held.identity && held.identity.pluginType) || pluginTypeOf(id),
+    name: (held && held.identity && held.identity.name) || (typeof m.name === 'string' ? m.name : null),
+    summary: (held && held.identity && held.identity.summary) || (typeof m.summary === 'string' ? m.summary : null),
+    capabilities: (held && held.identity && held.identity.capabilities && held.identity.capabilities.length) ? held.identity.capabilities : (Array.isArray(m.capabilities) ? m.capabilities : []),
     icons: harnessIcons(id),
     provider: m.provider ? { apiVersion: m.provider.apiVersion, module: m.provider.module, types: [...PROVIDER_TYPE_INDEX.values()].filter((x) => x.pluginId === id).map((x) => `${x.descriptor.id}@${x.descriptor.version}`), fault: providerEntry && providerEntry.error ? providerEntry.error : null } : null,
     origin: pluginOrigin(id),
@@ -2502,9 +2541,33 @@ async function removePlugin(id, res) {
     // every install). It is writing hundreds of files under the plugin directory the
     // moment we try to delete, which is what the EPERM was: a removal must not race the
     // plugin's own prepare. Wait for it to finish, then stop processes.
+    // ORDER MATTERS, AND IT SURVIVES A KILL.
+    //
+    // A removal touches three things that are not one thing: the plugin's files, the record
+    // of where it came from (installed.json), and the harness registry (harnesses.json).
+    // Doing them in an arbitrary order means a hub killed between two of them comes back
+    // holding half a removal - a record pointing at a directory that is gone, or a registry
+    // row for a plugin that does not exist. So the removal is written down BEFORE it starts
+    // and cleared only when it is done:
+    //
+    //   1. satisfy the preconditions (no prepare racing us, no process holding the files,
+    //      the harness's sessions closed) - a running image cannot be deleted on Windows;
+    //   2. WRITE THE INTENT: a `deleting` flag on the plugin's record;
+    //   3. delete the files;
+    //   4. clear the record entirely and reconcile the registry, which also drops the
+    //      intent - the removal is now done and there is nothing left to finish;
+    //
+    // A hub that starts and finds a `deleting` record finishes the job (see
+    // finishInterruptedRemovals) instead of pretending nothing happened.
     const preparing = pluginState.get(id);
     if (preparing && preparing.inFlight) { try { await preparing.inFlight; } catch { /* its failure is not the removal's */ } }
     await stopHarnessProcesses(id);
+    const closed = closeSessionsOf(id);
+    // The intent. Written before any file is touched, so a kill from here on is recoverable.
+    const record = (readJson(PLUGINS_FILE, {}) || {})[id];
+    mutateJson(PLUGINS_FILE, {}, (records) => {
+      records[id] = { ...(record || {}), deleting: true, deletingSince: new Date().toISOString() };
+    });
     let failed = null;
     for (let attempt = 1; attempt <= 12; attempt++) {
       failed = await rmRetrying(dir, { tries: 1 });
@@ -2516,12 +2579,13 @@ async function removePlugin(id, res) {
       await stopHarnessProcesses(id);
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
-    const closed = closeSessionsOf(id);
     if (failed) {
-      return fail(res, 409, 'plugin_in_use', `plugin '${id}' is still in use by a process that did not stop: ${failed.message} — its ${closed} session(s) were closed; try again in a moment`);
+      // The files are still there. The intent stays - the removal is unfinished, not
+      // cancelled - so a retry or a restart continues it. The record keeps the plugin's
+      // origin, and the row keeps its identity.
+      return fail(res, 409, 'plugin_in_use', `plugin '${id}' is still in use by a process that did not stop: ${failed.message} — its ${closed} session(s) were closed; the removal is unfinished and will continue on retry or restart`);
     }
-    // The files are gone. The records follow in the same request, so the hub never
-    // answers "removed" while a stale record still claims the plugin exists.
+    // The files are gone. The record follows, which clears the intent; then the registry.
     mutateJson(PLUGINS_FILE, {}, (records) => { delete records[id]; });
     reconcileHarnesses();
     announcePluginsChanged(id);
@@ -2732,10 +2796,25 @@ function stateOfOps(ops) {
   for (const op of ops) if (best === null || OP_RANK[op] > OP_RANK[best]) best = op;
   return best;
 }
+// An operation acts on a PLUGIN, and while it runs the hub must be able to say what that
+// plugin is. The identity is captured on entry, while the manifest still exists - a removal
+// deletes the manifest, and "what is this" must not vanish the moment the removal starts.
+// `manifest` may be null (an install before anything has landed), in which case the type
+// the REQUEST stated is used; anything still unknown reads as null, never as a guess.
 function enterState(id, op, detail = null, pluginType = null) {
-  const held = pluginState.get(id) || { ops: new Set(), detail: null, type: null, since: new Date().toISOString(), inFlight: null };
+  const held = pluginState.get(id) || { ops: new Set(), detail: null, identity: null, since: new Date().toISOString(), inFlight: null };
   const before = stateOfOps(held.ops);
-  if (pluginType) held.type = pluginType;
+  if (!held.identity) {
+    const m = manifestOf(id);
+    held.identity = {
+      pluginType: (m && typeof m.pluginType === 'string' ? m.pluginType : null) || pluginType || null,
+      name: m && typeof m.name === 'string' ? m.name : null,
+      summary: m && typeof m.summary === 'string' ? m.summary : null,
+      capabilities: m && Array.isArray(m.capabilities) ? m.capabilities : [],
+    };
+  } else if (pluginType && !held.identity.pluginType) {
+    held.identity.pluginType = pluginType;
+  }
   held.ops.add(op);
   held.detail = detail ?? held.detail;
   held.since = new Date().toISOString();
@@ -4616,6 +4695,7 @@ function selfCheck() {
   // operator can see why here.
   for (const f of pluginFaults) process.stderr.write(`plugin fault (the hub starts anyway): ${f}` + NL);
 }
+await finishInterruptedRemovals();
 await loadProviderPlugins();
 for (const fault of PROVIDER_PLUGIN_FAULTS) process.stderr.write(`hub provider plugin '${fault.plugin}': ${fault.error}
 `);

@@ -1,6 +1,6 @@
 {
   "name": "sabishii-me-agent-hub",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "description": "A local hub that manages agent harnesses: one HTTP+SSE surface on loopback, one plugin per harness.",
@@ -13,6 +13,7 @@
     "cli": "node cli.mjs",
     "pack": "node scripts/pack-plugins.mjs --write && node scripts/record-runtime.mjs --write",
     "pack:runtime": "node scripts/record-runtime.mjs --write",
-    "pack:hub": "node scripts/pack-hub.mjs"
+    "pack:hub": "node scripts/pack-hub.mjs",
+    "test": "node tests/run.mjs"
   }
 }
