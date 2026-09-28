@@ -230,6 +230,12 @@ async function resolveWithPnpm(spec, log) {
     }
     return base;
   };
+  // Node resolves a bare name by walking UP: it looks in the importing file's own
+  // `node_modules`, then each ancestor's, then the root's. So a dependency is placed as
+  // high as it can go - the ROOT `node_modules` - and only nested under a parent when the
+  // root slot is already taken by a DIFFERENT version. The previous walk nested every
+  // dependency under the package that named it, which put `@earendil-works/pi-agent-core`
+  // 30 levels deep inside `pi-server` where `dist/flow-control/...` could not resolve it.
   const queue = [{ id: rootId, path: '' }];
   while (queue.length) {
     const { id, path } = queue.shift();
@@ -238,8 +244,13 @@ async function resolveWithPnpm(spec, log) {
     for (const [dn, dv] of Object.entries(deps)) {
       const child = `${dn}@${dv}`;
       if (placedAt.has(child)) continue;
-      const childPath = path ? `${path}/node_modules/${dn}` : `node_modules/${dn}`;
-      if (placed.has(childPath)) continue;
+      // Prefer the ROOT slot. It is free (no one is there) or holds THIS exact version
+      // (then placedAt would have had it and we would have skipped). If a different
+      // version holds it, nest under this parent - the level Node checks first.
+      const rootSlot = `node_modules/${dn}`;
+      const takenByOther = [...placedAt.entries()].some(([otherId, otherPath]) => otherPath === rootSlot && otherId !== child);
+      const childPath = takenByOther ? `${path ? `${path}/` : ''}node_modules/${dn}` : rootSlot;
+      if (placed.has(childPath)) { continue; }
       queue.push({ id: child, path: childPath });
     }
   }
@@ -365,6 +376,42 @@ for (const name of runtimeNames) {
         });
       }
       log(`${missing.length} optional dependency variant(s) the lockfile left out were completed from the registry (${missing.map((m) => m.split(' needs ')[1]).join(', ')})`);
+    }
+
+    // A package's own `optionalDependencies` are NOT all in the lockfile either. pnpm
+    // omits a dependency's platform bindings entirely when they are optional, so
+    // `wreq-js` was recorded as one source and could not load its native module
+    // (`@wreq-js/binding-<target>` is one of the names it tries). Ask the registry what
+    // each recorded package names as optional, and record the variants that are missing -
+    // with their os/cpu, so the installing machine takes only the one it can run.
+    {
+      const have = new Set([manifest.runtime.package, ...entries.map(([k]) => nameOf(k)), ...completed.map((c) => nameOf(c.path))]);
+      const wanted = new Map();   // "name@version" -> { url, integrity, os, cpu, parentKey }
+      for (const [key, entry] of entries) {
+        const name = entry.name || nameOf(key);
+        const version = entry.version;
+        if (!version) continue;
+        let info;
+        try { info = await npmView(`${name}@${version}`, ['optionalDependencies']); } catch { continue; }
+        const optional = info.optionalDependencies || {};
+        for (const [dep, range] of Object.entries(optional)) {
+          if (have.has(dep)) continue;
+          const pinned = /^\d+\.\d+\.\d+/.test(String(range)) ? String(range) : String((await npmView(`${dep}@${range}`, ['version'])).version ?? '').split(',')[0];
+          if (!pinned) continue;
+          const id = `${dep}@${pinned}`;
+          if (wanted.has(id)) continue;
+          const binfo = await npmView(id, ['dist.tarball', 'dist.integrity', 'os', 'cpu', 'dependencies']);
+          if (!binfo['dist.integrity']) continue;
+          if (binfo.dependencies && Object.keys(binfo.dependencies).length) { log(`${id} is optional but has its own dependencies; leaving it out`); continue; }
+          wanted.set(id, { dep, url: binfo['dist.tarball'], integrity: binfo['dist.integrity'],
+            ...(Array.isArray(binfo.os) && binfo.os.length ? { os: binfo.os } : {}),
+            ...(Array.isArray(binfo.cpu) && binfo.cpu.length ? { cpu: binfo.cpu } : {}) });
+        }
+      }
+      for (const [id, w] of wanted) {
+        completed.push({ url: w.url, integrity: w.integrity, path: `node_modules/${w.dep}`, ...(w.os ? { os: w.os } : {}), ...(w.cpu ? { cpu: w.cpu } : {}), optional: true });
+      }
+      if (wanted.size) log(`${wanted.size} optional platform variant(s) the lockfile never named were completed from the registry (${[...wanted.keys()].join(', ')})`);
     }
 
     const inTarball = await tarballEntries(dist['dist.tarball'], log);
