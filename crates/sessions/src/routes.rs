@@ -25,6 +25,10 @@ impl SessionsState {
     pub fn new(sessions: Sessions, errors: ErrorRenderer) -> Self {
         SessionsState { sessions: Arc::new(sessions), errors }
     }
+
+    pub fn new_shared(sessions: Arc<Sessions>, errors: ErrorRenderer) -> Self {
+        SessionsState { sessions, errors }
+    }
 }
 
 fn table() -> RouteTable<SessionsState> {

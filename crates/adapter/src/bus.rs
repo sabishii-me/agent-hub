@@ -82,7 +82,7 @@ pub struct AgentBus {
     child: Child,
     pub requests: RequestHandle,
     pub notifications: Notifications,
-    reader: tokio::task::JoinHandle<()>,
+    _reader: tokio::task::JoinHandle<()>,
 }
 
 impl AgentBus {
@@ -165,23 +165,19 @@ impl AgentBus {
                 pending,
             },
             notifications: Notifications { rx },
-            reader,
+            _reader: reader,
         })
     }
 
-    /// Terminate the adapter and **confirm** it exited. The adapter's own child
-    /// (its harness) exits when the adapter does (the adapter is responsible for
-    /// it, per the contract); the hub does not scan for processes by name.
-    pub async fn shutdown(mut self) -> Result<(), BusError> {
-        // Ask it to stop, then wait for the process to actually exit.
+    /// Terminate the adapter and **confirm** it exited. Takes `&mut self` so a
+    /// failed stop does NOT consume the bus: the caller keeps the handle and can
+    /// retry (N3). The adapter's own child (its harness) exits when the adapter
+    /// does (the adapter is responsible for it, per the contract); the hub does
+    /// not scan for processes by name.
+    pub async fn shutdown(&mut self) -> Result<(), BusError> {
         self.child.kill().await?;
-        let status = self.child.wait().await?;
-        let _ = self.reader.await;
-        if status.success() || status.code().is_some() {
-            Ok(())
-        } else {
-            // Killed by a signal is still "stopped".
-            Ok(())
-        }
+        let _status = self.child.wait().await?;
+        // The reader task ends when stdout closes; do not block a retry on it.
+        Ok(())
     }
 }

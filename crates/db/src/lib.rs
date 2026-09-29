@@ -14,7 +14,7 @@ pub mod recovery;
 pub mod sessions;
 
 pub use recovery::{install, recover, Layout, RecoveryOutcome};
-pub use sessions::{SessionRow, TurnRow};
+pub use sessions::{ReserveOutcome, SessionRow, TurnRow};
 
 /// The externally visible state of a plugin (mirrors the contract's `plugin.state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +94,10 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(sessions::SCHEMA_SESSIONS)?;
+        // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so
+        // a column added after a database was created must be added explicitly.
+        // This is the upgrade path: adding a column that is missing (idempotent).
+        sessions::migrate(&conn)?;
         Ok(Db { conn: std::sync::Mutex::new(conn) })
     }
 

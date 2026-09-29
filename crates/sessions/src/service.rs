@@ -135,7 +135,11 @@ pub struct Sessions {
     bus: Bus,
     pub data_dir: PathBuf,
     runtime: Runtime,
-    harnesses: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
+    /// Cheap, SIDE-EFFECT-FREE: does an adapter plugin exist for this id? Called
+    /// at accept time (before any reservation), so it must do no file work.
+    harness_exists: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    /// The full spec (does placement). Called only in the DETACHED start (N4).
+    harness_spec: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
     /// One lock per session: start/close/reopen on the same session never race
     /// (R4). A lock held across the lifecycle of one session.
     locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
@@ -166,14 +170,16 @@ impl Sessions {
         db: Db,
         bus: Bus,
         data_dir: impl Into<PathBuf>,
-        harnesses: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
+        harness_exists: Box<dyn Fn(&str) -> bool + Send + Sync>,
+        harness_spec: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
     ) -> Self {
         Sessions {
             db,
             bus,
             data_dir: data_dir.into(),
             runtime: Runtime::new(),
-            harnesses,
+            harness_exists,
+            harness_spec,
             locks: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -186,8 +192,33 @@ impl Sessions {
             .clone()
     }
 
+    /// The body validation for what this slice supports. Called AFTER the
+    /// reservation, so a conflict is decided first (R1/R2).
+    fn validate_supported(&self, req: &CreateSession) -> Result<(), SessionError> {
+        if req.model_provider_id.is_some() || req.model_id.is_some() {
+            return Err(SessionError::Unsupported(
+                "modelProviderId/modelId are not supported yet; a session runs the harness's own default".into(),
+            ));
+        }
+        if req.preset_id.is_some() {
+            return Err(SessionError::Unsupported("presetId is not supported yet".into()));
+        }
+        if req.plan.is_some() || req.review.is_some() {
+            return Err(SessionError::Unsupported("plan/review are not supported yet".into()));
+        }
+        if req.additional_directories.as_ref().map(|d| !d.is_empty()).unwrap_or(false) {
+            return Err(SessionError::Unsupported("additionalDirectories are not supported yet".into()));
+        }
+        Ok(())
+    }
+
+    /// The full spec (does placement). Called in the detached start only.
     fn harness(&self, id: &str) -> Result<HarnessSpec, SessionError> {
-        (self.harnesses)(id).map_err(SessionError::NoHarness)
+        (self.harness_spec)(id).map_err(SessionError::NoHarness)
+    }
+
+    fn harness_exists(&self, id: &str) -> bool {
+        (self.harness_exists)(id)
     }
 
     /// Accept a create command. This slice supports only the default config:
@@ -204,43 +235,7 @@ impl Sessions {
             return Err(SessionError::Validation("harnessId is required".into()));
         }
 
-        // R1/R2: resolve the command identity FIRST. The association is keyed by
-        // the full semantic fingerprint, so the same key with ANY different body
-        // is a conflict - checked before the body's own validation, which would
-        // otherwise answer a different error and hide the conflict.
         let fp = fingerprint(&req);
-        match self.db.lookup_session_command(command_id, &fp) {
-            Ok(Some(sid)) => {
-                let row = self
-                    .db
-                    .session(&sid)?
-                    .ok_or_else(|| SessionError::NotFound(sid.clone()))?;
-                return Ok(CreateOutcome::Replay(self.view(&row)));
-            }
-            Ok(None) => {}
-            Err(()) => return Err(SessionError::Conflict(command_id.into())),
-        }
-
-        // This slice supports no model/preset/plan/review yet: refuse them
-        // explicitly rather than write a state we do not apply.
-        if req.model_provider_id.is_some() || req.model_id.is_some() {
-            return Err(SessionError::Unsupported(
-                "modelProviderId/modelId are not supported yet; a session runs the harness's own default".into(),
-            ));
-        }
-        if req.preset_id.is_some() {
-            return Err(SessionError::Unsupported("presetId is not supported yet".into()));
-        }
-        if req.plan.is_some() || req.review.is_some() {
-            return Err(SessionError::Unsupported("plan/review are not supported yet".into()));
-        }
-        if req.additional_directories.as_ref().map(|d| !d.is_empty()).unwrap_or(false) {
-            return Err(SessionError::Unsupported("additionalDirectories are not supported yet".into()));
-        }
-
-        // Validate the harness exists (the start resolves it again).
-        let _harness = self.harness(&req.harness_id)?;
-
         let id = new_id("s");
         let cwd = match req.cwd.clone().filter(|c| !c.is_empty()) {
             Some(c) => c,
@@ -270,8 +265,38 @@ impl Sessions {
             native_ref: None,
             start_error: None,
         };
-        // One transaction: the `starting` row and the command association.
-        self.db.reserve_session_command(command_id, &fp, &row)?;
+
+        // R1/R2: ONE atomic decision - reserve the key and insert the `starting`
+        // row in a single transaction, BEFORE any body validation. So the same
+        // key with ANY different body is a conflict, whatever that body is.
+        match self.db.reserve_session_command(command_id, &fp, &row)? {
+            agent_hub_db::ReserveOutcome::Reserved => {}
+            agent_hub_db::ReserveOutcome::Replay(sid) => {
+                let row = self
+                    .db
+                    .session(&sid)?
+                    .ok_or_else(|| SessionError::NotFound(sid.clone()))?;
+                return Ok(CreateOutcome::Replay(self.view(&row)));
+            }
+            agent_hub_db::ReserveOutcome::Conflict => {
+                return Err(SessionError::Conflict(command_id.into()));
+            }
+        }
+
+        // The reservation is committed. Now validate the body; if it is not
+        // supported, UNDO the reservation (drop the row and the command key) and
+        // return the refusal - never leave a `starting` row for a refused command.
+        if let Err(e) = self.validate_supported(&req) {
+            let _ = self.db.delete_session_row(&id);
+            let _ = self.db.remove_session_command(command_id);
+            return Err(e);
+        }
+        if !self.harness_exists(&req.harness_id) {
+            let _ = self.db.delete_session_row(&id);
+            let _ = self.db.remove_session_command(command_id);
+            return Err(SessionError::NoHarness(req.harness_id.clone()));
+        }
+
         let view = self.view(&row);
         self.bus.publish("session.created", serde_json::json!({ "session": view }));
         Ok(CreateOutcome::Accepted(view))
@@ -287,6 +312,11 @@ impl Sessions {
             Ok(Some(r)) => r,
             _ => return,
         };
+        // Guard: only a `starting` session starts. A close/delete that raced ahead
+        // (holding the same lock) leaves a non-starting status; do not revive it.
+        if row.status != "starting" || row.deleted {
+            return;
+        }
         let harness = match self.harness(&row.harness_id) {
             Ok(h) => h,
             Err(e) => return self.fail_start(&sid, &e.to_string()).await,
@@ -337,6 +367,26 @@ impl Sessions {
     pub fn get(&self, id: &str) -> Result<SessionView, SessionError> {
         let row = self.db.session(id)?.ok_or_else(|| SessionError::NotFound(id.into()))?;
         Ok(self.view(&row))
+    }
+
+    /// Boot reconciliation (N2.2): a `starting` session with NO running process is
+    /// a start that was interrupted (the process died, or the hub restarted). It
+    /// must not keep claiming it is starting. Mark it `starting_failed` so a
+    /// client reads an honest terminal/unknown state, never a lie. No replay of
+    /// unknown side effects.
+    pub fn reconcile_interrupted(&self) -> Result<usize, SessionError> {
+        let mut n = 0;
+        for row in self.db.list_sessions()? {
+            if row.status == "starting" && !self.runtime.is_running(&row.id) {
+                let mut row = row;
+                row.status = "starting_failed".into();
+                row.start_error = Some("the start was interrupted (the hub restarted or the process died)".into());
+                row.updated_at = now_utc();
+                self.db.update_session(&row)?;
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     pub fn list(&self) -> Result<Vec<SessionView>, SessionError> {

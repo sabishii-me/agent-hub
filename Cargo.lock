@@ -19,6 +19,8 @@ dependencies = [
  "agent-hub-skills",
  "agent-hub-transport",
  "axum",
+ "reqwest",
+ "rustls",
  "serde_json",
  "tokio",
  "tracing",

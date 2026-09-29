@@ -27,14 +27,22 @@ pub struct SessionProcess {
 }
 
 impl SessionProcess {
-    /// Stop the session's process and CONFIRM it exited. Idempotent (a second
-    /// stop is a no-op success). Returns an error if the process could not be
-    /// confirmed stopped, so a caller never claims a release that did not happen.
+    /// Stop the session's process and CONFIRM it exited. Idempotent. On a failure
+    /// the handle is **kept**, so a retry can try again - a failed stop never
+    /// leaves an unrecoverable entry (N3).
     pub async fn stop(&mut self) -> Result<(), StartError> {
-        if let Some(bus) = self.bus.take() {
-            bus.shutdown().await.map_err(|e| StartError::Spawn(e.to_string()))?;
+        if self.bus.is_none() {
+            return Ok(()); // already stopped
         }
-        Ok(())
+        let bus = self.bus.as_mut().expect("checked above");
+        match bus.shutdown().await {
+            Ok(()) => {
+                self.bus = None; // released: drop the handle
+                Ok(())
+            }
+            // The handle is KEPT; a second stop can retry (N3).
+            Err(e) => Err(StartError::Spawn(e.to_string())),
+        }
     }
 }
 
@@ -82,7 +90,7 @@ impl Sessions {
     /// never see `active` without a real process behind it.
     pub async fn start(&self, spec: StartSpec) -> Result<SessionProcess, StartError> {
         let env = build_env(&spec);
-        let bus = AgentBus::spawn(&spec.command, &spec.plugin_dir, &env)
+        let mut bus = AgentBus::spawn(&spec.command, &spec.plugin_dir, &env)
             .map_err(|e| StartError::Spawn(e.to_string()))?;
 
         // session/start

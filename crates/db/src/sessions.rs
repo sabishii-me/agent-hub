@@ -164,58 +164,78 @@ impl crate::Db {
         Ok(())
     }
 
+    /// Hard-delete a session row (used to undo a reservation whose body was
+    /// refused). Distinct from the soft delete a client asks for.
+    pub fn delete_session_row(&self, id: &str) -> Result<(), DbError> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Remove a command association (undo a refused reservation).
+    pub fn remove_session_command(&self, key: &str) -> Result<(), DbError> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM session_commands WHERE command_key = ?1", params![key])?;
+        Ok(())
+    }
+
     /// Soft-delete: the export flag is independent, so the row stays readable.
     pub fn mark_session_deleted(&self, id: &str) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute("UPDATE sessions SET deleted = 1 WHERE id = ?1", params![id])?;
         Ok(())
     }
+}
 
-    /// Atomically reserve a command key for a semantic request. Returns:
-    /// `Ok(Some(sid))` when the key already maps to a session with the SAME
-    /// fingerprint (the original), `Ok(None)` when the key is free (the caller
-    /// then inserts the row + records the mapping in one transaction via
-    /// [`Db::reserve_session_command`]), `Err(())` on a fingerprint conflict.
-    pub fn lookup_session_command(
-        &self,
-        key: &str,
-        fingerprint: &str,
-    ) -> Result<Option<String>, ()> {
-        let conn = self.lock();
-        let row: Option<(String, String)> = conn
-            .query_row(
-                "SELECT fingerprint, session_id FROM session_commands WHERE command_key = ?1",
-                params![key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .ok()
-            .flatten();
-        match row {
-            Some((fp, sid)) if fp == fingerprint => Ok(Some(sid)),
-            Some(_) => Err(()),
-            None => Ok(None),
-        }
-    }
+/// The outcome of an atomic command reservation.
+pub enum ReserveOutcome {
+    /// The command was newly reserved together with this `starting` session row.
+    Reserved,
+    /// The key already maps to this session with the SAME fingerprint (replay).
+    Replay(String),
+    /// The key maps to a session with a DIFFERENT fingerprint (conflict).
+    Conflict,
+}
 
-    /// Insert a `starting` session row AND its command association in one
-    /// transaction. This is the atomic reservation: the side effect (starting the
-    /// adapter) happens only after this returns.
+impl crate::Db {
+    /// **Atomically** reserve a command key and (when new) insert the `starting`
+    /// session row, in ONE transaction. This is the single decision point: there
+    /// is no separate lookup that a concurrent request can race.
+    ///
+    /// * the key is new → `Reserved` (the row was inserted);
+    /// * the key exists with the same fingerprint → `Replay(session_id)`;
+    /// * the key exists with a different fingerprint → `Conflict`.
+    ///
+    /// A database error is an error, never silently read as "not found".
     pub fn reserve_session_command(
         &self,
         command_key: &str,
         fingerprint: &str,
         session: &SessionRow,
-    ) -> Result<(), DbError> {
+    ) -> Result<ReserveOutcome, DbError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        Self::insert_session_tx(&tx, session)?;
-        tx.execute(
-            "INSERT INTO session_commands (command_key, fingerprint, session_id, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![command_key, fingerprint, session.id, crate::now_utc()],
-        )?;
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT fingerprint, session_id FROM session_commands WHERE command_key = ?1",
+                params![command_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let outcome = match existing {
+            Some((fp, sid)) if fp == fingerprint => ReserveOutcome::Replay(sid),
+            Some(_) => ReserveOutcome::Conflict,
+            None => {
+                Self::insert_session_tx(&tx, session)?;
+                tx.execute(
+                    "INSERT INTO session_commands (command_key, fingerprint, session_id, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![command_key, fingerprint, session.id, crate::now_utc()],
+                )?;
+                ReserveOutcome::Reserved
+            }
+        };
         tx.commit()?;
-        Ok(())
+        Ok(outcome)
     }
 
     // --- turns ---
@@ -290,5 +310,62 @@ impl crate::Db {
             params![id, ended, at],
         )?;
         Ok(())
+    }
+}
+
+/// The upgrade path: `CREATE TABLE IF NOT EXISTS` never alters an existing table,
+/// so a column added after a database was created must be added explicitly. This
+/// is idempotent and additive only (no data loss); a database created by an older
+/// build gains the new columns on open.
+pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let add = |table: &str, column: &str, decl: &str| -> Result<(), rusqlite::Error> {
+        let exists: bool = conn
+            .prepare(&format!("PRAGMA table_info({table})"))?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|name| name == column);
+        if !exists {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        }
+        Ok(())
+    };
+    // Sessions columns added after the first release.
+    add("sessions", "native_ref", "TEXT")?;
+    add("sessions", "start_error", "TEXT")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    #[test]
+    fn an_old_sessions_table_gains_the_new_columns() {
+        // Simulate a database created before start_error existed.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, harness_id TEXT NOT NULL,
+                model_provider_id TEXT, model_id TEXT, applied_model TEXT,
+                plan INTEGER, review INTEGER, cwd TEXT, title TEXT,
+                status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                forked_from_session TEXT, forked_from_turn TEXT
+            );",
+        )
+        .unwrap();
+        // The new code path runs the migration, then the columns exist.
+        migrate(&conn).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(sessions)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(cols.contains(&"native_ref".to_string()));
+        assert!(cols.contains(&"start_error".to_string()));
+        // Idempotent: a second call is a no-op.
+        migrate(&conn).unwrap();
     }
 }

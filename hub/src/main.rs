@@ -99,6 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sessions: a session resolves its harness through the registry and starts
     // its OWN adapter process with the resolved argv + plugin dir.
     let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
+    let exists_registry = adapters.clone();
+    let harness_exists = move |id: &str| -> bool { exists_registry.get(id).is_ok() };
     let registry = adapters.clone();
     let resolve = move |id: &str| -> Result<HarnessSpec, String> {
         let h = registry.get(id).map_err(|e| e.to_string())?;
@@ -124,8 +126,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             extensions_dir: env.extensions_dir,
         })
     };
-    let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir, Box::new(resolve));
-    let session_state = SessionsState::new(sessions, errors.clone());
+    let sessions = std::sync::Arc::new(Sessions::new(
+        sessions_db,
+        bus.clone(),
+        &data_dir,
+        Box::new(harness_exists),
+        Box::new(resolve),
+    ));
+    // A start interrupted by a restart must not keep claiming `starting`.
+    match sessions.reconcile_interrupted() {
+        Ok(n) if n > 0 => tracing::info!(interrupted = n, "marked interrupted session starts as failed"),
+        Ok(_) => {}
+        Err(e) => tracing::error!(error = %e, "session reconciliation failed"),
+    }
+    let session_state = SessionsState::new_shared(sessions, errors.clone());
 
     // Providers: one JSON file per provider under the data dir.
     let providers = Providers::new(ProviderStore::new(data_dir.join("providers")));

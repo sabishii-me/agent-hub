@@ -545,15 +545,10 @@
                   "properties": {
                     "session": {
                       "$ref": "#/defs/session"
-                    },
-                    "location": {
-                      "type": "string",
-                      "description": "the session resource URL; the same value is in the Location header"
                     }
                   },
                   "required": [
-                    "session",
-                    "location"
+                    "session"
                   ]
                 }
               }

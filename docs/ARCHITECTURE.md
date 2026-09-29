@@ -593,16 +593,20 @@ follows distinguishes a real, narrow component fact from a product capability.
   the pi adapter. Still unavailable: **turn / fork / compact / patch** answer `501` - they need the
   turn lifecycle, which is not built. No `active` is ever written on a row alone.
 
-  `POST /v1/sessions` is a **long command**: the contract now says `202 Accepted` + `Location`
-  (ADR-0009 §11/§13.2), the session resource answers `starting` -> `active` / `starting_failed`
-  (`startError`), and the command identity (`Idempotency-Key`) is reserved **durably, before any
-  side effect** - the same key returns the original, the same key with a different request is
-  `idempotency_conflict`, a new key is a new command. The supported config is passed through;
-  anything this slice does not support (`modelProviderId`/`modelId`/`presetId`/`plan`/`review`/
-  `additionalDirectories`) is **refused**, never silently ignored. The start reuses the adapter's
-  own placement (`harness_env`), so a missing required extension refuses the start. close stops
-  that session's process and **confirms** it exited before writing `readonly`; reopen refuses when
-  the session is still running.
+  `POST /v1/sessions` is a **long command**: `202 Accepted` + `Location` (a header; the body is
+  `{session}`), the resource answers `starting` -> `active` / `starting_failed` (`startError`).
+  The command identity (`Idempotency-Key`) is decided **atomically in one transaction** that
+  inserts the `starting` row and the command association together, BEFORE any body validation:
+  the same key returns the original, the same key with ANY different request is
+  `idempotency_conflict`, a new key is a new command. A refused body (an unsupported field:
+  `modelProviderId`/`modelId`/`presetId`/`plan`/`review`/`additionalDirectories`) undoes the
+  reservation and returns the refusal - a `starting` row is never left for a refused command.
+  The **accept path is side-effect-free** (an existence check only); the placement work and the
+  adapter start run in the **detached** start. A start interrupted by a restart is reconciled at
+  boot to `starting_failed` (no process, no lie), never left `starting`. `close` confirms the
+  process exited (a stop failure is surfaced, not claimed as release) and is idempotent; `reopen`
+  refuses a session that is still running. A database created by an older build gains the new
+  columns through the additive `migrate` path on open.
 - **providers** (now): the credential is **not part of the record** (no `token` field), so a
   secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
   Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.
