@@ -15,6 +15,7 @@ agent-hub-adapter = { path = "../crates/adapter" }
 agent-hub-harnesses = { path = "../crates/harnesses" }
 agent-hub-skills = { path = "../crates/skills" }
 agent-hub-extensions = { path = "../crates/extensions" }
+agent-hub-humans = { path = "../crates/humans" }
 agent-hub-transport = { path = "../crates/transport" }
 agent-hub-plugins = { path = "../crates/plugins" }
 agent-hub-db = { path = "../crates/db" }

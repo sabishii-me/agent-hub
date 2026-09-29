@@ -12,6 +12,7 @@ dependencies = [
  "agent-hub-events",
  "agent-hub-extensions",
  "agent-hub-harnesses",
+ "agent-hub-humans",
  "agent-hub-plugins",
  "agent-hub-providers",
  "agent-hub-sessions",
@@ -92,6 +93,24 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agent-hub-humans"
+version = "0.1.0"
+dependencies = [
+ "agent-hub-contract",
+ "agent-hub-events",
+ "agent-hub-transport",
+ "axum",
+ "bytes",
  "reqwest",
  "rustls",
  "serde",
