@@ -1,18 +1,19 @@
-# The hub's design
+# The hub's architecture
 
-The hub's architecture. A previous version was one 4,748-line `server.mjs` holding every
-domain; a change to one domain could not be made correctly there (long routes were missed
-because there was no boundary to see them against). A file with no seams is the defect.
+The hub's code today is one 4,748-line `server.mjs` holding every domain; a change to one
+domain cannot be made correctly there (long routes were missed because there was no boundary
+to see them against). A file with no seams is the defect. This is what the hub is moving to.
 
 This is a **modular monolith**: one process, one HTTP+SSE surface, but the code is cut into
 units small enough that **each can be read, changed and proven on its own**. The structure
 exists to make a change *local*, and to be executed **from the whole to the part** - run the
 frame, then one domain, then the next - instead of editing a monolith and hoping.
 
-The owner's words, which this design follows: "这种的好处才能模块里从大到小的执行。而不是一个巨大的文件你都没法改。"
+The owner's words, which this architecture follows: "这种的好处才能模块里从大到小的执行。而不是一个巨大的文件你都没法改。"
 
-Read order: the decisions live in the desktop repository's ADR log (ADR-0001, 0009, 0010,
-0011); this file is how they are carried out here.
+The decisions live in the desktop repository's ADR log (ADR-0001, 0009, 0010, 0011); this
+file is how they are carried out here. It is the architecture, target and all: where it and
+the code disagree today, the code is behind and this is what it is moving to.
 
 ---
 
@@ -215,7 +216,7 @@ This is the point of the cut, and the failure it prevents:
    `contract/v1.json` at boot, so a route that was forgotten is a refusal to start, not a
    silent gap.
 
-## 8. What this design does not decide
+## 8. What this architecture does not decide
 
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
