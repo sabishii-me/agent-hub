@@ -586,10 +586,19 @@ follows distinguishes a real, narrow component fact from a product capability.
 
 - **sessions** (now): a session **owns a real adapter process** (`crates/sessions/src/runtime.rs`).
   `create` runs `session/start` + `config/set` against a real adapter and reports `active` **only**
-  when both succeeded; the native `ref` is a real file. `close` stops that session's process
+  when both succeeded; the native `ref` is a real file. Create carries a **command identity**
+  (`Idempotency-Key`, R1): a retry returns the same session, a different key is a new session, the
+  same key with a different body is `idempotency_conflict`. `close` stops that session's process
   (record stays, status `readonly`); `reopen` re-attaches on the stored ref. Verified live against
   the pi adapter. Still unavailable: **turn / fork / compact / patch** answer `501` - they need the
   turn lifecycle, which is not built. No `active` is ever written on a row alone.
+
+  **Open design question** (recorded, not resolved here): ARCHITECTURE §11's long-operation table
+  lists `start` with a `Location`, while `contract/v1.json` and ROUTES-REVIEW keep
+  `POST /v1/sessions` as a **synchronous** create that returns `{session}` (the old hub did too).
+  This slice follows the contract (synchronous) and implements the *acceptance* half (command
+  identity). Whether create should become `202 + Location` is a contract decision to settle with
+  the owning contract, not assumed here.
 - **providers** (now): the credential is **not part of the record** (no `token` field), so a
   secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
   Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.

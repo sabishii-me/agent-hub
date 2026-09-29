@@ -71,8 +71,20 @@ async fn list(State(s): State<SessionsState>) -> Response {
     }
 }
 
-async fn create(State(s): State<SessionsState>, Json(req): Json<CreateSession>) -> Response {
-    match s.sessions.create(req).await {
+async fn create(
+    State(s): State<SessionsState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<CreateSession>,
+) -> Response {
+    // The client's logical command identity (ARCHITECTURE §11, R1): a retry with
+    // the same key returns the same session; an absent key is a fresh intent.
+    let command_id = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::service::new_id("create"));
+    match s.sessions.create(&command_id, req).await {
         Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
         Err(e) => err(&s, e),
     }

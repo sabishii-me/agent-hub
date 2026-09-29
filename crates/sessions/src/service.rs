@@ -15,6 +15,51 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::{Sessions as Runtime, StartSpec};
 
+/// A bounded store of create command identities (ARCHITECTURE §11, R1): the same
+/// `Idempotency-Key` returns the SAME session; a different key is a new session
+/// (a second create for the same harness is NOT a retry); the same key with a
+/// different body is a conflict.
+pub struct CreateIds {
+    /// key -> (body fingerprint, session id)
+    seen: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
+    order: std::sync::Mutex<std::collections::VecDeque<String>>,
+    capacity: usize,
+}
+
+impl CreateIds {
+    pub fn new(capacity: usize) -> Self {
+        CreateIds {
+            seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+            order: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            capacity,
+        }
+    }
+
+    /// `Ok(sid)` when this key was seen before and the body matches; `Ok(None)`
+    /// when it is new (the caller runs the create and then `record`s the sid);
+    /// `Err(())` on a conflict.
+    pub fn lookup(&self, key: &str, body: &str) -> Result<Option<String>, ()> {
+        let seen = self.seen.lock().expect("ids");
+        Ok(match seen.get(key) {
+            Some((prev, sid)) if prev == body => Some(sid.clone()),
+            Some(_) => return Err(()),
+            None => None,
+        })
+    }
+
+    pub fn record(&self, key: &str, body: &str, sid: &str) {
+        let mut seen = self.seen.lock().expect("ids");
+        seen.insert(key.to_string(), (body.to_string(), sid.to_string()));
+        let mut order = self.order.lock().expect("order");
+        order.push_back(key.to_string());
+        while order.len() > self.capacity {
+            if let Some(old) = order.pop_front() {
+                seen.remove(&old);
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("session `{0}` not found")]
@@ -27,6 +72,8 @@ pub enum SessionError {
     Validation(String),
     #[error("the session could not be started: {0}")]
     Start(String),
+    #[error("idempotency conflict for `{0}`")]
+    Conflict(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
     #[error("io: {0}")]
@@ -41,6 +88,7 @@ impl SessionError {
             SessionError::NoHarness(_) => "harness_not_found",
             SessionError::Validation(_) => "validation_failed",
             SessionError::Start(_) => "adapter_crash",
+            SessionError::Conflict(_) => "idempotency_conflict",
             SessionError::Db(_) | SessionError::Io(_) => "internal_error",
         }
     }
@@ -111,6 +159,8 @@ pub struct Sessions {
     runtime: Runtime,
     /// Resolves a harness id to its adapter spec (from the plugin registry).
     harnesses: Box<dyn Fn(&str) -> Option<HarnessSpec> + Send + Sync>,
+    /// The create command identities (R1).
+    create_ids: CreateIds,
 }
 
 impl Sessions {
@@ -126,6 +176,7 @@ impl Sessions {
             data_dir: data_dir.into(),
             runtime: Runtime::new(),
             harnesses,
+            create_ids: CreateIds::new(4096),
         }
     }
 
@@ -136,9 +187,32 @@ impl Sessions {
     /// Create a session AND start its real adapter. `active` is returned only
     /// when `session/start` + `config/set` both succeeded; a failure leaves no
     /// `active` row.
-    pub async fn create(&self, req: CreateSession) -> Result<SessionView, SessionError> {
+    ///
+    /// `command_id` is the logical command identity (R1): the same id returns the
+    /// SAME session (a retry after a lost response); a different id is a new
+    /// session even for the same harness; the same id with a different body is a
+    /// conflict.
+    pub async fn create(
+        &self,
+        command_id: &str,
+        req: CreateSession,
+    ) -> Result<SessionView, SessionError> {
         if req.harness_id.trim().is_empty() {
             return Err(SessionError::Validation("harnessId is required".into()));
+        }
+        let body = format!(
+            "create:{}:{}:{}",
+            req.harness_id,
+            req.model_provider_id.clone().unwrap_or_default(),
+            req.model_id.clone().unwrap_or_default()
+        );
+        match self.create_ids.lookup(command_id, &body) {
+            Ok(Some(sid)) => {
+                // A retry: return the session this command produced, not a new one.
+                return self.get(&sid);
+            }
+            Ok(None) => {}
+            Err(()) => return Err(SessionError::Conflict(command_id.into())),
         }
         let harness = self.harness(&req.harness_id)?;
         let id = new_id("s");
@@ -195,6 +269,7 @@ impl Sessions {
             native_ref: Some(process.native_ref.clone()),
         };
         self.db.insert_session(&row)?;
+        self.create_ids.record(command_id, &body, &id);
         let view = self.view(&row);
         self.bus.publish("session.created", serde_json::json!({ "session": view }));
         Ok(view)

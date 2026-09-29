@@ -134,3 +134,70 @@ async fn real_session_start_close_reopen() {
 
     let _ = std::fs::remove_dir_all(&data);
 }
+
+#[tokio::test]
+async fn create_command_identity_is_retry_safe() {
+    let Some(pdir) = plugin_dir() else {
+        eprintln!("SKIP create_command_identity: set AGENT_HUB_TEST_PLUGIN_DIR");
+        return;
+    };
+    let harness = std::env::var("AGENT_HUB_TEST_HARNESS").unwrap_or_else(|_| "pi".into());
+    let data = std::env::temp_dir().join(format!("agent-hub-idem-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+
+    let roots = vec![pdir.parent().unwrap().to_path_buf()];
+    let adapters = Arc::new(Adapters::new(roots, &data, Bus::new(16, 16)));
+    adapters.scan();
+    let registry = adapters.clone();
+    let resolve = move |id: &str| -> Option<HarnessSpec> {
+        let h = registry.get(id).ok()?;
+        Some(HarnessSpec {
+            id: h.id.clone(),
+            command: h.manifest.command.clone()?,
+            plugin_dir: h.directory.clone(),
+            runtime_argv: h.manifest.runtime_argv(&h.directory),
+        })
+    };
+    let db = Db::open(data.join("hub.sqlite")).unwrap();
+    let sessions = Sessions::new(db, Bus::new(16, 16), &data, Box::new(resolve));
+    let base = serve(SessionsState::new(sessions, errors())).await;
+    let client = reqwest::Client::new();
+
+    // Same Idempotency-Key -> the same session.
+    let a: serde_json::Value = client
+        .post(format!("{base}/v1/sessions"))
+        .header("idempotency-key", "K")
+        .json(&serde_json::json!({ "harnessId": harness }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let b: serde_json::Value = client
+        .post(format!("{base}/v1/sessions"))
+        .header("idempotency-key", "K")
+        .json(&serde_json::json!({ "harnessId": harness }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(a["session"]["id"], b["session"]["id"], "a retry must return the same session");
+
+    // Same key, different body -> conflict.
+    let c = client
+        .post(format!("{base}/v1/sessions"))
+        .header("idempotency-key", "K")
+        .json(&serde_json::json!({ "harnessId": "different-harness" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(c.status(), 409);
+    let body: serde_json::Value = c.json().await.unwrap();
+    assert_eq!(body["error"], "idempotency_conflict");
+
+    let _ = std::fs::remove_dir_all(&data);
+}
