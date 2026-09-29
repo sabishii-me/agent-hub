@@ -10,7 +10,6 @@ use std::sync::Arc;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -36,9 +35,11 @@ impl PluginsState {
 /// self-check's list cannot drift from the actual routes.
 fn table() -> agent_hub_transport::RouteTable<PluginsState> {
     agent_hub_transport::RouteTable::new()
-        .mount("/v1/plugins", &["GET", "POST"], get(list).post(install))
-        .mount("/v1/plugins/{id}", &["GET", "DELETE"], get(get_one).delete(remove))
-        .mount("/v1/plugins/{id}/prepare", &["POST"], post(prepare))
+        .get("/v1/plugins", list)
+        .post("/v1/plugins", install)
+        .get("/v1/plugins/{id}", get_one)
+        .delete("/v1/plugins/{id}", remove)
+        .post("/v1/plugins/{id}/prepare", prepare)
 }
 
 pub fn routes() -> Router<PluginsState> {

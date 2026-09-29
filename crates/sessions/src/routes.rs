@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::{get, post};
 use axum::Router;
 
 use agent_hub_transport::{DomainError, ErrorRenderer};
@@ -32,18 +31,19 @@ impl SessionsState {
 }
 
 fn table() -> agent_hub_transport::RouteTable<SessionsState> {
+    let n = not_implemented;
     agent_hub_transport::RouteTable::new()
-        .mount("/v1/sessions", &["GET", "POST"], get(not_implemented).post(not_implemented))
-        .mount(
-            "/v1/sessions/{id}",
-            &["GET", "PATCH", "DELETE"],
-            get(not_implemented).patch(not_implemented).delete(not_implemented),
-        )
-        .mount("/v1/sessions/{id}/turns", &["GET", "POST"], get(not_implemented).post(not_implemented))
-        .mount("/v1/sessions/{id}/cancel", &["POST"], post(not_implemented))
-        .mount("/v1/sessions/{id}/close", &["POST"], post(not_implemented))
-        .mount("/v1/sessions/{id}/reopen", &["POST"], post(not_implemented))
-        .mount("/v1/sessions/{id}/fork", &["POST"], post(not_implemented))
+        .get("/v1/sessions", n)
+        .post("/v1/sessions", n)
+        .get("/v1/sessions/{id}", n)
+        .patch("/v1/sessions/{id}", n)
+        .delete("/v1/sessions/{id}", n)
+        .get("/v1/sessions/{id}/turns", n)
+        .post("/v1/sessions/{id}/turns", n)
+        .post("/v1/sessions/{id}/cancel", n)
+        .post("/v1/sessions/{id}/close", n)
+        .post("/v1/sessions/{id}/reopen", n)
+        .post("/v1/sessions/{id}/fork", n)
 }
 
 pub fn routes() -> Router<SessionsState> {

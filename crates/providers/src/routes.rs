@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::{get, post};
 use axum::Router;
 
 use agent_hub_transport::{DomainError, ErrorRenderer};
@@ -32,19 +31,22 @@ impl ProvidersState {
 }
 
 fn table() -> agent_hub_transport::RouteTable<ProvidersState> {
-    let m = get(not_implemented).post(not_implemented);
-    let one = get(not_implemented).patch(not_implemented).delete(not_implemented);
+    let n = not_implemented;
     agent_hub_transport::RouteTable::new()
-        .mount("/v1/model-providers", &["GET", "POST"], m)
-        .mount("/v1/model-providers/{id}", &["GET", "PATCH", "DELETE"], one)
-        .mount("/v1/model-providers/{id}/logout", &["POST"], post(not_implemented))
-        .mount("/v1/model-providers/{id}/models", &["GET", "PATCH"], get(not_implemented).patch(not_implemented))
-        .mount("/v1/model-providers/{id}/models/refresh", &["POST"], post(not_implemented))
-        .mount("/v1/models", &["GET"], get(not_implemented))
-        .mount("/v1/model-providers/types", &["GET"], get(not_implemented))
-        .mount("/v1/model-providers/{id}/auth", &["POST"], post(not_implemented))
-        .mount("/v1/model-providers/{id}/auth/{op}", &["GET"], get(not_implemented))
-        .mount("/v1/model-providers/{id}/auth/{op}/cancel", &["POST"], post(not_implemented))
+        .get("/v1/model-providers", n)
+        .post("/v1/model-providers", n)
+        .get("/v1/model-providers/{id}", n)
+        .patch("/v1/model-providers/{id}", n)
+        .delete("/v1/model-providers/{id}", n)
+        .post("/v1/model-providers/{id}/logout", n)
+        .get("/v1/model-providers/{id}/models", n)
+        .patch("/v1/model-providers/{id}/models", n)
+        .post("/v1/model-providers/{id}/models/refresh", n)
+        .get("/v1/models", n)
+        .get("/v1/model-providers/types", n)
+        .post("/v1/model-providers/{id}/auth", n)
+        .get("/v1/model-providers/{id}/auth/{op}", n)
+        .post("/v1/model-providers/{id}/auth/{op}/cancel", n)
 }
 
 pub fn routes() -> Router<ProvidersState> {

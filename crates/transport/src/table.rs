@@ -1,39 +1,105 @@
 //! One declaration per route: the router and the surface come from the SAME
-//! list, so they cannot drift (TASK-048 C5).
+//! registration (TASK-048 C5).
 //!
-//! A domain builds its `Router<State>` with a [`RouteTable`] that records each
-//! `path` and the HTTP methods mounted on it **as they are registered**. The
-//! recorded surface is what the boot self-check compares to the contract; there
-//! is no second hand-written array to forget to update.
+//! A domain registers routes with `.get(path, handler)`, `.post(path, handler)`,
+//! etc. The table records the method and path **as it registers them** and merges
+//! several methods on one path itself. There is no separate `methods: &[&str]`
+//! argument to keep in step with the `MethodRouter` chain, and no second
+//! hand-written surface array: `surface()` is derived from what was registered.
 
-use axum::routing::MethodRouter;
+use axum::handler::Handler;
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
-/// A router builder that remembers what it mounted.
+/// A router builder that remembers each method+path as it registers.
 pub struct RouteTable<S> {
     router: Router<S>,
-    /// `(method_upper, path)` for every method mounted.
+    /// `(method_upper, contract_path)` for every route registered.
     surface: Vec<(String, String)>,
 }
 
-impl<S: Clone + Send + Sync + 'static> RouteTable<S> {
+impl<S> RouteTable<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     pub fn new() -> Self {
         RouteTable { router: Router::new(), surface: Vec::new() }
     }
 
-    /// Mount a `MethodRouter` on `path`, recording the methods it serves.
-    ///
-    /// The caller states the methods it chained (axum's `MethodRouter` does not
-    /// expose them), so the recorded surface reflects the actual chain.
-    pub fn mount(mut self, path: &str, methods: &[&str], router: MethodRouter<S>) -> Self {
-        self.router = self.router.route(path, router);
-        for m in methods {
-            self.surface.push((m.to_uppercase(), path.to_string()));
-        }
+    fn mount<H, T>(mut self, method: &str, axum_path: &str, contract_path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        let method_router = match method {
+            "GET" => get(handler),
+            "POST" => post(handler),
+            "PUT" => put(handler),
+            "PATCH" => patch(handler),
+            "DELETE" => delete(handler),
+            other => panic!("unsupported method `{other}` in RouteTable"),
+        };
+        // Merge with an existing route on the same axum path so many methods
+        // share one path.
+        self.router = self.router.route(axum_path, method_router);
+        self.surface.push((method.to_string(), contract_path.to_string()));
         self
     }
 
-    /// The recorded surface as `"METHOD /path"`.
+    /// Register a GET; the contract path may differ from the axum path (a
+    /// catch-all is `{*file}` in axum but `{file...}` in the contract).
+    pub fn get<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("GET", path, path, handler)
+    }
+    pub fn post<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("POST", path, path, handler)
+    }
+    pub fn patch<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("PATCH", path, path, handler)
+    }
+    pub fn delete<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("DELETE", path, path, handler)
+    }
+    pub fn put<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("PUT", path, path, handler)
+    }
+
+    /// Register a method where the axum path and the contract path differ.
+    pub fn get_as<H, T>(self, axum_path: &str, contract_path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("GET", axum_path, contract_path, handler)
+    }
+    pub fn put_as<H, T>(self, axum_path: &str, contract_path: &str, handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        self.mount("PUT", axum_path, contract_path, handler)
+    }
+
     pub fn surface(&self) -> Vec<String> {
         self.surface
             .iter()
@@ -41,28 +107,15 @@ impl<S: Clone + Send + Sync + 'static> RouteTable<S> {
             .collect()
     }
 
-    /// Mount where the **recorded** path differs from the axum path (a catch-all
-    /// is `{*file}` in axum but `{file...}` in the contract).
-    pub fn mount_as(
-        mut self,
-        axum_path: &str,
-        contract_path: &str,
-        methods: &[&str],
-        router: MethodRouter<S>,
-    ) -> Self {
-        self.router = self.router.route(axum_path, router);
-        for m in methods {
-            self.surface.push((m.to_uppercase(), contract_path.to_string()));
-        }
-        self
-    }
-
     pub fn router(self) -> Router<S> {
         self.router
     }
 }
 
-impl<S: Clone + Send + Sync + 'static> Default for RouteTable<S> {
+impl<S> Default for RouteTable<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     fn default() -> Self {
         Self::new()
     }

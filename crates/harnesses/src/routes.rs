@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use axum::{Json, Router};
 
 use agent_hub_transport::ErrorRenderer;
@@ -25,11 +24,11 @@ impl HarnessesState {
 
 fn table() -> agent_hub_transport::RouteTable<HarnessesState> {
     agent_hub_transport::RouteTable::new()
-        .mount("/v1/harnesses", &["GET"], get(list))
-        .mount("/v1/harnesses/{id}/presets", &["GET"], get(presets))
-        .mount("/v1/harnesses/{id}/models", &["GET"], get(models))
-        .mount("/v1/harnesses/{id}/tools", &["GET"], get(tools))
-        .mount("/v1/harnesses/{id}/extensions", &["GET"], get(extensions))
+        .get("/v1/harnesses", list)
+        .get("/v1/harnesses/{id}/presets", presets)
+        .get("/v1/harnesses/{id}/models", models)
+        .get("/v1/harnesses/{id}/tools", tools)
+        .get("/v1/harnesses/{id}/extensions", extensions)
 }
 
 pub fn routes() -> Router<HarnessesState> {

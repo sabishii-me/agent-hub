@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::{delete, get};
 use axum::Router;
 
 use agent_hub_transport::{DomainError, ErrorRenderer};
@@ -32,11 +31,13 @@ impl SkillsState {
 }
 
 fn table() -> agent_hub_transport::RouteTable<SkillsState> {
+    let n = not_implemented;
     agent_hub_transport::RouteTable::new()
-        .mount("/v1/skills", &["GET"], get(not_implemented))
-        .mount("/v1/skills/{id}", &["DELETE"], delete(not_implemented))
+        .get("/v1/skills", n)
+        .delete("/v1/skills/{id}", n)
         // axum spells a catch-all `{*file}`; the contract spells it `{file...}`.
-        .mount_as("/v1/skills/{id}/files/{*file}", "/v1/skills/{id}/files/{file...}", &["GET", "PUT"], get(not_implemented).put(not_implemented))
+        .get_as("/v1/skills/{id}/files/{*file}", "/v1/skills/{id}/files/{file...}", n)
+        .put_as("/v1/skills/{id}/files/{*file}", "/v1/skills/{id}/files/{file...}", n)
 }
 
 pub fn routes() -> Router<SkillsState> {

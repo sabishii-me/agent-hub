@@ -33,7 +33,7 @@ pub fn check_error_codes(declared: &[&str], table: &agent_hub_contract::ErrorTab
 /// from the router by editing a separate central table (TASK-048 C5).
 pub fn mounted_surface() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    out.extend(agent_hub_transport::surface().iter().map(|s| s.to_string()));
+    out.extend(agent_hub_transport::surface());
     out.extend(agent_hub_plugins::routes::surface());
     out.extend(agent_hub_sessions::routes::surface().iter().map(|s| s.to_string()));
     out.extend(agent_hub_providers::routes::surface().iter().map(|s| s.to_string()));

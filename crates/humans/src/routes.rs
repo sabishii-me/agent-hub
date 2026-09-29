@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -31,10 +30,10 @@ impl HumansState {
 
 fn table() -> agent_hub_transport::RouteTable<HumansState> {
     agent_hub_transport::RouteTable::new()
-        .mount("/v1/sessions/{id}/approvals", &["GET"], get(list_approvals))
-        .mount("/v1/sessions/{id}/approvals/{aid}", &["POST"], post(decide))
-        .mount("/v1/sessions/{id}/questions", &["GET"], get(list_questions))
-        .mount("/v1/sessions/{id}/questions/{qid}", &["POST"], post(answer))
+        .get("/v1/sessions/{id}/approvals", list_approvals)
+        .post("/v1/sessions/{id}/approvals/{aid}", decide)
+        .get("/v1/sessions/{id}/questions", list_questions)
+        .post("/v1/sessions/{id}/questions/{qid}", answer)
 }
 
 pub fn routes() -> Router<HumansState> {

@@ -28,7 +28,6 @@ use axum::{
     extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
     Router,
 };
 use serde_json::json;
@@ -119,15 +118,19 @@ impl Transport {
 /// The transport-owned routes (`/v1/status`, `/v1/events`) as a
 /// **stateful** builder. Domains merge their own routes onto this, then call
 /// [`finish`] with the shared [`Transport`].
-/// The routes this module mounts (the boot surface check reads every module's).
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/status", "GET /v1/events"]
+fn table() -> crate::table::RouteTable<Transport> {
+    crate::table::RouteTable::new()
+        .get("/v1/status", status)
+        .get("/v1/events", sse)
 }
 
 pub fn routes() -> Router<Transport> {
-    Router::new()
-        .route("/v1/status", get(status))
-        .route("/v1/events", get(sse))
+    table().router()
+}
+
+/// The transport-owned surface, from the same table the router is built from.
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
 /// Apply the shared state, yielding a ready [`Router`].
