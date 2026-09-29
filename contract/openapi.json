@@ -7,7 +7,7 @@
   "paths": {
     "/v1/harnesses": {
       "get": {
-        "description": "the harnesses this hub has registered: a plugin that is present is registered on first sight, with its declared capabilities and status. `GET /v1/hub/harnesses` is the management view of the same registry (installed extensions, runtime, timestamps). This is the ONE route that answers without a token: discovery is open, everything else is 401 unauthorized.",
+        "description": "the harnesses this hub has registered: a plugin that is present is registered on first sight, with its declared capabilities and status. A thin top-level projection that hides the internal fact that a harness is a plugin; derived from the plugin list, never a second store. REQUIRES the bearer token: there is no anonymous discovery (every route requires the token).",
         "responses": {
           "200": {
             "description": "success",
@@ -35,68 +35,6 @@
                     "harnesses",
                     "next_cursor",
                     "note"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/harnesses/{id}/enable": {
-      "post": {
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": true,
-                    "id": {
-                      "type": "string",
-                      "description": "the id the request addressed"
-                    },
-                    "status": {
-                      "const": "enabled"
-                    }
-                  },
-                  "required": [
-                    "ok",
-                    "id",
-                    "status"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/harnesses/{id}/disable": {
-      "post": {
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": true,
-                    "id": {
-                      "type": "string",
-                      "description": "the id the request addressed"
-                    },
-                    "status": {
-                      "const": "disabled"
-                    }
-                  },
-                  "required": [
-                    "ok",
-                    "id",
-                    "status"
                   ]
                 }
               }
@@ -221,7 +159,7 @@
         }
       }
     },
-    "/v1/hub/connections": {
+    "/v1/connections": {
       "get": {
         "description": "The connections the hub manages, credential-free: {id, name, scheme, endpoint, envName, state, credentialConfigured}. A connection is enable/disable/delete only; disable means cut-off, which means zero materialization.",
         "responses": {
@@ -305,7 +243,7 @@
         }
       }
     },
-    "/v1/hub/connections/{id}": {
+    "/v1/connections/{id}": {
       "patch": {
         "description": "Change a connection. A new token replaces the stored one; the credential is never returned.",
         "parameters": [
@@ -397,39 +335,7 @@
         }
       }
     },
-    "/v1/hub/harnesses": {
-      "get": {
-        "description": "the hub's harness registry. The hub manages harnesses, not just lists them: for each one it holds whether it is enabled and which extensions and skills are installed for it. A plugin present under the plugins directory is registered on first sight, carrying the extensions its manifest declares; a plugin that is gone keeps its row marked missing. Each harness row's `availableExtensions` is the catalogue THAT plugin ships (its own `extensions/` directories, and the only extensions that harness may be given); the top-level `availableExtensions` is the union of ids across installed plugins. Extensions are installed BY the hub: before a harness runs, the hub writes that harness's selected extension directories into its data dir, and the adapter places them where its harness reads them.",
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "harnesses": {
-                      "type": "array"
-                    },
-                    "availableExtensions": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
-                      }
-                    }
-                  },
-                  "required": [
-                    "harnesses",
-                    "availableExtensions"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/hub/surface": {
+    "/v1/surface": {
       "get": {
         "description": "The surface this process actually implements, as data: the route table the router matches, the SSE event names it can emit, and the identity of the contract it claims to keep. contract.sha256 is the hash of contract/v1.json; a consumer compares it with the contract it holds, and the hub's boot self-check compares both directions before it binds a port.",
         "responses": {
@@ -490,7 +396,7 @@
         }
       }
     },
-    "/v1/hub/events": {
+    "/v1/events": {
       "get": {
         "description": "The hub-level SSE stream: plugin-set changes (an install, a removal, or a runtime prepare finishing). A client that shows plugins subscribes once; every hub.plugins.changed names the plugin that changed and the state it is in now, so the client can draw it directly. The frame sent on subscribe carries neither id nor state - it is the handshake that says the client is attached, not a change to any plugin.",
         "responses": {
@@ -508,7 +414,7 @@
         }
       }
     },
-    "/v1/hub/openapi.json": {
+    "/v1/openapi.json": {
       "get": {
         "description": "The OpenAPI 3.1 document for this surface, byte for byte as scripts/emit-openapi.mjs generated it from contract/v1.json + contract/errors.json. It is a PROJECTION for tools (client generators, Swagger UI, validators), never a second source: edit the contract and regenerate. The adapter protocol is not HTTP and is not here — it lives in contract/adapter-v1.json and is checked against every manifest, every request the hub sends, every event an adapter emits and every event the hub handles. GET /v1/hub/surface reports this document's sha256, so a client can prove which one it is reading.",
         "responses": {
@@ -545,125 +451,6 @@
                     "servers",
                     "paths",
                     "components"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/hub/harnesses/{id}": {
-      "patch": {
-        "description": "change what the hub installs for one harness: `extensions` (names from availableExtensions; unknown names are refused with the list), `skills` (null = every skill the hub holds, or an array of skill ids), `enabled`. An extension removed here is removed from the harness's next install.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "extensions": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "skills": {
-                    "anyOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      }
-                    ]
-                  },
-                  "enabled": {
-                    "type": "boolean"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "harness": {
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "harness"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/hub/harnesses/{id}/enable": {
-      "post": {
-        "description": "enable a registered harness (the hub twin of POST /v1/harnesses/{id}/enable).",
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "harness": {
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "harness"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/hub/harnesses/{id}/disable": {
-      "post": {
-        "description": "disable a registered harness; session creation and turns are refused 409 harness_disabled.",
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "harness": {
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "harness"
                   ]
                 }
               }
@@ -1425,7 +1212,7 @@
         }
       }
     },
-    "/v1/hub/status": {
+    "/v1/status": {
       "get": {
         "description": "Core status: identity, what the hub is managing right now, and the contract it was built against. Identity first, because a client that spawned a hub must be able to prove it is talking to ITS child: compare `pid` with the process you spawned, and `buildId`/`startedAt`/`port` with what you launched. `providers` and `connections` are the same value-free shapes the list routes return — a provider shows whether a token is configured, never the token; a connection shows its materialization fields, never the credential.",
         "responses": {
@@ -1512,7 +1299,7 @@
         }
       }
     },
-    "/v1/hub/shutdown": {
+    "/v1/shutdown": {
       "post": {
         "responses": {
           "200": {
@@ -1815,7 +1602,7 @@
         }
       }
     },
-    "/v1/hub/providers": {
+    "/v1/model-providers": {
       "get": {
         "description": "the providers the hub manages. One provider is one file in the hub's data dir (`providers/<id>.json`): the endpoint it lives at, the protocol it speaks, the declarations for its models, the selection, and the catalog it last served. A provider is reported as `{id, label, url, api, providerType, providerTypeVersion, providerTypeAvailable, catalogUrl, tokenConfigured, declarations, selection, catalogRevision, createdAt, updatedAt}`; the token itself is never returned. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. Legacy untyped records are read as custom-compatible v1 without rewriting storage or guessing from endpoint/name.",
         "responses": {
@@ -1919,7 +1706,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}": {
+    "/v1/model-providers/{id}": {
       "get": {
         "description": "read one provider by id. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. Legacy untyped records are read as custom-compatible v1 without rewriting storage or guessing from endpoint/name.",
         "responses": {
@@ -2029,7 +1816,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}/logout": {
+    "/v1/model-providers/{id}/logout": {
       "post": {
         "description": "drop a provider's stored credential and keep the row: the provider stays registered (its catalog, its declarations, its selection) but has no token until one is supplied again. Requests that need the credential then fail as `provider_unauthorized` instead of running on something else. A provider plugin with authLogout() is asked to revoke remotely (best effort; a failed revocation is reported and never undoes the local removal).",
         "responses": {
@@ -2054,7 +1841,7 @@
         }
       }
     },
-    "/v1/hub/skills": {
+    "/v1/skills": {
       "get": {
         "description": "The skills the hub holds: one directory per skill under <DATA_DIR>/skills, listed as {id, hasManifest, files}. A skill is a directory, not a record; its id is the directory name.",
         "responses": {
@@ -2084,7 +1871,7 @@
         }
       }
     },
-    "/v1/hub/skills/{id}": {
+    "/v1/skills/{id}": {
       "delete": {
         "description": "Remove one skill directory, whole. The id must stay inside the skills dir (a path that escapes it is refused, not sanitised).",
         "responses": {
@@ -2113,7 +1900,7 @@
         }
       }
     },
-    "/v1/hub/skills/{id}/files/{file...}": {
+    "/v1/skills/{id}/files/{file...}": {
       "put": {
         "description": "Write one file of a skill, creating directories as needed. The hub is a courier: it stores bytes, it does not interpret them.",
         "parameters": [
@@ -2213,7 +2000,7 @@
         }
       }
     },
-    "/v1/hub/providers/models/list": {
+    "/v1/models": {
       "get": {
         "description": "API 1: the core-managed providers' catalogs — what the core owns and what it can inject, independent of any harness or session. This is NOT the model-selection source: a model can only be run where a harness reaches it, so selection reads API 2 (/v1/harnesses/{id}/models), which already includes these providers. Use API 1 to manage a provider's catalog and its enabled selection, not to pick a model for a session. Core queries its registered provider endpoint with its own credential; no credential is handed to a harness for this operation. Missing/stale catalogs are fetched; cached catalogs are reused. Each model has enabled and available flags. Failures are per provider and never replace a previous catalog with an empty one.",
         "responses": {
@@ -2249,7 +2036,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}/models": {
+    "/v1/model-providers/{id}/models": {
       "get": {
         "description": "the cached catalog without touching the network. Each entry is `{id, name, enabled, available}` plus whatever its declaration states (`thinkingLevels`, `input`, `contextWindow`, `maxTokens`). `stale` is true when the endpoint or credential changed since the fetch; a stale catalog reports every model unavailable.",
         "responses": {
@@ -2358,7 +2145,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}/models/refresh": {
+    "/v1/model-providers/{id}/models/refresh": {
       "post": {
         "description": "Refresh core-provider catalog. First/new models enabled; previous choices preserved; removed models retained as unavailable. Endpoint/credential changes invalidate the catalog. Failure returns error and previous catalog without replacing it.",
         "responses": {
@@ -2481,7 +2268,7 @@
         }
       }
     },
-    "/v1/hub/catalog": {
+    "/v1/plugins/catalog": {
       "get": {
         "description": "the plugin catalog this hub was shipped with: a registry file (AGENT_HUB_REGISTRY_FILE, else registry.json beside the hub) restating where first-party plugins are released. It is DATA and read-only — the hub does not resolve, rank or rewrite it, and an install names the artifact it wants (url + sha256), so a catalog that lies about its own artifact fails exactly like a hand-typed URL. `source` is the file that answered (null when there is none), `plugins` is the list verbatim, and `fault` says why an unreadable file could not be used instead of pretending the catalog is empty.",
         "responses": {
@@ -2534,7 +2321,7 @@
         }
       }
     },
-    "/v1/hub/plugins/{id}/icon/{variant}": {
+    "/v1/plugins/{id}/icon/{variant}": {
       "get": {
         "description": "Serve one variant (light|dark) of a harness's own icon, from the file its manifest declares. This is why a catalog entry names an icon URL instead of inlining bytes: a client loads the mark asynchronously and the hub never embeds it.",
         "responses": {
@@ -2553,7 +2340,7 @@
         }
       }
     },
-    "/v1/hub/registry/refresh": {
+    "/v1/plugins/registry/refresh": {
       "post": {
         "description": "Read the configured registry URL (AGENT_HUB_REGISTRY_URL) and write it where the hub reads the catalog. This is the ONLY way the URL is contacted: the hub never fetches at startup, and a missing local registry is an error, not a fetch. Called by a user action that asks to check for adapter updates. 409 when no registry URL is configured; 502 when the URL cannot be read.",
         "responses": {
@@ -2584,7 +2371,7 @@
         }
       }
     },
-    "/v1/hub/plugins": {
+    "/v1/plugins": {
       "get": {
         "description": "what plugin directories the hub can see, where they came from, and whether each one's runtime is on disk. A plugin is a directory with a manifest; the hub reads the root it was given (AGENT_HUB_PLUGINS_DIR) and, when it is the hub's own, the plugins it installed there. `runtimeReady` is a fact about the filesystem (the manifest's command exists), not a claim about the harness working.",
         "responses": {
@@ -2677,7 +2464,7 @@
         }
       }
     },
-    "/v1/hub/plugins/{id}": {
+    "/v1/plugins/{id}": {
       "delete": {
         "description": "remove a plugin the HUB installed, and nothing else. A directory a deployment put on the search path is read-only to the hub (409, naming the directory), and a harness with open sessions is refused rather than yanked out from under them (409 `plugin_in_use`, naming the sessions). The plugin's record goes with it; the harness row keeps its configuration and reads as missing until something with that id is installed again. Sessions are never deleted by this: a plugin is code, a session is history.",
         "responses": {
@@ -2713,7 +2500,7 @@
         }
       }
     },
-    "/v1/hub/plugins/{id}/prepare": {
+    "/v1/plugins/{id}/prepare": {
       "post": {
         "description": "ask a plugin's adapter to materialise the runtime its manifest pins (`runtime/prepare`). Idempotent: a runtime already on disk answers `ready:true`. The hub reports the adapter's own words — including on failure (`runtime_prepare_failed`), because only the adapter knows how its harness is fetched. A plugin that does not declare the `runtime` capability answers 501 `unsupported`.",
         "responses": {
@@ -2848,7 +2635,7 @@
         }
       }
     },
-    "/v1/hub/provider-types": {
+    "/v1/model-providers/types": {
       "get": {
         "description": "Installed hub provider plugins, as data. A provider type is not built into the hub: each entry here was imported from a plugin directory (manifest.provider.module). Types unavailable because no plugin ships them stay absent — a provider record naming one remains readable but unusable. `broken` lists provider modules that were declared but could not load, with their reason. A plugin's fetchCatalog may return plain model entries or {models, note}; entries may carry metadata (thinkingLevels, contextWindow, maxTokens, input, cost) stated by the vendor — declarations still override per field, and both are what a harness receives at session start.",
         "responses": {
@@ -3298,7 +3085,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}/auth": {
+    "/v1/model-providers/{id}/auth": {
       "post": {
         "description": "Start the authorization the provider plugin declares (device-code, browser, ...). The operation runs in the hub and outlives this request/caller; the caller receives the first declared step {operationId,next}. A type with no beginAuth() (or only api-key) answers 501 rather than a fabricated flow.",
         "responses": {
@@ -3327,7 +3114,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}/auth/{op}": {
+    "/v1/model-providers/{id}/auth/{op}": {
       "get": {
         "description": "Current state of a hub-level authorization operation: {status:pending|approved|failed|expired|cancelled,next?,error?,account?}. Once approved, the credential is in the hub secret store and the existing credentials/grant path reaches every compatible harness.",
         "responses": {
@@ -3352,7 +3139,7 @@
         }
       }
     },
-    "/v1/hub/providers/{id}/auth/{op}/cancel": {
+    "/v1/model-providers/{id}/auth/{op}/cancel": {
       "post": {
         "description": "Cancel a pending hub-level authorization. Idempotent.",
         "responses": {
@@ -3379,9 +3166,9 @@
         }
       }
     },
-    "/v1/hub/orphans": {
-      "get": {
-        "description": "Plugin directories under the hub's OWN root that carry no manifest: what an interrupted replace or a failed install leaves behind. Every other reader looks for a manifest, so nothing else can see or clean these. They are reported (with size and whether a runtime is inside), never removed by a GET; a deployment's roots are not the hub's to clean and are never listed.",
+    "/v1/plugins/{id}/enable": {
+      "post": {
+        "description": "enable a plugin (its lifecycle). A harness is a plugin, so this covers it.",
         "responses": {
           "200": {
             "description": "success",
@@ -3390,32 +3177,18 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "orphans": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "path": {
-                            "type": "string"
-                          },
-                          "bytes": {
-                            "type": [
-                              "integer",
-                              "null"
-                            ]
-                          },
-                          "hasRuntime": {
-                            "type": "boolean"
-                          }
-                        }
-                      }
+                    "ok": true,
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "const": "enabled"
                     }
                   },
                   "required": [
-                    "orphans"
+                    "ok",
+                    "id",
+                    "status"
                   ]
                 }
               }
@@ -3424,9 +3197,9 @@
         }
       }
     },
-    "/v1/hub/orphans/{id}": {
-      "delete": {
-        "description": "Remove leftover plugin state (a manifestless directory under the hub's own root). Refused with 409 when the directory has a manifest (that is a real plugin - use the plugin route) or belongs to another root. A directory a process still holds is reported as plugin_dir_busy, not a bare EPERM.",
+    "/v1/plugins/{id}/disable": {
+      "post": {
+        "description": "disable a plugin (its lifecycle). A disabled harness refuses session create/turns.",
         "responses": {
           "200": {
             "description": "success",
@@ -3435,16 +3208,111 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    },
-                    "removed": {
+                    "ok": true,
+                    "id": {
                       "type": "string"
+                    },
+                    "status": {
+                      "const": "disabled"
                     }
                   },
                   "required": [
                     "ok",
-                    "removed"
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/harnesses/{id}/extensions": {
+      "get": {
+        "description": "the extension ids THIS harness may be given (the plugin's shipped set), harness-scoped because a bare id is meaningless across harnesses.",
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "harnessId": {
+                      "type": "string"
+                    },
+                    "available": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "harnessId",
+                    "available"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "description": "select the extensions the hub installs for this harness; an unknown id is refused with the available list.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "extensions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "extensions"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "harnessId": {
+                      "type": "string"
+                    },
+                    "extensions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "harnessId",
+                    "extensions"
                   ]
                 }
               }
