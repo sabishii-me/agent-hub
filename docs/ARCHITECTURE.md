@@ -156,6 +156,14 @@ These are not code the hub imports; they are **resources with a placement rule**
 The hub's part is to **own the placement and the content**, and to hand the adapter paths - never
 to run the harness's code.
 
+**On `skills://`.** It is **not an OS or network protocol** - it is a **logical URI** the hub parses
+(`skills://<id>/<file>`) and maps to a read-only file, served at `GET /v1/sessions/{id}/resources`
+and `POST .../resources/read` (bounded, no paths, versioned by hash). It is trivially
+implementable in Rust (string handling + percent-decode). But it is a **client-facing read view**:
+the harnesses read skills from a **directory** (`--skill <path>`, `DSH_AGENTS_HOME/skills`), not
+from a URI - so `skills://` does not deliver skills to a harness, and does not by itself stop the
+agent from writing a skill directory. The delivery rule above (hub-owned path, discovery off) does.
+
 ## 5. Model providers are DATA (decided)
 
 A provider is **data**, not a module. The hub owns the function: HTTP, authentication (device-code,
@@ -179,7 +187,33 @@ and "half a file" come from; one database gives transactions and one writer.
   store / a vault). The database holds their path and metadata, not their bytes.
 - `db/<table>.rs` is the only place its table is named in SQL.
 
-## 7. The rules (invariants)
+## 7. Concurrency: how ADR-0009's numbers are met in Rust
+
+ADR-0009 is a floor and a target, measured, not asserted:
+
+- **the floor**: >= 100 concurrent connections, and any operation in flight does not make another
+  connection time out;
+- **the target**: thousands of idle concurrent connections without degradation;
+- **concurrent work**: two heavyweight operations at once proceed without starving each other or
+  any connection.
+
+How Rust meets each, structurally:
+
+| requirement | mechanism |
+|---|---|
+| thousands of idle connections | **tokio multi-thread runtime**, one async task per connection; an idle connection is a parked task, no thread and no buffer held. axum/hyper handle keep-alive and back-pressure. |
+| no request path blocks the loop | handlers are `async`; the only blocking work (bundled `rusqlite`, some fs) is sent to **`spawn_blocking`**, so it runs on a blocking pool and never stalls the reactor. A blocking call on the async path is a defect the type system makes visible. |
+| a long operation does not hold a connection | it is **detached** (`accepted(location, work)` -> `tokio::spawn`); the work mutates the resource and emits an event. The client is answered `202` at once. |
+| two heavyweight operations do not starve each other | a heavyweight op is a task among tasks on the multi-thread runtime; the **bounded** parts (downloads) use an explicit **`tokio::sync::Semaphore`** so a single install cannot exhaust the pool, and CPU/IO inside one op never runs synchronously on the reactor. |
+| bounded resources under load | per-concern limits (download concurrency, open files) are semaphores with a chosen ceiling, not "whatever the loop allows". |
+
+**The measurement is the same one that reproduced the freeze** (a concurrent poll while a large
+operation runs), turned into the acceptance test - see ADR-0009 and the adversarial suite. The
+target is not a hope: an event-driven runtime holds thousands of idle connections because nothing
+on the loop waits; in Rust the loop is the runtime's, and blocking is an explicit, checked
+boundary rather than a rule to remember.
+
+## 8. The rules (invariants)
 
 1. **No blocking on a request path (ADR-0009).** I/O is async (`tokio::fs`, the db, awaited child
    processes). Blocking work (the bundled `rusqlite` calls, a synchronous fs op) runs in
@@ -203,7 +237,7 @@ and "half a file" come from; one database gives transactions and one writer.
 8. **Dependencies are built at the entry.** `main.rs` builds the `AppState` and passes it to the
    routers; a module does not reach for a mutable global.
 
-## 8. How the structure makes a change local (from the whole to the part)
+## 9. How the structure makes a change local (from the whole to the part)
 
 1. **Run the frame first.** `main.rs` + `transport/` + the mounted routers, with the current routes
    moved on **behaviour-unchanged**. The surface is proven before any domain changes.
@@ -214,13 +248,13 @@ and "half a file" come from; one database gives transactions and one writer.
 4. **The self-check holds the seam.** `main.rs` compares the mounted surface to `contract/v1.json`
    at boot, so a forgotten route is a refusal to start.
 
-## 9. What this architecture does not decide
+## 10. What this architecture does not decide
 
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
 - C - a client connecting directly to an adapter (a separate decision; re-opens ADR-0001).
 
-## 10. The order of work (architecture first, then inward)
+## 11. The order of work (architecture first, then inward)
 
 1. **the frame**: `hub/main.rs`, `crates/transport` (axum listener, bearer auth, SSE, `accepted`),
    `crates/contract` (load + self-check), `crates/events`. The existing routes are moved on
