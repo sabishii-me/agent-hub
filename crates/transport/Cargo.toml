@@ -8,6 +8,7 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 agent-hub-events = { path = "../events" }
+agent-hub-contract = { path = "../contract" }
 axum.workspace = true
 tokio = { workspace = true }
 tokio-stream.workspace = true

@@ -35,6 +35,10 @@
 //!
 //! `undefined`/`null` at the fragment root: `{}` (anything).
 
+pub mod errors;
+
+pub use errors::{ErrorEntry, ErrorTable};
+
 use serde_json::{json, Map, Value};
 use serde_json::Map as JMap;
 

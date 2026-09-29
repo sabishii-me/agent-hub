@@ -13,6 +13,10 @@
 //! - [`sse`]: a WHATWG `text/event-stream` with `id` and `Last-Event-ID`
 //!   handling that converges (replay or resync), never a silent gap.
 
+pub mod error;
+
+pub use error::{DomainError, ErrorRenderer};
+
 use std::sync::Arc;
 
 use agent_hub_events::{Bus, CatchUp};
@@ -36,6 +40,19 @@ pub struct Accepted {
 impl Accepted {
     pub fn new(location: impl Into<String>, body: serde_json::Value) -> Self {
         Accepted { location: location.into(), body }
+    }
+
+    /// A **detached** long operation (ARCHITECTURE §13.2, ADR-0009): answer
+    /// `202 + Location` at once and run `work` on a task. The connection is
+    /// never held. The result is the resource's own state, reported on the
+    /// event stream.
+    pub fn detached(
+        location: impl Into<String>,
+        body: serde_json::Value,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Response {
+        tokio::spawn(work);
+        Accepted::new(location, body).into_response()
     }
 }
 

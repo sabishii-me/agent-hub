@@ -3,23 +3,24 @@
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
+use agent_hub_transport::ErrorRenderer;
 use crate::service::{CreateSession, SessionError, Sessions};
 
 /// Shared sessions state merged into the transport's router.
 #[derive(Clone)]
 pub struct SessionsState {
     pub sessions: Arc<Sessions>,
+    pub errors: ErrorRenderer,
 }
 
 impl SessionsState {
-    pub fn new(sessions: Sessions) -> Self {
-        SessionsState { sessions: Arc::new(sessions) }
+    pub fn new(sessions: Sessions, errors: ErrorRenderer) -> Self {
+        SessionsState { sessions: Arc::new(sessions), errors }
     }
 }
 
@@ -34,21 +35,14 @@ pub fn routes() -> Router<SessionsState> {
         .route("/v1/sessions/{id}/fork", post(fork))
 }
 
-fn err(e: SessionError) -> Response {
-    let (status, code) = match &e {
-        SessionError::NotFound(_) => (StatusCode::NOT_FOUND, "session_not_found"),
-        SessionError::Closed(_) => (StatusCode::CONFLICT, "session_closed"),
-        SessionError::Busy(_) => (StatusCode::CONFLICT, "session_busy"),
-        SessionError::Validation(_) => (StatusCode::BAD_REQUEST, "validation_failed"),
-        SessionError::Db(_) | SessionError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    };
-    (status, Json(serde_json::json!({ "error": code, "detail": e.to_string() }))).into_response()
+fn err(s: &SessionsState, e: SessionError) -> Response {
+    s.errors.render(&e.to_domain_error())
 }
 
 async fn create(State(s): State<SessionsState>, Json(req): Json<CreateSession>) -> Response {
     match s.sessions.create(req) {
         Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -57,14 +51,14 @@ async fn list(State(s): State<SessionsState>) -> Response {
         Ok(sessions) => {
             Json(serde_json::json!({ "sessions": sessions, "next_cursor": null })).into_response()
         }
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn get_one(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.sessions.get(&id) {
         Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -88,14 +82,14 @@ async fn patch(
         Ok(session) => {
             Json(serde_json::json!({ "session": session, "warning": null })).into_response()
         }
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn remove(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.sessions.delete(&id) {
         Ok(()) => Json(serde_json::json!({ "ok": true, "id": id, "exported": false })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -114,28 +108,28 @@ async fn admit(
 ) -> Response {
     match s.sessions.admit_turn(&id, &b.idempotency_key, b.content) {
         Ok(turn) => Json(serde_json::json!({ "turn": turn })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn list_turns(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.sessions.list_turns(&id) {
         Ok(turns) => Json(serde_json::json!({ "turns": turns, "next_cursor": null })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn cancel(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.sessions.cancel_turn(&id) {
         Ok(turn) => Json(serde_json::json!({ "turn": turn })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn close(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.sessions.close(&id) {
         Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -144,7 +138,7 @@ async fn reopen(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) 
         Ok(session) => {
             Json(serde_json::json!({ "session": session, "reopened": true })).into_response()
         }
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -166,6 +160,6 @@ async fn fork(
             "forkedFrom": { "sessionId": id, "afterTurnId": after }
         }))
         .into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }

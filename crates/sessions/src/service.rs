@@ -27,6 +27,23 @@ pub enum SessionError {
     Io(#[from] std::io::Error),
 }
 
+impl SessionError {
+    /// The **contract** error code (`contract/errors.json`).
+    pub fn code(&self) -> &'static str {
+        match self {
+            SessionError::NotFound(_) => "unknown_session",
+            SessionError::Closed(_) => "session_closed",
+            SessionError::Busy(_) => "session_busy",
+            SessionError::Validation(_) => "validation_failed",
+            SessionError::Db(_) | SessionError::Io(_) => "internal_error",
+        }
+    }
+
+    pub fn to_domain_error(&self) -> agent_hub_transport::DomainError {
+        agent_hub_transport::DomainError::new(self.code(), self.to_string())
+    }
+}
+
 /// A session as the contract's `session` object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionView {

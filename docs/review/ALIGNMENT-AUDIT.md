@@ -1,5 +1,8 @@
 # Alignment audit: the accepted decisions vs the implementation
 
+> **Status (updated).** D1, D2, D3 are **fixed** by the rework below; D4 and D5 are the next
+> fixes. See "Rework log" at the end of this file.
+
 An audit of what the **approved** architecture (PR #12, approved at `6c8a0c9`) and its ADRs
 require, against what the implementation actually does. It is a **fact check**, not a new
 decision. Each row names the authority and the evidence.
@@ -99,3 +102,27 @@ does not deserialize.
 - **§10 recovery before GC**, the recorded-step spine (T3), verified across a real crash.
 - **§11 SSE convergence**: monotonic ids, bounded replay, resync (T4).
 - **§5 providers are data**: one file per provider, no in-process plugin code.
+
+## Rework log
+
+### Fixed
+
+- **D1 - long routes answer `202 + Location`.** `transport::Accepted::detached` answers and runs
+  the operation on a task. `POST /v1/hub/plugins`, `DELETE /v1/hub/plugins/{id}` are split into
+  `begin_*` (validate + register the identity, cheap, synchronous) and `finish_*` (the detached
+  move). Verified live: install answers `202 Accepted` with `location: /v1/hub/plugins/alpha`,
+  and the resource becomes `ready`.
+- **D2 - the plugin routes read the client's command identity.** `routes.rs` reads the
+  `Idempotency-Key` header; a retry with the same key returns the original and runs nothing. An
+  absent key is a fresh intent. The turn route already did this.
+- **D3 - a domain no longer writes an HTTP status.** `crates/contract` loads
+  `contract/errors.json` (`ErrorTable`); `transport::ErrorRenderer` maps a `DomainError`
+  (a contract **code**) to a status and body. Each domain returns `code()` + a detail. Two codes
+  I had invented (`internal`, `plugin_not_found`) were **not in the contract** and were replaced
+  with the real ones (`internal_error`, `not_found`); an invalid manifest maps to the contract's
+  `plugin_archive_invalid` (502), not a made-up code. The boot self-check refuses to start if a
+  domain names a code the contract does not declare.
+
+### Open
+
+- **D4** (adapter environment) and **D5** (`runtime.command` is an argv array): next.

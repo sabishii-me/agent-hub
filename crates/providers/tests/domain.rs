@@ -16,6 +16,15 @@ fn install_provider() {
     });
 }
 
+fn errors() -> agent_hub_transport::ErrorRenderer {
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../contract/errors.json"
+    ))
+    .unwrap();
+    agent_hub_transport::ErrorRenderer::new(agent_hub_contract::ErrorTable::parse(&raw).unwrap())
+}
+
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("agent-hub-prov-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -25,7 +34,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 
 async fn serve_providers(dir: std::path::PathBuf) -> String {
     install_provider();
-    let state = ProvidersState::new(Providers::new(ProviderStore::new(dir)));
+    let state = ProvidersState::new(Providers::new(ProviderStore::new(dir)), errors());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

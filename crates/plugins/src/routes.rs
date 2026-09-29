@@ -1,33 +1,36 @@
 //! The `/v1/hub/plugins` routes, merged onto the frame's transport.
+//!
+//! A long operation (install, remove) is **detached**: the route answers
+//! `202 Accepted` + `Location` at once and the work runs on a task
+//! (ARCHITECTURE §13.2, ADR-0009). Errors are a contract **code**; the transport
+//! maps the code to a status (`ErrorRenderer`), never this module.
 
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use agent_hub_transport::Transport;
+use agent_hub_transport::{Accepted, DomainError, ErrorRenderer, Transport};
 
-use crate::PluginError;
 use crate::service::Plugins;
 
-/// Shared plugins state merged into the transport's router.
 #[derive(Clone)]
 pub struct PluginsState {
     pub plugins: Arc<Plugins>,
     pub transport: Transport,
+    pub errors: ErrorRenderer,
 }
 
 impl PluginsState {
-    pub fn new(plugins: Plugins, transport: Transport) -> Self {
-        PluginsState { plugins: Arc::new(plugins), transport }
+    pub fn new(plugins: Plugins, transport: Transport, errors: ErrorRenderer) -> Self {
+        PluginsState { plugins: Arc::new(plugins), transport, errors }
     }
 }
 
-/// The plugins routes as a stateful builder to merge onto `transport::routes()`.
 pub fn routes() -> Router<PluginsState> {
     Router::new()
         .route("/v1/hub/plugins", get(list).post(install))
@@ -35,17 +38,26 @@ pub fn routes() -> Router<PluginsState> {
         .route("/v1/hub/plugins/{id}/prepare", post(prepare))
 }
 
-fn err(e: PluginError) -> Response {
-    let (status, code) = match &e {
-        PluginError::NotFound(_) => (StatusCode::NOT_FOUND, "plugin_not_found"),
-        PluginError::NotInstalledByHub(_) => (StatusCode::CONFLICT, "plugin_not_removable"),
-        PluginError::InUse(_, _) => (StatusCode::CONFLICT, "plugin_in_use"),
-        PluginError::Busy(_, _) => (StatusCode::CONFLICT, "plugin_busy"),
-        PluginError::InvalidManifest(_) => (StatusCode::BAD_REQUEST, "plugin_manifest_invalid"),
-        PluginError::Conflict(_) => (StatusCode::CONFLICT, "idempotency_conflict"),
-        PluginError::Db(_) | PluginError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    };
-    (status, Json(serde_json::json!({ "error": code, "detail": e.to_string() }))).into_response()
+/// The client's logical command identity (ARCHITECTURE §11, R1). A retry carries
+/// the same `Idempotency-Key`, so the hub must recognize it and not run twice.
+/// An absent key is a fresh intent.
+fn command_id(headers: &HeaderMap) -> String {
+    headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(new_command_id)
+}
+
+fn new_command_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static C: AtomicU64 = AtomicU64::new(0);
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("cmd-{n:x}-{:x}", C.fetch_add(1, Ordering::Relaxed))
 }
 
 async fn list(State(s): State<PluginsState>) -> Response {
@@ -58,8 +70,20 @@ async fn list(State(s): State<PluginsState>) -> Response {
                 "searched": [s.plugins.root.to_string_lossy()],
             }
         }))
-        .into_response(),
-        Err(e) => err(e),
+        .into_response_ok(),
+        Err(e) => s.errors.render(&e.to_domain_error()),
+    }
+}
+
+/// A tiny helper so `Json(...)` reads as a response without importing
+/// `IntoResponse` everywhere.
+trait IntoResponseOk {
+    fn into_response_ok(self) -> Response;
+}
+impl IntoResponseOk for Json<serde_json::Value> {
+    fn into_response_ok(self) -> Response {
+        use axum::response::IntoResponse;
+        self.into_response()
     }
 }
 
@@ -70,41 +94,74 @@ struct InstallBody {
 
 #[derive(Deserialize)]
 struct InstallSource {
-    /// A local path (git/artifact fetch is a later domain).
     url: String,
 }
 
-/// POST /v1/hub/plugins. `Idempotency-Key` carries the command identity; a
-/// missing key is treated as a fresh intent.
-async fn install(State(s): State<PluginsState>, body: Json<InstallBody>) -> Response {
-    let command_id = format!("install-{}", uuid_like());
+/// POST /v1/hub/plugins (long): `202 Accepted` + `Location`; the install runs
+/// detached and its progress is the `hub.plugins.changed` stream.
+async fn install(
+    State(s): State<PluginsState>,
+    headers: HeaderMap,
+    Json(body): Json<InstallBody>,
+) -> Response {
+    let command_id = command_id(&headers);
     let source = std::path::PathBuf::from(&body.source.url);
-    match s.plugins.install_from_dir(&command_id, &source) {
-        Ok((view, updated)) => {
-            let plugins = s.plugins.list().unwrap_or_default();
-            Json(serde_json::json!({ "plugin": view, "updated": updated, "plugins": plugins }))
-                .into_response()
+    // Validate + register the command identity synchronously (cheap), then run
+    // the move detached. A replay is identified before any work starts.
+    match s.plugins.begin_install(&command_id, &source) {
+        Ok(crate::service::InstallIntent::Replay(view)) => {
+            Json(serde_json::json!({ "plugin": view, "updated": false })).into_response_ok()
         }
-        Err(e) => err(e),
+        Ok(crate::service::InstallIntent::Proceed { id }) => {
+            let plugins = s.plugins.clone();
+            let location = format!("/v1/hub/plugins/{id}");
+            let errors = s.errors.clone();
+            Accepted::detached(
+                location,
+                serde_json::json!({ "pluginId": id, "state": "installing" }),
+                async move {
+                    if let Err(e) = plugins.finish_install(&id, &source) {
+                        tracing::error!(error = %e, "detached install failed");
+                    }
+                    let _ = errors; // the failure is reported on the event stream
+                },
+            )
+        }
+        Err(e) => s.errors.render(&e.to_domain_error()),
     }
 }
 
-async fn remove(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) -> Response {
-    let command_id = format!("remove-{}", uuid_like());
-    match s.plugins.remove(&command_id, &id) {
-        Ok(()) => {
-            let plugins = s.plugins.list().unwrap_or_default();
-            Json(serde_json::json!({ "ok": true, "id": id, "plugins": plugins })).into_response()
+async fn remove(
+    State(s): State<PluginsState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    let command_id = command_id(&headers);
+    match s.plugins.begin_remove(&command_id, &id) {
+        Ok(crate::service::RemoveIntent::Replay) => {
+            Json(serde_json::json!({ "ok": true, "id": id })).into_response_ok()
         }
-        Err(e) => err(e),
+        Ok(crate::service::RemoveIntent::Proceed) => {
+            let plugins = s.plugins.clone();
+            let location = format!("/v1/hub/plugins/{id}");
+            let id2 = id.clone();
+            Accepted::detached(
+                location,
+                serde_json::json!({ "id": id, "state": "removing" }),
+                async move {
+                    if let Err(e) = plugins.finish_remove(&id2) {
+                        tracing::error!(error = %e, "detached remove failed");
+                    }
+                },
+            )
+        }
+        Err(e) => s.errors.render(&e.to_domain_error()),
     }
 }
 
-/// POST /v1/hub/plugins/{id}/prepare. Runtime prepare is delegated to the
-/// adapter; without one, the runtime is reported not-ready rather than faked.
 async fn prepare(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) -> Response {
     if s.plugins.db.plugin(&id).ok().flatten().is_none() {
-        return err(PluginError::NotFound(id));
+        return s.errors.render(&DomainError::new("not_found", format!("plugin `{id}`")));
     }
     Json(serde_json::json!({
         "harnessId": id,
@@ -112,11 +169,5 @@ async fn prepare(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) 
         "ready": false,
         "detail": "no adapter is attached; runtime prepare is not available yet"
     }))
-    .into_response()
-}
-
-fn uuid_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("{n:x}")
+    .into_response_ok()
 }

@@ -16,6 +16,8 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+agent-hub-contract = { path = "../contract" }
+agent-hub-transport = { path = "../transport" }
 futures.workspace = true
 bytes = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

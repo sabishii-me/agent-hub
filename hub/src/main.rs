@@ -14,7 +14,9 @@ use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
 use agent_hub_sessions::Sessions;
 use agent_hub_providers::routes::{routes as provider_routes, ProvidersState};
 use agent_hub_providers::{ProviderStore, Providers};
-use agent_hub_transport::{finish, routes, Admission, Transport};
+use agent_hub_transport::{finish, routes, Admission, ErrorRenderer, Transport};
+
+mod selfcheck;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,6 +35,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bus = Bus::new(1024, 256);
     let transport = Transport::new(bus.clone(), Admission::new(64));
 
+    // The error master table is the single source of truth for every failure
+    // code (ARCHITECTURE 13.7); the transport maps a code to its status.
+    let contract_dir: PathBuf = std::env::var("AGENT_HUB_CONTRACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contract"));
+    let error_table = agent_hub_contract::ErrorTable::load(&contract_dir.join("errors.json"))
+        .map_err(|e| format!("load contract/errors.json: {e}"))?;
+    // Every code a domain can return must be declared in the contract table
+    // (ARCHITECTURE 13.7); a domain inventing a code refuses to start.
+    let declared_codes = [
+        // plugins
+        "not_found", "plugin_remove_failed", "plugin_in_use", "plugin_dir_busy",
+        "plugin_archive_invalid", "idempotency_conflict", "plugin_install_failed",
+        "internal_error",
+        // sessions
+        "unknown_session", "session_closed", "session_busy", "validation_failed",
+        // providers
+        "provider_not_found", "already_exists", "provider_catalog_failed",
+    ];
+    selfcheck::check_error_codes(&declared_codes, &error_table)
+        .map_err(|e| format!("self-check failed: {e}"))?;
+    let errors = ErrorRenderer::new(error_table);
+
     // The data layer and the plugins domain. Recovery runs before serving.
     let db = Db::open(data_dir.join("hub.sqlite"))?;
     let plugins_root = data_dir.join("plugins");
@@ -45,16 +70,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => tracing::error!(error = %e, "plugin recovery failed"),
     }
     let plugins = Plugins::new(db, &plugins_root, bus.clone());
-    let plugin_state = PluginsState::new(plugins, transport.clone());
+    let plugin_state = PluginsState::new(plugins, transport.clone(), errors.clone());
 
     // A second connection for the sessions domain (each domain owns its handle).
     let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
     let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir);
-    let session_state = SessionsState::new(sessions);
+    let session_state = SessionsState::new(sessions, errors.clone());
 
     // Providers: one JSON file per provider under the data dir.
     let providers = Providers::new(ProviderStore::new(data_dir.join("providers")));
-    let provider_state = ProvidersState::new(providers);
+    let provider_state = ProvidersState::new(providers, errors.clone());
 
     // One axum app: the transport surface plus the domain routes.
     let app = finish(routes(), transport)

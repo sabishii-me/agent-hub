@@ -16,6 +16,24 @@ pub enum ProviderError {
     Catalog(#[from] catalog::CatalogError),
 }
 
+impl ProviderError {
+    /// The **contract** error code (`contract/errors.json`).
+    pub fn code(&self) -> &'static str {
+        match self {
+            ProviderError::Store(StoreError::NotFound(_)) => "provider_not_found",
+            ProviderError::Store(StoreError::Exists(_)) => "already_exists",
+            ProviderError::Store(StoreError::Corrupt(_, _)) => "internal_error",
+            ProviderError::Store(StoreError::Io(_)) => "internal_error",
+            ProviderError::Validation(_) => "validation_failed",
+            ProviderError::Catalog(_) => "provider_catalog_failed",
+        }
+    }
+
+    pub fn to_domain_error(&self) -> agent_hub_transport::DomainError {
+        agent_hub_transport::DomainError::new(self.code(), self.to_string())
+    }
+}
+
 /// What POST /v1/hub/providers accepts.
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct CreateProvider {

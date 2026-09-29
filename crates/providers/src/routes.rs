@@ -3,23 +3,24 @@
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 
 use crate::record::ProviderRecord;
+use agent_hub_transport::ErrorRenderer;
 use crate::service::{CreateProvider, PatchProvider, ProviderError, Providers};
 use crate::store::StoreError;
 
 #[derive(Clone)]
 pub struct ProvidersState {
     pub providers: Arc<Providers>,
+    pub errors: ErrorRenderer,
 }
 
 impl ProvidersState {
-    pub fn new(providers: Providers) -> Self {
-        ProvidersState { providers: Arc::new(providers) }
+    pub fn new(providers: Providers, errors: ErrorRenderer) -> Self {
+        ProvidersState { providers: Arc::new(providers), errors }
     }
 }
 
@@ -36,16 +37,8 @@ pub fn routes() -> Router<ProvidersState> {
         .route("/v1/hub/providers/models/list", get(list_models))
 }
 
-fn err(e: ProviderError) -> Response {
-    let (status, code) = match &e {
-        ProviderError::Store(StoreError::NotFound(_)) => (StatusCode::NOT_FOUND, "provider_not_found"),
-        ProviderError::Store(StoreError::Exists(_)) => (StatusCode::CONFLICT, "provider_exists"),
-        ProviderError::Store(StoreError::Corrupt(_, _)) => (StatusCode::INTERNAL_SERVER_ERROR, "provider_corrupt"),
-        ProviderError::Validation(_) => (StatusCode::BAD_REQUEST, "validation_failed"),
-        ProviderError::Catalog(_) => (StatusCode::BAD_GATEWAY, "catalog_failed"),
-        ProviderError::Store(StoreError::Io(_)) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    };
-    (status, Json(serde_json::json!({ "error": code, "detail": e.to_string() }))).into_response()
+fn err(s: &ProvidersState, e: ProviderError) -> Response {
+    s.errors.render(&e.to_domain_error())
 }
 
 /// The provider object the routes return: **the token never leaves**.
@@ -69,21 +62,21 @@ async fn list(State(s): State<ProvidersState>) -> Response {
             "broken": broken,
         }))
         .into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn create(State(s): State<ProvidersState>, Json(req): Json<CreateProvider>) -> Response {
     match s.providers.create(req) {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn get_one(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.get(&id) {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -94,28 +87,28 @@ async fn patch_one(
 ) -> Response {
     match s.providers.patch(&id, req) {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn remove(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.delete(&id) {
         Ok(()) => Json(serde_json::json!({ "ok": true, "id": id })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn logout(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.logout(&id) {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn models(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.get(&id) {
         Ok(rec) => Json(models_body(&rec)).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -141,14 +134,14 @@ async fn set_models(
 ) -> Response {
     match s.providers.set_selection(&id, b.enabled_model_ids) {
         Ok(rec) => Json(models_body(&rec)).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
 async fn refresh(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.refresh(&id).await {
         Ok(rec) => Json(models_body(&rec)).into_response(),
-        Err(e) => err(e),
+        Err(e) => err(&s, e),
     }
 }
 
@@ -156,7 +149,7 @@ async fn refresh(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>
 async fn list_models(State(s): State<ProvidersState>) -> Response {
     let (records, _) = match s.providers.list() {
         Ok(v) => v,
-        Err(e) => return err(e),
+        Err(e) => return err(&s, e),
     };
     let mut models = Vec::new();
     let mut catalogs = Vec::new();

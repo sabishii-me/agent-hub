@@ -7,7 +7,16 @@ use agent_hub_db::Db;
 use agent_hub_events::Bus;
 use agent_hub_plugins::routes::{routes, PluginsState};
 use agent_hub_plugins::Plugins;
-use agent_hub_transport::{finish, Transport};
+use agent_hub_transport::{ErrorRenderer, Transport};
+
+fn errors() -> ErrorRenderer {
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../contract/errors.json"
+    ))
+    .unwrap();
+    ErrorRenderer::new(agent_hub_contract::ErrorTable::parse(&raw).unwrap())
+}
 
 fn install_provider() {
     use std::sync::Once;
@@ -71,25 +80,25 @@ async fn install_list_replace_remove_over_http() {
     fs::create_dir_all(&root).unwrap();
     let plugins = Plugins::new(db, &root, bus.clone());
     let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
-    let base = serve(PluginsState::new(plugins, transport)).await;
+    let base = serve(PluginsState::new(plugins, transport, errors())).await;
     let client = reqwest::Client::new();
 
     let src = plugin_src(&dir, "alpha", "1.0.0");
     let body = serde_json::json!({ "source": { "url": src.to_string_lossy() } });
 
-    // Install.
+    // Install: a long operation is 202 + Location, not a held 200.
     let r = client
         .post(format!("{base}/v1/hub/plugins"))
         .json(&body)
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 200, "install: {}", r.text().await.unwrap());
-    let json: serde_json::Value = r.json().await.unwrap();
-    assert_eq!(json["updated"], false);
-    assert_eq!(json["plugin"]["id"], "alpha");
-    assert_eq!(json["plugin"]["state"], "ready");
-    assert_eq!(json["plugin"]["origin"], "hub");
+    assert_eq!(r.status(), 202, "install should be accepted, not held");
+    assert_eq!(r.headers()["location"], "/v1/hub/plugins/alpha");
+    // The work is detached; wait for the resource to become ready.
+    let plugin = wait_for_plugin(&client, &base, "alpha").await;
+    assert_eq!(plugin["state"], "ready");
+    assert_eq!(plugin["origin"], "hub");
 
     // List shows it.
     let list: serde_json::Value = client
@@ -103,7 +112,7 @@ async fn install_list_replace_remove_over_http() {
     assert_eq!(list["plugins"].as_array().unwrap().len(), 1);
     assert_eq!(list["plugins"][0]["id"], "alpha");
 
-    // Replace with a new version: `updated` is true.
+    // Replace with a new version: still 202; wait for the new manifest.
     let src2 = plugin_src(&dir, "alpha", "2.0.0");
     let r = client
         .post(format!("{base}/v1/hub/plugins"))
@@ -111,21 +120,17 @@ async fn install_list_replace_remove_over_http() {
         .send()
         .await
         .unwrap();
-    let json: serde_json::Value = r.json().await.unwrap();
-    assert_eq!(json["updated"], true, "replace should report updated");
+    assert_eq!(r.status(), 202);
+    wait_for_manifest(&root, "alpha", "2.0.0").await;
 
-    // The manifest on disk is the new one.
-    let manifest = fs::read_to_string(root.join("alpha/manifest.json")).unwrap();
-    assert!(manifest.contains("2.0.0"));
-
-    // Remove.
+    // Remove: 202, then the directory goes.
     let r = client
         .delete(format!("{base}/v1/hub/plugins/alpha"))
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 200, "remove: {}", r.text().await.unwrap());
-    assert!(!root.join("alpha").exists());
+    assert_eq!(r.status(), 202);
+    wait_for_gone(&root, "alpha").await;
 
     let list: serde_json::Value = client
         .get(format!("{base}/v1/hub/plugins"))
@@ -147,7 +152,7 @@ async fn installing_an_invalid_manifest_is_refused() {
     fs::create_dir_all(&root).unwrap();
     let plugins = Plugins::new(db, &root, bus.clone());
     let transport = Transport::new(bus, agent_hub_transport::Admission::new(4));
-    let base = serve(PluginsState::new(plugins, transport)).await;
+    let base = serve(PluginsState::new(plugins, transport, errors())).await;
 
     let bad = dir.join("bad");
     fs::create_dir_all(&bad).unwrap();
@@ -159,7 +164,59 @@ async fn installing_an_invalid_manifest_is_refused() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 400);
+    // The contract maps a manifest that cannot be honoured to
+    // `plugin_archive_invalid` (502): the artifact is not a usable plugin.
+    assert_eq!(r.status(), 502);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "plugin_archive_invalid");
+}
+
+/// Poll GET /v1/hub/plugins until `id` is ready; return its view.
+async fn wait_for_plugin(client: &reqwest::Client, base: &str, id: &str) -> serde_json::Value {
+    for _ in 0..100 {
+        let list: serde_json::Value = client
+            .get(format!("{base}/v1/hub/plugins"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if let Some(p) = list["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+        {
+            if p["state"] == "ready" {
+                return p.clone();
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("plugin `{id}` never became ready");
+}
+
+async fn wait_for_manifest(root: &std::path::Path, id: &str, needle: &str) {
+    for _ in 0..100 {
+        if let Ok(m) = fs::read_to_string(root.join(id).join("manifest.json")) {
+            if m.contains(needle) {
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("manifest never contained {needle}");
+}
+
+async fn wait_for_gone(root: &std::path::Path, id: &str) {
+    for _ in 0..100 {
+        if !root.join(id).exists() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("{id} was never removed");
 }
 
 #[tokio::test]
@@ -171,7 +228,7 @@ async fn state_change_is_announced_on_the_event_stream() {
     fs::create_dir_all(&root).unwrap();
     let plugins = Plugins::new(db, &root, bus.clone());
     let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
-    let base = serve(PluginsState::new(plugins, transport)).await;
+    let base = serve(PluginsState::new(plugins, transport, errors())).await;
     let client = reqwest::Client::new();
 
     // Subscribe to the event stream.

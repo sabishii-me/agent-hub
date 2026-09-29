@@ -13,5 +13,5 @@ pub mod state;
 
 pub use identity::{CommandIds, Idempotency};
 pub use manifest::{Manifest, PluginView};
-pub use service::{now_rfc3339, PluginError, Plugins};
+pub use service::{now_rfc3339, InstallIntent, PluginError, Plugins, RemoveIntent};
 pub use state::{Op, Ops};

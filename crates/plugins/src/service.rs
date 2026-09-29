@@ -24,10 +24,34 @@ pub enum PluginError {
     InvalidManifest(String),
     #[error("idempotency conflict for `{0}`")]
     Conflict(String),
+    #[error("install failed: {0}")]
+    InstallFailed(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl PluginError {
+    /// The **contract** error code for this failure (`contract/errors.json`).
+    /// The transport maps the code to an HTTP status; a domain never does.
+    pub fn code(&self) -> &'static str {
+        match self {
+            PluginError::NotFound(_) => "not_found",
+            PluginError::NotInstalledByHub(_) => "plugin_remove_failed",
+            PluginError::InUse(_, _) => "plugin_in_use",
+            PluginError::Busy(_, _) => "plugin_dir_busy",
+            PluginError::InvalidManifest(_) => "plugin_archive_invalid",
+            PluginError::Conflict(_) => "idempotency_conflict",
+            PluginError::InstallFailed(_) => "plugin_install_failed",
+            PluginError::Db(_) | PluginError::Io(_) => "internal_error",
+        }
+    }
+
+    /// A contract error for the transport: the code plus a detail.
+    pub fn to_domain_error(&self) -> agent_hub_transport::DomainError {
+        agent_hub_transport::DomainError::new(self.code(), self.to_string())
+    }
 }
 
 /// The plugins domain. Holds the DB, the hub's own writable root, and the event
@@ -201,17 +225,15 @@ fn civil_from_unix(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
 }
 
 impl Plugins {
-    /// Install or replace a plugin from a **local directory** (the tree is
-    /// validated here; git/artifact fetch is a separate concern). `command_id`
-    /// carries the logical command identity (R1).
-    ///
-    /// Returns `(view, updated)`; `updated` is true when an id the hub had
-    /// installed was replaced.
-    pub fn install_from_dir(
+    /// Validate an install **before any work** (cheap, synchronous): parse the
+    /// manifest, resolve the id, and register the logical command identity (R1).
+    /// Returns [`InstallIntent::Replay`] for a retry (no work), or `Proceed` with
+    /// the id to run detached.
+    pub fn begin_install(
         &self,
         command_id: &str,
         source_dir: &Path,
-    ) -> Result<(PluginView, bool), PluginError> {
+    ) -> Result<InstallIntent, PluginError> {
         let raw = std::fs::read_to_string(source_dir.join("manifest.json"))
             .map_err(|_| PluginError::InvalidManifest("no manifest.json".into()))?;
         let manifest = Manifest::parse(&raw).map_err(PluginError::InvalidManifest)?;
@@ -222,49 +244,51 @@ impl Plugins {
             .id
             .clone()
             .ok_or_else(|| PluginError::InvalidManifest("manifest declares no id".into()))?;
-        let fingerprint = format!("install:{id}");
 
-        match self.ids.present(command_id, &fingerprint) {
+        // Same identity + same request (install of this id) is a retry.
+        match self.ids.present(command_id, &format!("install:{id}")) {
             Idempotency::Replay => {
                 let row = self.row_for_dir(&id);
-                return Ok((self.view(&id, row), false));
+                return Ok(InstallIntent::Replay(self.view(&id, row)));
             }
             Idempotency::Conflict => return Err(PluginError::Conflict(command_id.into())),
             Idempotency::New => {}
         }
 
         // A conflicting command on the same plugin is refused while one runs.
-        {
-            let ops = self.ops.lock().expect("ops mutex");
-            if let Some(set) = ops.get(&id) {
-                if let Some(op) = set.verdict() {
-                    return Err(PluginError::Busy(id.clone(), op.as_str().into()));
-                }
-            }
+        if let Some(op) = self.current_op(&id) {
+            return Err(PluginError::Busy(id.clone(), op.as_str().into()));
         }
 
         self.enter(&id, Op::Installing);
         self.announce(&id);
+        Ok(InstallIntent::Proceed { id })
+    }
 
-        let updated = self.has_dir(&id);
-        let layout = Layout::for_plugin(&self.root, &id);
+    /// The detached half of an install: land the tree and commit the row. The
+    /// caller has already answered `202`; failures are reported on the event
+    /// stream (the resource's `state` becomes `failed`).
+    pub fn finish_install(&self, id: &str, source_dir: &Path) -> Result<(), PluginError> {
+        let manifest = std::fs::read_to_string(source_dir.join("manifest.json"))
+            .ok()
+            .and_then(|raw| Manifest::parse(&raw).ok());
+        let layout = Layout::for_plugin(&self.root, id);
         std::fs::create_dir_all(&self.root)?;
 
-        let result = agent_hub_db::install(
-            &self.db,
-            &id,
-            &layout,
-            source_dir,
-            None,
-        );
+        std::fs::create_dir_all(&self.root)?;
+        let result: Result<(), PluginError> =
+            agent_hub_db::install(&self.db, id, &layout, source_dir, None)
+                .map(|_| ())
+                .map_err(|e| PluginError::InstallFailed(e.to_string()));
 
+        self.leave(id, Op::Installing);
         match result {
             Ok(_) => {
                 let row = PluginRow {
-                    id: id.clone(),
-                    name: manifest.name.clone(),
-                    summary: manifest.summary.clone(),
-                    plugin_type: manifest.plugin_type.clone(),
+                    id: id.into(),
+                    name: manifest.as_ref().and_then(|m| m.name.clone()),
+                    summary: manifest.as_ref().and_then(|m| m.summary.clone()),
+                    plugin_type: manifest.as_ref().and_then(|m| m.plugin_type.clone()),
                     source: None,
                     reference: None,
                     commit: None,
@@ -273,49 +297,73 @@ impl Plugins {
                     installed_at: Some(now_rfc3339()),
                 };
                 self.db.upsert_plugin(&row)?;
-                self.leave(&id, Op::Installing);
-                self.announce(&id);
-                Ok((self.view(&id, row), updated))
+                self.announce(id);
+                Ok(())
             }
             Err(e) => {
-                self.leave(&id, Op::Installing);
-                let mut row = self.row_for_dir(&id);
+                let mut row = self.row_for_dir(id);
                 row.state = PluginState::Failed;
                 row.detail = Some(e.to_string());
                 let _ = self.db.upsert_plugin(&row);
-                self.announce(&id);
-                Err(PluginError::Db(e))
+                self.announce(id);
+                Err(PluginError::InstallFailed(e.to_string()))
             }
         }
     }
 
-    /// Remove a plugin the hub installed. Deployment directories are refused.
-    pub fn remove(&self, command_id: &str, id: &str) -> Result<(), PluginError> {
-        let row = self.db.plugin(id)?.ok_or_else(|| PluginError::NotInstalledByHub(id.into()))?;
+    /// Validate a remove **before any work**: the plugin must be one the hub
+    /// installed (a deployment directory is refused). Registers the identity.
+    pub fn begin_remove(&self, command_id: &str, id: &str) -> Result<RemoveIntent, PluginError> {
+        let row = self
+            .db
+            .plugin(id)?
+            .ok_or_else(|| PluginError::NotInstalledByHub(id.into()))?;
         if row.installed_at.is_none() {
             return Err(PluginError::NotInstalledByHub(id.into()));
         }
-        let fingerprint = format!("remove:{id}");
-        match self.ids.present(command_id, &fingerprint) {
-            Idempotency::Replay => return Ok(()),
+        match self.ids.present(command_id, &format!("remove:{id}")) {
+            Idempotency::Replay => return Ok(RemoveIntent::Replay),
             Idempotency::Conflict => return Err(PluginError::Conflict(command_id.into())),
             Idempotency::New => {}
         }
-
+        if let Some(op) = self.current_op(id) {
+            return Err(PluginError::Busy(id.into(), op.as_str().into()));
+        }
         self.enter(id, Op::Removing);
         self.announce(id);
+        Ok(RemoveIntent::Proceed)
+    }
 
-        // Record the intent, remove the tree, then clear the row.
+    /// The detached half of a remove.
+    pub fn finish_remove(&self, id: &str) -> Result<(), PluginError> {
         self.db.set_step(id, InstallStep::OldMovedAside)?;
         let layout = Layout::for_plugin(&self.root, id);
         if layout.target.exists() {
-            let _ = std::fs::remove_dir_all(&layout.target);
+            std::fs::remove_dir_all(&layout.target)?;
         }
         self.db.delete_plugin(id)?;
         self.db.clear_step(id)?;
-
         self.leave(id, Op::Removing);
         self.announce(id);
         Ok(())
     }
+
+    fn current_op(&self, id: &str) -> Option<Op> {
+        let ops = self.ops.lock().expect("ops mutex");
+        ops.get(id).and_then(|s| s.verdict())
+    }
+}
+
+/// What `begin_install` decided.
+pub enum InstallIntent {
+    /// A retry: return the original result, run nothing.
+    Replay(PluginView),
+    /// First time: run the install detached for this id.
+    Proceed { id: String },
+}
+
+/// What `begin_remove` decided.
+pub enum RemoveIntent {
+    Replay,
+    Proceed,
 }

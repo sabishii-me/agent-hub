@@ -28,7 +28,16 @@ async fn serve(state: SessionsState) -> String {
 fn state(dir: std::path::PathBuf) -> SessionsState {
     let db = Db::open_in_memory().unwrap();
     let bus = Bus::new(64, 64);
-    SessionsState::new(Sessions::new(db, bus, dir))
+    SessionsState::new(Sessions::new(db, bus, dir), errors())
+}
+
+fn errors() -> agent_hub_transport::ErrorRenderer {
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../contract/errors.json"
+    ))
+    .unwrap();
+    agent_hub_transport::ErrorRenderer::new(agent_hub_contract::ErrorTable::parse(&raw).unwrap())
 }
 
 fn tmp(name: &str) -> std::path::PathBuf {

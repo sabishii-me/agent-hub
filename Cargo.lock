@@ -6,6 +6,7 @@ version = 4
 name = "agent-hub"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-contract",
  "agent-hub-db",
  "agent-hub-events",
  "agent-hub-plugins",
@@ -68,6 +69,7 @@ dependencies = [
 name = "agent-hub-plugins"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-contract",
  "agent-hub-db",
  "agent-hub-events",
  "agent-hub-transport",
@@ -87,6 +89,7 @@ dependencies = [
 name = "agent-hub-providers"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-contract",
  "agent-hub-events",
  "agent-hub-transport",
  "axum",
@@ -105,6 +108,7 @@ dependencies = [
 name = "agent-hub-sessions"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-contract",
  "agent-hub-db",
  "agent-hub-events",
  "agent-hub-transport",
@@ -124,6 +128,7 @@ dependencies = [
 name = "agent-hub-transport"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-contract",
  "agent-hub-events",
  "async-stream",
  "axum",
