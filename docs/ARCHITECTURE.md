@@ -559,3 +559,37 @@ harness) can still change a route and are called out as such.
 
 Every step is proven by the adversarial suite against `/v1`; the concurrency acceptance is
 measured with a concurrent poll (ADR-0009), not asserted.
+
+## 18. Implementation status
+
+This section records where the work above actually stands, so the document and the
+repository do not drift. It is a **status**, not a new decision.
+
+### Landed and verified (a real artifact runs; `cargo test --workspace` is green)
+
+| step | crate | what runs | acceptance |
+|---|---|---|---|
+| T1 contract | `crates/contract` | the single normalization authority: the `contract/v1.json` DSL -> valid JSON Schema 2020-12; `emit-openapi` regenerates `contract/openapi.json` | no reproduced defect (`type:[]`, `nullable`, `type:binary`, a bare `const:manual`); every schema validates 2020-12; PATCH not over-constrained; 77 = 77 |
+| frame (T4/T6) | `crates/events`, `crates/transport` | monotonic event ids with a bounded replay window; `202 + Location`; bounded admission (`503 + Retry-After`); SSE with `id`/`Last-Event-ID` | replay + resync; 200 concurrent status polls ~40 ms, 500 ~80 ms; two heavy ops progress, a third is `503` |
+| data + recovery (T3) | `crates/db` | the plugin install/replace recovery rules over a durable `plugin_ops.step` | crash at each boundary recovers; **a real `abort()` mid-install** leaves a state the boot sweep finishes |
+| plugins | `crates/plugins` | install/remove/prepare/list over `/v1/hub/plugins`; one verdict; the command identity (R1) | real HTTP CRUD + replace; `hub.plugins.changed` on SSE |
+| sessions | `crates/sessions` | session control state + turn admission over `/v1/sessions` | turn `idempotencyKey`: a retry returns the same turn, a new key is `409 session_busy`; fork |
+| providers | `crates/providers` | providers as data: file store, CRUD, selection, a real catalog fetch | token never leaves; url/api change -> revision bump -> stale; selection survives a refresh |
+
+The `hub` binary mounts these domains and runs plugin recovery before serving.
+
+### Not yet implemented (the §17 order continues)
+
+- **adapter** domain: the out-of-process lifecycle, the shared adapter library, and the
+  baseline (preset/approval/plan/review).
+- **connections / harnesses / skills / extensions / humans**.
+- The T2a / T2b feasibility unknowns (an OS execution boundary; the skills hook on each real
+  harness) are **not resolved**; they need a real harness artifact and are tracked in
+  `docs/review/VERIFICATION-TASKS.md`.
+
+### Verified how
+
+Every landed row is exercised by tests that run the real thing (a real listener, real
+sockets, real SQLite files, a real `abort()`, a real upstream HTTP server), not by a
+DOM/string assertion. The concurrency row is a measured number, frozen in
+`crates/transport/tests/concurrency.rs`.
