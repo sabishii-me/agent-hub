@@ -27,7 +27,15 @@ fn install_provider() {
 #[tokio::test]
 async fn a_provider_token_goes_to_the_os_store_not_disk() {
     install_provider();
-    let data = std::env::temp_dir().join(format!("agent-hub-sec-{}", std::process::id()));
+    // A UNIQUE data dir per run: a unique directory => a unique persisted
+    // instance id => a unique keychain namespace. A reused path would reuse the
+    // DB (and its instance), which is exactly what this test must not do.
+    let unique = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        format!("{}-{}", std::process::id(), nanos)
+    };
+    let data = std::env::temp_dir().join(format!("agent-hub-sec-{unique}"));
     let _ = std::fs::remove_dir_all(&data);
     std::fs::create_dir_all(&data).unwrap();
 

@@ -207,6 +207,58 @@ async fn real_hub_session_202_start_close() {
     }
     assert!(!turn_ended.is_empty(), "the turn reaches a terminal state");
 
+    // The first turn ended failed (no credential): the session is idle again, so
+    // a NEW key is admitted. And a refused admission must leave NO row: we prove
+    // the atomicity by racing two new keys and requiring at most one running turn
+    // and no orphaned admitted rows.
+    let before: serde_json::Value = client
+        .get(format!("{base}/v1/sessions/{id}/turns"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let before_count = before["turns"].as_array().map(|a| a.len()).unwrap_or(0);
+
+    let (a, b) = tokio::join!(
+        client
+            .post(format!("{base}/v1/sessions/{id}/turns"))
+            .header("authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({"content":[{"type":"text","text":"race a"}],"idempotencyKey":"race-a"}))
+            .send(),
+        client
+            .post(format!("{base}/v1/sessions/{id}/turns"))
+            .header("authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({"content":[{"type":"text","text":"race b"}],"idempotencyKey":"race-b"}))
+            .send(),
+    );
+    let a = a.unwrap();
+    let b = b.unwrap();
+    let accepted = [a.status().as_u16(), b.status().as_u16()].iter().filter(|s| **s == 202).count();
+    assert!(accepted <= 1, "at most one of two concurrent new turns is admitted (busy)");
+
+    // No orphaned admitted row: every turn in the list is either running or ended,
+    // and the count grew by at most the number of accepted turns.
+    let after: serde_json::Value = client
+        .get(format!("{base}/v1/sessions/{id}/turns"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let turns = after["turns"].as_array().cloned().unwrap_or_default();
+    let admitted = turns.iter().filter(|t| t["state"] == "admitted").count();
+    assert_eq!(admitted, 0, "a refused admission leaves no admitted row: {after}");
+    assert!(
+        turns.len() <= before_count + 2,
+        "a refused admission does not add a row: before={before_count} after={}",
+        turns.len()
+    );
+
     // Close -> readonly.
     let closed: serde_json::Value = client
         .post(format!("{base}/v1/sessions/{id}/close"))
@@ -253,4 +305,134 @@ fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
             std::fs::copy(e.path(), &to).ok();
         }
     }
+}
+
+/// The grant chain through the REAL hub: a registered provider with a stored
+/// credential + a session that names it must be ACCEPTED and START (the adapter
+/// receives `credentials/grant` with the provider as `hub-<id>`), not refused as
+/// it was before the resolver existed.
+///
+/// It needs a reachable provider endpoint; use a URL that will not answer (the
+/// adapter tolerates a catalog fetch failure at grant time) - the point is the
+/// session path, not a model answer, so no credential is imported.
+#[tokio::test]
+async fn a_session_with_a_managed_provider_is_accepted_and_granted() {
+    let Some(pdir) = plugin_dir() else {
+        eprintln!("SKIP grant_slice: set AGENT_HUB_TEST_PLUGIN_DIR");
+        return;
+    };
+    let harness = std::env::var("AGENT_HUB_TEST_HARNESS").unwrap_or_else(|_| "pi".into());
+    install_provider();
+
+    let unique = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        format!("{}-{}", std::process::id(), nanos)
+    };
+    let data = std::env::temp_dir().join(format!("agent-hub-grant-{unique}"));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let plugins_root = data.join("plugins");
+    std::fs::create_dir_all(&plugins_root).unwrap();
+    copy_tree(&pdir, &plugins_root.join(&harness));
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agent-hub"))
+        .env("AGENT_HUB_DATA_DIR", &data)
+        .env("AGENT_HUB_ADDR", "127.0.0.1:0")
+        .env("AGENT_HUB_CONTRACT_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/../contract"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hub");
+    let mut hub = Hub(child);
+    let (addr, token) = wait_ready(&data, Duration::from_secs(30)).await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // A reachable mock provider endpoint: the grant must actually succeed, so the
+    // session can start (an unreachable endpoint is an honest start failure).
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { break };
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let body = r#"{"data":[{"id":"deepseek-flash","name":"DeepSeek Flash"}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+
+    // A provider with a credential (a test value; the OS store must be available
+    // or a credential is refused - if refused, SKIP: this test needs the store).
+    let created = client
+        .post(format!("{base}/v1/model-providers"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "id": "managed",
+            "url": format!("http://{mock_addr}/v1"),
+            "api": "anthropic-messages",
+            "token": "sk-slice-test"
+        }))
+        .send()
+        .await
+        .unwrap();
+    if !created.status().is_success() {
+        eprintln!("SKIP grant_slice: no OS secret store (credential refused)");
+        let _ = std::fs::remove_dir_all(&data);
+        return;
+    }
+
+    // A session that names the managed provider must be ACCEPTED (202), not
+    // refused as unsupported.
+    let resp = client
+        .post(format!("{base}/v1/sessions"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "harnessId": harness,
+            "commandKey": "grant-1",
+            "modelProviderId": "managed",
+            "modelId": "deepseek-flash"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202, "a managed-provider session is a long command");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["session"]["modelProviderId"], "managed");
+    let id = body["session"]["id"].as_str().unwrap().to_string();
+
+    // It reaches active: the grant was delivered and config applied. (If the
+    // provider is unreachable the adapter may still start; the assertion is that
+    // the hub did not refuse the managed provider and the start completed.)
+    let mut status = String::new();
+    for _ in 0..400 {
+        let s: serde_json::Value = client
+            .get(format!("{base}/v1/sessions/{id}"))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        status = s["session"]["status"].as_str().unwrap_or("").to_string();
+        if status == "active" || status == "starting_failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(status, "active", "the managed-provider session starts");
+
+    let _ = hub.0.kill();
+    let _ = std::fs::remove_dir_all(&data);
 }

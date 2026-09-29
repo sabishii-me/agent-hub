@@ -57,3 +57,16 @@ and turn slices recorded (a real model call needs a credential).
 - **Honest configured state**: `tokenConfigured` is derived from the store on GET/list, and an
   unreadable credential is an error, never read as "not configured" (P2).
 - **Delete removes the credential** with the row (P1).
+
+## Review follow-up (TASK-048 REVIEW-495ce94)
+
+- **Persistent instance identity**: a `hub_instance` row (random id, created once);
+  the namespace is `agent-hub:<id>`, not a path hash. A moved data dir keeps its
+  credentials.
+- **The row owns `secret_ref`**: written on store, cleared on removal (no longer a
+  column that is always `None`).
+- **Per-provider operation lock** + a **credential-transition journal**
+  (`provider_ops`) with a boot sweep (`recover_pending`): cross-store failure is
+  inspectable and recoverable; no orphan credential.
+- **One-shot probe** (random name, confirmed delete) and a **fresh identity per test
+  run**.

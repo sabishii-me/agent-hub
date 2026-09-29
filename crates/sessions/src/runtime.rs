@@ -27,6 +27,11 @@ pub struct SessionProcess {
     requests: agent_hub_adapter::RequestHandle,
     /// What the adapter reported as applied by `config/set` (proof, not a claim).
     pub applied: Value,
+    /// The provider identity the adapter confirmed it applied (`applied
+    /// .modelProviderId` / its resolved native route), read from the proof.
+    pub applied_provider: Option<String>,
+    /// The model the adapter confirmed (from the applied proof, not the request).
+    pub applied_model: Option<String>,
 }
 
 impl SessionProcess {
@@ -77,6 +82,31 @@ pub struct StartSpec {
     pub resume: Option<String>,
     /// The `config/set` payload (may be `{}`).
     pub config: Value,
+    /// The credential grant for a hub-managed provider (`credentials/grant`),
+    /// sent AFTER `session/start` and BEFORE `config/set` (`adapter-v1:345-353`).
+    /// Memory-only: the adapter does not persist it, so it is re-sent on every
+    /// start/reopen (a restart re-grants).
+    pub grant: Option<Grant>,
+}
+
+/// A resolved credential for one hub-managed provider: the adapter receives the
+/// value and its endpoint/declarations and materialises a `hub-<id>` provider
+/// entry for its own harness. The hub owns the secret; the adapter never reads
+/// the keychain.
+#[derive(Debug, Clone)]
+pub struct Grant {
+    /// The hub's provider id (the adapter names it `hub-<connectionId>`).
+    pub connection_id: String,
+    /// The credential value (from the OS secret store; never logged).
+    pub value: String,
+    pub url: Option<String>,
+    pub api: Option<String>,
+    pub declarations: Option<Value>,
+    /// The provider id AS THE HUB requested it, recorded from the adapter's
+    /// `applied` proof (never assumed).
+    pub requested_provider_id: String,
+    /// The model to select within that provider's route.
+    pub requested_model_id: Option<String>,
 }
 
 /// The session runtime: the running session processes, keyed by sid.
@@ -125,6 +155,23 @@ impl Sessions {
             }
         };
 
+        // credentials/grant: the hub-managed provider's credential (memory-only in
+        // the adapter). Sent before config/set so the provider exists when the
+        // config selects it. A grant failure is a start failure - we do NOT
+        // pretend a session is active with a provider it did not receive.
+        if let Some(grant) = &spec.grant {
+            let params = json!({
+                "connectionId": grant.connection_id,
+                "value": grant.value,
+                "url": grant.url,
+                "declarations": grant.declarations,
+            });
+            if let Err(e) = bus.requests.request("credentials/grant", params).await {
+                let _ = bus.shutdown().await;
+                return Err(StartError::Protocol(format!("credentials/grant failed: {e}")));
+            }
+        }
+
         // config/set (the hub's materialization must be applied before a turn)
         let applied = match bus
             .requests
@@ -140,6 +187,15 @@ impl Sessions {
 
         let sid = spec.sid.clone();
         let harness_id = spec.harness_id.clone();
+        let applied_provider = applied
+            .get("modelProviderId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let applied_model = applied
+            .get("model")
+            .or_else(|| applied.get("modelId"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let applied_out = applied.clone();
         let bus_requests = bus.requests.clone();
         let requests_out = bus_requests.clone();
@@ -169,6 +225,8 @@ impl Sessions {
             bus: Some(bus),
             requests: requests_out,
             applied,
+            applied_provider,
+            applied_model,
         };
         self.requests.lock().expect("requests").insert(sid.clone(), bus_requests.clone());
         self.running
@@ -184,6 +242,8 @@ impl Sessions {
             bus: None,
             requests: bus_requests,
             applied: applied_out,
+            applied_provider: None,
+            applied_model: None,
         })
     }
 

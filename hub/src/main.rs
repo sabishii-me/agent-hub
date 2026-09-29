@@ -96,6 +96,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     adapters.scan();
     let harness_state = HarnessesState::new(Harnesses::new(adapters.clone()), errors.clone());
 
+    // Providers: the relationship state is in the database; the credential is in
+    // the OS secret store, namespaced by the PERSISTED instance id (created once,
+    // not a path hash: a moved data dir keeps its credentials). Built BEFORE
+    // sessions, because the session start resolves a hub-managed provider.
+    let providers_db = Db::open(data_dir.join("hub.sqlite"))?;
+    let instance = providers_db.instance_id()?;
+    let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::for_instance(&instance));
+    let providers = Providers::new(ProviderStore::new(providers_db), secrets, instance);
+    // Resolve any credential transition that was in flight when the process last
+    // stopped (a crash between the row store and the keychain).
+    providers.recover_pending();
+    let providers = std::sync::Arc::new(providers);
+    let provider_state = ProvidersState::new_shared(providers.clone(), errors.clone());
+
     // Sessions: a session resolves its harness through the registry and starts
     // its OWN adapter process with the resolved argv + plugin dir.
     let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
@@ -126,13 +140,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             extensions_dir: env.extensions_dir,
         })
     };
-    let sessions = std::sync::Arc::new(Sessions::new(
-        sessions_db,
-        bus.clone(),
-        &data_dir,
-        Box::new(harness_exists),
-        Box::new(resolve),
-    ));
+    // The provider resolver: the ONLY path a hub-managed provider reaches a
+    // session. `sessions` never links `providers`; the composition root injects
+    // this closure, which reads the row + the keychain value.
+    let resolver_providers = providers.clone();
+    let provider_resolver = move |id: &str| -> Result<agent_hub_sessions::runtime::Grant, String> {
+        let g = resolver_providers
+            .resolve_grant(id)
+            .map_err(|e| e.to_string())?;
+        Ok(agent_hub_sessions::runtime::Grant {
+            connection_id: g.connection_id,
+            value: g.value,
+            url: g.url,
+            api: g.api,
+            declarations: g.declarations,
+            requested_provider_id: g.requested_provider_id,
+            requested_model_id: None,
+        })
+    };
+    let sessions = std::sync::Arc::new(
+        Sessions::new(
+            sessions_db,
+            bus.clone(),
+            &data_dir,
+            Box::new(harness_exists),
+            Box::new(resolve),
+        )
+        .with_provider_resolver(Box::new(provider_resolver)),
+    );
     // A start interrupted by a restart must not keep claiming `starting`.
     match sessions.reconcile_interrupted() {
         Ok(n) if n > 0 => tracing::info!(interrupted = n, "marked interrupted session starts as failed"),
@@ -141,17 +176,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let session_state = SessionsState::new_shared(sessions, errors.clone());
 
-    // Providers: one JSON file per provider under the data dir.
-    // The OS secret store: probed once. If it is unavailable, the credential
-    // path stays refused (never a plaintext fallback).
-    // The secret store is scoped to THIS instance: the namespace is derived from
-    // the data dir, so two instances never share a keychain entry, and the probe
-    // uses a unique name that cannot clobber a real one.
-    let instance = instance_id(&data_dir);
-    let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::for_instance(&instance));
-    let providers_db = Db::open(data_dir.join("hub.sqlite"))?;
-    let providers = Providers::new(ProviderStore::new(providers_db), secrets, instance);
-    let provider_state = ProvidersState::new(providers, errors.clone());
 
     // Skills: the hub stores the bytes and installs the effective set per harness.
     let skills = Skills::new(&data_dir);
@@ -204,14 +228,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-/// A stable id for this hub instance, derived from its data dir so two instances
-/// (same OS user, different data dirs) get different keychain namespaces.
-fn instance_id(data_dir: &std::path::Path) -> String {
-    use std::hash::{Hash, Hasher};
-    let canon = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    canon.to_string_lossy().hash(&mut h);
-    format!("{:016x}", h.finish())
 }

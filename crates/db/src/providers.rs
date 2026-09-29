@@ -140,3 +140,107 @@ fn write_provider(conn: &Connection, p: &ProviderRow) -> Result<(), rusqlite::Er
     )?;
     Ok(())
 }
+
+/// **The credential-transition journal** (`ARCHITECTURE` §8). A provider's
+/// credential lives in a store (the keychain) that is NOT in the same
+/// transaction as the row. Any operation that touches both records its intent
+/// here FIRST, so a crash between the two stores leaves a **visible, recoverable**
+/// state rather than a silent orphan credential or a row with no credential.
+///
+/// Rows are `pending` while an operation is in flight and deleted on success. A
+/// boot sweep resolves any that remain: see [`recover_pending_provider_ops`].
+pub const SCHEMA_PROVIDER_OPS: &str = r#"
+CREATE TABLE IF NOT EXISTS provider_ops (
+  id         TEXT PRIMARY KEY,
+  provider   TEXT NOT NULL,
+  op         TEXT NOT NULL,
+  secret_ref TEXT,
+  created_at TEXT NOT NULL
+);
+"#;
+
+impl crate::Db {
+    /// Record an in-flight credential transition (delete a pre-existing op with
+    /// the same provider first, so one provider has at most one in-flight op).
+    pub fn begin_provider_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<String, DbError> {
+        let conn = self.lock();
+        let id = format!("{provider}:{op}");
+        conn.execute("DELETE FROM provider_ops WHERE provider = ?1", params![provider])?;
+        conn.execute(
+            "INSERT INTO provider_ops (id, provider, op, secret_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, provider, op, secret_ref, crate::now_utc()],
+        )?;
+        Ok(id)
+    }
+
+    pub fn finish_provider_op(&self, provider: &str) -> Result<(), DbError> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM provider_ops WHERE provider = ?1", params![provider])?;
+        Ok(())
+    }
+
+    /// Every in-flight credential transition (for the boot sweep).
+    pub fn pending_provider_ops(&self) -> Result<Vec<(String, String, String)>, DbError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT provider, op, secret_ref FROM provider_ops")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+}
+
+#[cfg(test)]
+mod op_journal_tests {
+    use super::*;
+    use crate::Db;
+
+    #[test]
+    fn a_pending_op_is_visible_and_cleared() {
+        let db = Db::open_in_memory().unwrap();
+        db.begin_provider_op("p1", "create", "ns:provider-p1").unwrap();
+        let pending = db.pending_provider_ops().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, "p1");
+        db.finish_provider_op("p1").unwrap();
+        assert!(db.pending_provider_ops().unwrap().is_empty());
+    }
+
+    /// One provider has at most one in-flight op: beginning a new one replaces.
+    #[test]
+    fn a_provider_has_one_in_flight_op() {
+        let db = Db::open_in_memory().unwrap();
+        db.begin_provider_op("p1", "create", "r1").unwrap();
+        db.begin_provider_op("p1", "delete", "r1").unwrap();
+        let pending = db.pending_provider_ops().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].1, "delete");
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use crate::Db;
+
+    /// The instance id is PERSISTED: reopening the same database yields the same
+    /// id, which is what makes the secret namespace survive a directory move.
+    #[test]
+    fn the_instance_id_is_persistent() {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-hub-inst-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hub.sqlite");
+        let a = Db::open(&path).unwrap().instance_id().unwrap();
+        drop(Db::open(&path).unwrap());
+        let b = Db::open(&path).unwrap().instance_id().unwrap();
+        assert_eq!(a, b, "the instance id must persist across opens");
+        assert_eq!(a.len(), 32);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

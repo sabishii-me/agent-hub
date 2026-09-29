@@ -10,13 +10,14 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+pub mod instance;
 pub mod providers;
 pub mod recovery;
 pub mod sessions;
 
 pub use recovery::{install, recover, Layout, RecoveryOutcome};
 pub use providers::ProviderRow;
-pub use sessions::{ReserveOutcome, SessionRow, TurnRow};
+pub use sessions::{ReserveOutcome, SessionRow, TurnAdmission, TurnRow};
 
 /// The externally visible state of a plugin (mirrors the contract's `plugin.state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,11 +100,21 @@ impl Db {
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(sessions::SCHEMA_SESSIONS)?;
         conn.execute_batch(providers::SCHEMA_PROVIDERS)?;
+        conn.execute_batch(instance::SCHEMA_INSTANCE)?;
+        conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
+        instance::instance_id(&conn)?;
         // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so
         // a column added after a database was created must be added explicitly.
         // This is the upgrade path: adding a column that is missing (idempotent).
         sessions::migrate(&conn)?;
         Ok(Db { conn: std::sync::Mutex::new(conn) })
+    }
+
+    /// The persistent instance id (created once at open). The secret store is
+    /// namespaced by this, so a moved data dir keeps its credentials.
+    pub fn instance_id(&self) -> Result<String, DbError> {
+        let conn = self.conn.lock().expect("db mutex");
+        Ok(instance::instance_id(&conn)?)
     }
 
     fn with<T>(

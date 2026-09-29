@@ -32,6 +32,8 @@ pub enum SessionError {
     Conflict(String),
     #[error("the session could not be started: {0}")]
     Start(String),
+    #[error("the abort could not be delivered: {0}")]
+    AbortFailed(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
     #[error("io: {0}")]
@@ -45,6 +47,7 @@ impl SessionError {
             SessionError::NoHarness(_) => "harness_not_found",
             SessionError::Validation(_) => "validation_failed",
             SessionError::Unsupported(_) => "unsupported",
+            SessionError::AbortFailed(_) => "abort_failed",
             SessionError::Conflict(_) => "idempotency_conflict",
             SessionError::Start(_) => "adapter_crash",
             SessionError::Db(_) | SessionError::Io(_) => "internal_error",
@@ -140,6 +143,11 @@ pub struct Sessions {
     harness_exists: Box<dyn Fn(&str) -> bool + Send + Sync>,
     /// The full spec (does placement). Called only in the DETACHED start (N4).
     harness_spec: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
+    /// Resolve a hub-managed provider id to a credential grant. This is the
+    /// providers-domain boundary: `sessions` does not depend on `providers`; the
+    /// composition root injects the resolver. `None` = no provider injection
+    /// configured, so a session with `modelProviderId` is refused (honest).
+    provider_resolver: Option<Box<dyn Fn(&str) -> Result<crate::runtime::Grant, String> + Send + Sync>>,
     /// One lock per session: start/close/reopen on the same session never race
     /// (R4). A lock held across the lifecycle of one session.
     locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
@@ -185,10 +193,51 @@ impl Sessions {
             runtime,
             harness_exists,
             harness_spec,
+            provider_resolver: None,
             locks: Mutex::new(std::collections::HashMap::new()),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             settled: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Inject the provider resolver (the composition root owns this). It is the
+    /// ONLY way a hub-managed provider reaches a session.
+    pub fn with_provider_resolver(
+        mut self,
+        resolver: Box<dyn Fn(&str) -> Result<crate::runtime::Grant, String> + Send + Sync>,
+    ) -> Self {
+        self.provider_resolver = Some(resolver);
+        self
+    }
+
+    /// Resolve the session's requested provider/model into a grant and the
+    /// `config/set` payload. The config selects the adapter's injected provider
+    /// (`hub-<id>`) and the model within it.
+    fn resolve_grant(
+        &self,
+        provider_id: Option<&str>,
+        model_id: Option<&str>,
+    ) -> Result<(Option<crate::runtime::Grant>, serde_json::Value), SessionError> {
+        let Some(pid) = provider_id else {
+            if model_id.is_some() {
+                return Err(SessionError::Validation(
+                    "modelId requires modelProviderId: a model is chosen within a provider's route".into(),
+                ));
+            }
+            return Ok((None, serde_json::json!({})));
+        };
+        let resolver = self.provider_resolver.as_ref().ok_or_else(|| {
+            SessionError::Unsupported("this hub has no provider resolver; a managed provider is refused".into())
+        })?;
+        let mut grant = resolver(pid).map_err(SessionError::Validation)?;
+        grant.requested_model_id = model_id.map(str::to_string);
+        let mut config = serde_json::json!({
+            "modelProviderId": grant.connection_id,
+        });
+        if let Some(m) = model_id {
+            config["model"] = serde_json::json!(m);
+        }
+        Ok((Some(grant), config))
     }
 
     async fn lock_for(&self, sid: &str) -> Arc<Mutex<()>> {
@@ -202,11 +251,10 @@ impl Sessions {
     /// The body validation for what this slice supports. Called AFTER the
     /// reservation, so a conflict is decided first (R1/R2).
     fn validate_supported(&self, req: &CreateSession) -> Result<(), SessionError> {
-        if req.model_provider_id.is_some() || req.model_id.is_some() {
-            return Err(SessionError::Unsupported(
-                "modelProviderId/modelId are not supported yet; a session runs the harness's own default".into(),
-            ));
-        }
+        // A managed provider is supported only when a resolver is injected; the
+        // resolution (and its failures) happen here, at "accept", so a bad
+        // provider is refused before any process is spawned.
+        self.resolve_grant(req.model_provider_id.as_deref(), req.model_id.as_deref())?;
         if req.preset_id.is_some() {
             return Err(SessionError::Unsupported("presetId is not supported yet".into()));
         }
@@ -256,8 +304,8 @@ impl Sessions {
         let row = SessionRow {
             id: id.clone(),
             harness_id: req.harness_id.clone(),
-            model_provider_id: None,
-            model_id: None,
+            model_provider_id: req.model_provider_id.clone(),
+            model_id: req.model_id.clone(),
             applied_model: None,
             plan: None,
             review: None,
@@ -328,6 +376,14 @@ impl Sessions {
             Ok(h) => h,
             Err(e) => return self.fail_start(&sid, &e.to_string()).await,
         };
+        // Resolve the credential grant (memory-only in the adapter) and the
+        // config that selects the injected provider. A resolution failure here
+        // fails the start honestly; it is never silently dropped.
+        let (grant, config) =
+            match self.resolve_grant(row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+                Ok(v) => v,
+                Err(e) => return self.fail_start(&sid, &e.to_string()).await,
+            };
         let spec = StartSpec {
             sid: sid.clone(),
             harness_id: harness.id.clone(),
@@ -339,13 +395,18 @@ impl Sessions {
             extensions_dir: harness.extensions_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
-            config: serde_json::json!({}),
+            config,
+            grant,
         };
         match self.runtime.start(spec).await {
             Ok(process) => {
                 let mut row = row;
                 row.status = "active".into();
                 row.native_ref = Some(process.native_ref.clone());
+                // The applied identity is the adapter's PROOF (what it confirmed),
+                // not the request. Recorded so a turn's model is read from
+                // reality, never assumed.
+                row.applied_model = process.applied_model.clone();
                 row.start_error = None;
                 row.updated_at = now_utc();
                 if let Err(e) = self.db.update_session(&row) {
@@ -435,6 +496,10 @@ impl Sessions {
             return Err(SessionError::Validation("the session has no native ref to reopen".into()));
         }
         let harness = self.harness(&row.harness_id)?;
+        // A restart RE-GRANTS: the adapter's grant is memory-only, so a reopened
+        // session must receive the credential again before its config is applied.
+        let (grant, config) =
+            self.resolve_grant(row.model_provider_id.as_deref(), row.model_id.as_deref())?;
         let spec = StartSpec {
             sid: row.id.clone(),
             harness_id: harness.id.clone(),
@@ -446,7 +511,8 @@ impl Sessions {
             extensions_dir: harness.extensions_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: row.native_ref.clone(),
-            config: serde_json::json!({}),
+            config,
+            grant,
         };
         let process = self
             .runtime
@@ -455,6 +521,7 @@ impl Sessions {
             .map_err(|e| SessionError::Start(e.to_string()))?;
         row.status = "active".into();
         row.native_ref = Some(process.native_ref.clone());
+        row.applied_model = process.applied_model.clone();
         row.updated_at = now_utc();
         self.db.update_session(&row)?;
         let view = self.view(&row);
@@ -576,26 +643,22 @@ impl Sessions {
         }
         let intent = format!("turn:{}", text);
 
-        // Reserve the turn by identity BEFORE any side effect.
+        // Admit the turn: identity AND busy are ONE atomic decision. A refused
+        // admission leaves no `admitted` row (TASK-048 P1).
         let turn_id = new_id("t");
-        match self.db.reserve_turn(session_id, &req.idempotency_key, &intent, &turn_id)? {
-            agent_hub_db::ReserveOutcome::Reserved => {}
-            agent_hub_db::ReserveOutcome::Replay(id) => {
+        match self.db.admit_turn(session_id, &req.idempotency_key, &intent, &turn_id)? {
+            agent_hub_db::TurnAdmission::Reserved => {}
+            agent_hub_db::TurnAdmission::Replay(id) => {
                 let t = self
                     .db
                     .turn(&id)?
                     .ok_or_else(|| SessionError::NotFound(id.clone()))?;
                 return Ok(TurnOutcome::Replay(turn_view(&t)));
             }
-            agent_hub_db::ReserveOutcome::Conflict => {
+            agent_hub_db::TurnAdmission::Conflict => {
                 return Err(SessionError::Conflict(req.idempotency_key));
             }
-        }
-
-        // Refuse a second turn while one is running: a deliberate new turn is a
-        // busy session, never queued (C-9).
-        if let Some(active) = self.db.active_turn(session_id)? {
-            if active.id != turn_id {
+            agent_hub_db::TurnAdmission::Busy(_) => {
                 return Err(SessionError::Validation(
                     "the session has a running turn; a new turn is refused, not queued".into(),
                 ));
@@ -612,58 +675,51 @@ impl Sessions {
     /// process and move the turn to a terminal state when it ends. The adapter's
     /// notifications (message.delta etc.) are pumped to the event bus separately.
     pub async fn run_turn(self: Arc<Self>, session_id: String, turn_id: String, text: String) {
-        // A turn must have a running process; otherwise fail honestly.
         if !self.runtime.is_running(&session_id) {
             self.settle_turn(&turn_id, "failed", Some("the session has no running process")).await;
             return;
         }
-        let _ = self.db.set_turn_state(&turn_id, "running");
-        self.bus.publish(
-            "turn.running",
-            serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
-        );
+        // `running` is a NON-terminal move: if a terminal was already committed
+        // (a cancel raced us) the guarded update is a no-op.
+        if self.db.set_turn_state(&turn_id, "running").unwrap_or(false) {
+            self.bus.publish(
+                "turn.running",
+                serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
+            );
+        }
         let params = serde_json::json!({
             "sid": session_id,
             "message": text,
             "clientMessageId": turn_id,
         });
-        // The prompt ends only when the turn does (adapter contract). Its result
-        // is the authoritative terminal, EXCEPT when a cancel was requested, in
-        // which case the run's own end is `cancelled` (the adapter confirmed).
-        let cancelled = self
-            .cancelled
-            .lock()
-            .await
-            .contains(&turn_id);
+        // The prompt's OWN result is the authoritative terminal (adapter-v1:96-103
+        // returns `turn-ended`; `turn_end.state: ok|aborted|failed` is the proof).
+        // No pre-prompt snapshot, and never "any RPC success = completed".
         match self.runtime.request(&session_id, "session/prompt", params).await {
-            Ok(_) => {
-                if cancelled {
-                    self.settle_turn(&turn_id, "cancelled", None).await;
-                } else {
-                    self.settle_turn(&turn_id, "completed", None).await;
-                }
+            Ok(result) => {
+                let (ended, cause) = run_end_of(&result);
+                self.settle_turn(&turn_id, ended, cause.as_deref()).await;
             }
             Err(e) => {
-                if cancelled {
-                    self.settle_turn(&turn_id, "cancelled", None).await;
-                } else {
-                    self.settle_turn(&turn_id, "failed", Some(&e.to_string())).await;
-                }
+                // A transport error is NOT a confirmed stop: if a cancel was
+                // requested the honest terminal is `interrupted` (the turn did not
+                // reach a clean end), otherwise `failed`.
+                let cancelled = self.cancelled.lock().await.contains(&turn_id);
+                let ended = if cancelled { "interrupted" } else { "failed" };
+                self.settle_turn(&turn_id, ended, Some(&e.to_string())).await;
             }
         }
     }
 
-    /// Settle a turn's terminal state **once**. A later settle (a late completion
-    /// racing a cancel) is a no-op, so a stale result never overwrites a
-    /// determined one (TASK-048 P1).
+    /// Settle a turn's terminal state **once**, in the DATABASE (the guard is the
+    /// SQL `WHERE ended IS NULL`). Only the call that performed the settle
+    /// publishes, so the streamed fact and the stored row cannot disagree.
     async fn settle_turn(&self, turn_id: &str, ended: &str, cause: Option<&str>) {
-        {
-            let mut done = self.settled.lock().await;
-            if !done.insert(turn_id.to_string()) {
-                return; // already settled
-            }
+        let settled = self.db.end_turn(turn_id, ended, &now_utc()).unwrap_or(false);
+        if !settled {
+            return;
         }
-        let _ = self.db.end_turn(turn_id, ended, &now_utc());
+        self.settled.lock().await.insert(turn_id.to_string());
         self.bus.publish(
             "turn.ended",
             serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
@@ -692,18 +748,49 @@ impl Sessions {
             }
         };
         self.cancelled.lock().await.insert(active.id.clone());
+        // `cancelling` is a non-terminal move (guarded: a terminal already
+        // committed by a late prompt result is not resurrected).
         let _ = self.db.set_turn_state(&active.id, "cancelling");
-        // Send abort; an ACK is only "requested", so the terminal state is set by
-        // run_turn when the prompt actually returns (adapter contract).
-        let _ = self
+        // Abort delivery is CHECKED, not swallowed: a request that could not be
+        // SENT is `abort-failed` (adapter-v1:385). A delivered-but-unconfirmed
+        // abort is NOT settled here - `run_turn` settles it when the prompt
+        // returns (the adapter's `turn_end` is the proof it stopped).
+        if let Err(e) = self
             .runtime
             .request(session_id, "session/abort", serde_json::json!({ "sid": session_id }))
-            .await;
+            .await
+        {
+            let _ = self.db.end_turn(&active.id, "interrupted", &now_utc());
+            return Err(SessionError::AbortFailed(e.to_string()));
+        }
         let t = self
             .db
             .turn(&active.id)?
             .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
         Ok(turn_view(&t))
+    }
+
+}
+
+/// Map the adapter's returned `turn-ended` to the contract's terminal. `ok` ->
+/// `completed`, `aborted` -> `cancelled`, `failed` -> `failed`; anything
+/// unreadable is `failed` (never silently `completed`).
+fn run_end_of(result: &serde_json::Value) -> (&'static str, Option<String>) {
+    let state = result
+        .get("state")
+        .or_else(|| result.get("turn").and_then(|t| t.get("state")))
+        .and_then(|s| s.as_str());
+    match state {
+        Some("ok") => ("completed", None),
+        Some("aborted") => ("cancelled", None),
+        Some("failed") => (
+            "failed",
+            result
+                .get("error")
+                .map(|e| e.to_string())
+                .or_else(|| Some("the adapter reported a failed turn".into())),
+        ),
+        _ => ("failed", Some("the adapter did not report a turn state".into())),
     }
 }
 
@@ -737,4 +824,25 @@ fn text_of(content: &serde_json::Value) -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod run_end_tests {
+    use super::run_end_of;
+    use serde_json::json;
+
+    #[test]
+    fn the_adapter_state_is_the_terminal() {
+        assert_eq!(run_end_of(&json!({"state":"ok"})).0, "completed");
+        assert_eq!(run_end_of(&json!({"state":"aborted"})).0, "cancelled");
+        assert_eq!(run_end_of(&json!({"state":"failed"})).0, "failed");
+    }
+
+    /// A success WITHOUT a state is NOT completed: it is failed (never silently
+    /// "the model finished").
+    #[test]
+    fn an_unreadable_state_is_failed_not_completed() {
+        assert_eq!(run_end_of(&json!({})).0, "failed");
+        assert_eq!(run_end_of(&json!({"unexpected":true})).0, "failed");
+    }
 }

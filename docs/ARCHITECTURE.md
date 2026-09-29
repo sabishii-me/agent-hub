@@ -657,3 +657,44 @@ follows distinguishes a real, narrow component fact from a product capability.
 
 The T2a / T2b feasibility unknowns (an OS execution boundary; the skills hook per harness) are
 still unresolved and tracked in `docs/review/VERIFICATION-TASKS.md`.
+
+## 19. The provider→session grant chain (TASK-048 REVIEW-495ce94)
+
+- **Instance identity is PERSISTED** (`hub_instance` row, created once at open with a
+  random id). The secret store service is `agent-hub:<instance-id>`. It is **not** a
+  hash of the path, so a **moved data dir keeps its credentials** and two dirs never
+  collide. `Db::instance_id()` is the single source.
+- **The row owns its credential reference.** `secret_ref` is written when a credential
+  is stored and cleared when it is removed; `tokenConfigured` is still read from the
+  store (never a stale flag).
+- **One operation lock per provider id.** Every operation that touches BOTH the row and
+  the keychain (create/patch/delete/logout) holds it for the whole operation, so a
+  create cannot interleave with a delete and leave an orphan credential. The DB mutex
+  only guards a single SQL call; this covers the two-store span.
+- **The credential-transition journal** (`provider_ops`) records an in-flight
+  transition BEFORE the keychain write. A boot sweep (`Providers::recover_pending`)
+  resolves what remains: a completed delete is finished, a create whose credential
+  landed without the row is removed, a row without its credential clears the
+  reference. Cross-store failure is thus an **inspectable, recoverable state**, not an
+  unowned secret.
+- **Turn admission is one atomic decision** (`Db::admit_turn`): identity (UNIQUE
+  `(session_id, idempotency_key)`) AND "is the session busy" are decided in a single
+  transaction. A refused admission leaves **no** `admitted` row.
+- **The turn terminal is the adapter's own `turn_end`.** `session/prompt` returns
+  `ok|aborted|failed`; that is the terminal (`completed|cancelled|failed`), never a
+  pre-prompt cancel snapshot and never "any RPC success = completed". An unreadable
+  state is `failed`. `Db::end_turn` is guarded by `WHERE ended IS NULL`, so the settle
+  happens once and a late non-terminal write cannot resurrect a settled turn; the
+  event is published **only** when this call won the settle. Cancel checks abort
+  delivery (`abort-failed`) and does not settle the turn itself.
+- **The prompt does not hold the lifecycle lock.** The request handle is cloneable and
+  lives outside the session process mutex, so `abort`/`stop` are not blocked by a
+  running prompt.
+- **Grant chain (delivered)**: a session with `modelProviderId`/`modelId` is resolved
+  by an injected resolver (composition root; `sessions` does not depend on
+  `providers`). Start order is `session/start` → `credentials/grant`
+  (`{connectionId,value,url,declarations}`, memory-only) → `config/set`; a reopen
+  **re-grants**. The adapter names the provider `hub-<id>`; `applied.modelProviderId`
+  and the model are read from the adapter's **proof** and stored. Verified live: a
+  registered provider reached pi as `provider="hub-mockp"`, `model="deepseek-flash"`,
+  and the endpoint received a real `POST /v1/chat/completions`.

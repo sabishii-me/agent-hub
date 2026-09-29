@@ -199,6 +199,19 @@ pub enum ReserveOutcome {
     Conflict,
 }
 
+/// The outcome of admitting a turn (one atomic decision: identity + busy).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TurnAdmission {
+    /// A new turn row was inserted (the session was idle).
+    Reserved,
+    /// The session already has an active turn; no row was inserted.
+    Busy(String),
+    /// The same key with the SAME intent: return that turn.
+    Replay(String),
+    /// The same key with a DIFFERENT intent.
+    Conflict,
+}
+
 impl crate::Db {
     /// **Atomically** reserve a command key and (when new) insert the `starting`
     /// session row, in ONE transaction. This is the single decision point: there
@@ -242,19 +255,24 @@ impl crate::Db {
 
     // --- turns ---
 
-    /// Atomically reserve a turn by its command identity (the UNIQUE
-    /// (session_id, idempotency_key) is the decision point). Returns
-    /// `ReserveOutcome`:
-    /// * `Reserved` - a new turn row was inserted (state `admitted`);
-    /// * `Replay(id)` - the same key with the SAME intent (return that turn);
-    /// * `Conflict` - the same key with a DIFFERENT intent.
-    pub fn reserve_turn(
+    /// **Atomically** admit a turn: in ONE transaction, decide the command
+    /// identity AND whether the session is busy. There is no window where a turn
+    /// is inserted and the busy check runs after (the previous bug admitted a
+    /// second turn before noticing the first was running).
+    ///
+    /// * the key is new AND the session has no active turn -> `Reserved`;
+    /// * the key is new but the session HAS an active turn -> `Busy`;
+    /// * the key exists with the same intent -> `Replay(id)`;
+    /// * the key exists with a different intent -> `Conflict`.
+    ///
+    /// A refused admission leaves **no** `admitted` row.
+    pub fn admit_turn(
         &self,
         session_id: &str,
         idempotency_key: &str,
         intent: &str,
         turn_id: &str,
-    ) -> Result<ReserveOutcome, DbError> {
+    ) -> Result<TurnAdmission, DbError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         let existing: Option<(String, String)> = tx
@@ -264,20 +282,32 @@ impl crate::Db {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let outcome = match existing {
-            Some((it, id)) if it == intent => ReserveOutcome::Replay(id),
-            Some(_) => ReserveOutcome::Conflict,
-            None => {
-                tx.execute(
-                    "INSERT INTO turns (id, session_id, state, ended, native_turn_id, idempotency_key, intent, created_at, ended_at)
-                     VALUES (?1, ?2, 'admitted', NULL, NULL, ?3, ?4, ?5, NULL)",
-                    params![turn_id, session_id, idempotency_key, intent, crate::now_utc()],
-                )?;
-                ReserveOutcome::Reserved
-            }
-        };
+        if let Some((it, id)) = existing {
+            tx.commit()?;
+            return Ok(if it == intent {
+                TurnAdmission::Replay(id)
+            } else {
+                TurnAdmission::Conflict
+            });
+        }
+        let busy: Option<String> = tx
+            .query_row(
+                "SELECT id FROM turns WHERE session_id = ?1 AND ended IS NULL LIMIT 1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(active) = busy {
+            tx.commit()?;
+            return Ok(TurnAdmission::Busy(active));
+        }
+        tx.execute(
+            "INSERT INTO turns (id, session_id, state, ended, native_turn_id, idempotency_key, intent, created_at, ended_at)
+             VALUES (?1, ?2, 'admitted', NULL, NULL, ?3, ?4, ?5, NULL)",
+            params![turn_id, session_id, idempotency_key, intent, crate::now_utc()],
+        )?;
         tx.commit()?;
-        Ok(outcome)
+        Ok(TurnAdmission::Reserved)
     }
 
     pub fn insert_turn(&self, t: &TurnRow) -> Result<(), DbError> {
@@ -338,20 +368,44 @@ impl crate::Db {
         Ok(conn.query_row(&sql, params![session_id], Self::read_turn).optional()?)
     }
 
-    pub fn set_turn_state(&self, id: &str, state: &str) -> Result<(), DbError> {
+    /// Move a turn to a **non-terminal** state (`running`, `cancelling`). This
+    /// refuses (returns `false`) if the turn is already terminal, so a late
+    /// lifecycle write can never resurrect a settled turn (the previous bug let a
+    /// cancel write `cancelling` after the terminal had been written).
+    pub fn set_turn_state(&self, id: &str, state: &str) -> Result<bool, DbError> {
         let conn = self.lock();
-        conn.execute("UPDATE turns SET state = ?2 WHERE id = ?1", params![id, state])?;
-        Ok(())
+        let n = conn.execute(
+            "UPDATE turns SET state = ?2 WHERE id = ?1 AND ended IS NULL",
+            params![id, state],
+        )?;
+        Ok(n > 0)
     }
 
-    pub fn end_turn(&self, id: &str, ended: &str, at: &str) -> Result<(), DbError> {
+    /// Commit the terminal state **once**. The guard is in the SQL: only a turn
+    /// whose `ended` is still NULL can be settled, so two racing settles cannot
+    /// both win and a decided terminal is never overwritten. Returns `true` when
+    /// THIS call performed the settle (the caller publishes only on `true`).
+    pub fn end_turn(&self, id: &str, ended: &str, at: &str) -> Result<bool, DbError> {
         let conn = self.lock();
-        conn.execute(
-            "UPDATE turns SET state='ended', ended=?2, ended_at=?3 WHERE id=?1",
+        let n = conn.execute(
+            "UPDATE turns SET state='ended', ended=?2, ended_at=?3 WHERE id=?1 AND ended IS NULL AND state != 'ended'",
             params![id, ended, at],
         )?;
-        Ok(())
+        Ok(n > 0)
     }
+
+    /// A turn that was admitted but never reached the adapter (its detached start
+    /// failed) is reconciled to `failed` so it does not hold the session busy.
+    pub fn fail_admitted_turn(&self, id: &str, reason: &str) -> Result<bool, DbError> {
+        let conn = self.lock();
+        let n = conn.execute(
+            "UPDATE turns SET state='ended', ended='failed', ended_at=?2 WHERE id=?1 AND state='admitted' AND ended IS NULL",
+            params![id, crate::now_utc()],
+        )?;
+        let _ = reason;
+        Ok(n > 0)
+    }
+
 }
 
 /// The upgrade path: `CREATE TABLE IF NOT EXISTS` never alters an existing table,
@@ -422,5 +476,90 @@ mod migrate_tests {
         assert!(cols.contains(&"start_error".to_string()));
         // Idempotent: a second call is a no-op.
         migrate(&conn).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod turn_admission_tests {
+    use super::*;
+    use crate::Db;
+
+    fn session(db: &Db, id: &str) {
+        db.insert_session(&SessionRow {
+            id: id.into(),
+            harness_id: "pi".into(),
+            model_provider_id: None,
+            model_id: None,
+            applied_model: None,
+            plan: None,
+            review: None,
+            cwd: None,
+            title: None,
+            status: "active".into(),
+            created_at: crate::now_utc(),
+            updated_at: crate::now_utc(),
+            deleted: false,
+            forked_from_session: None,
+            forked_from_turn: None,
+            native_ref: None,
+            start_error: None,
+        })
+        .unwrap();
+    }
+
+    /// A second turn is refused WITHOUT inserting an admitted row: the busy check
+    /// and the admission are one decision.
+    #[test]
+    fn a_second_turn_is_refused_and_leaves_no_row() {
+        let db = Db::open_in_memory().unwrap();
+        session(&db, "s1");
+        assert_eq!(
+            db.admit_turn("s1", "k1", "turn:hello", "t1").unwrap(),
+            TurnAdmission::Reserved
+        );
+        // The session is busy: a DELIBERATE new key is refused, and no row exists.
+        assert!(matches!(
+            db.admit_turn("s1", "k2", "turn:again", "t2").unwrap(),
+            TurnAdmission::Busy(_)
+        ));
+        assert!(db.turn("t2").unwrap().is_none(), "a refused turn must not be inserted");
+        assert_eq!(db.list_turns("s1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_same_key_replays_and_a_different_intent_conflicts() {
+        let db = Db::open_in_memory().unwrap();
+        session(&db, "s1");
+        assert_eq!(db.admit_turn("s1", "k", "turn:a", "t1").unwrap(), TurnAdmission::Reserved);
+        assert_eq!(
+            db.admit_turn("s1", "k", "turn:a", "t2").unwrap(),
+            TurnAdmission::Replay("t1".into())
+        );
+        assert_eq!(db.admit_turn("s1", "k", "turn:b", "t3").unwrap(), TurnAdmission::Conflict);
+    }
+
+    /// The terminal is committed once; a late non-terminal write cannot resurrect.
+    #[test]
+    fn the_terminal_is_committed_once_and_not_resurrected() {
+        let db = Db::open_in_memory().unwrap();
+        session(&db, "s1");
+        db.admit_turn("s1", "k", "turn:a", "t1").unwrap();
+        assert!(db.end_turn("t1", "completed", &crate::now_utc()).unwrap(), "first settle wins");
+        assert!(!db.end_turn("t1", "cancelled", &crate::now_utc()).unwrap(), "second settle loses");
+        // A late `cancelling` write is refused because the turn is terminal.
+        assert!(!db.set_turn_state("t1", "cancelling").unwrap());
+        let t = db.turn("t1").unwrap().unwrap();
+        assert_eq!(t.state, "ended");
+        assert_eq!(t.ended.as_deref(), Some("completed"), "the terminal is not overwritten");
+    }
+
+    /// After a terminal, the session is idle again: a new turn is admitted.
+    #[test]
+    fn a_finished_turn_frees_the_session() {
+        let db = Db::open_in_memory().unwrap();
+        session(&db, "s1");
+        db.admit_turn("s1", "k1", "turn:a", "t1").unwrap();
+        db.end_turn("t1", "completed", &crate::now_utc()).unwrap();
+        assert_eq!(db.admit_turn("s1", "k2", "turn:b", "t2").unwrap(), TurnAdmission::Reserved);
     }
 }

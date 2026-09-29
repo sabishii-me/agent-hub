@@ -7,6 +7,7 @@
 //! the credential path (`501 not_implemented`) rather than fall back to plaintext.
 
 /// A credential store backed by the OS keychain.
+#[derive(Clone)]
 pub struct SecretStore {
     service: String,
     available: bool,
@@ -81,9 +82,9 @@ impl SecretStore {
 }
 
 fn probe_store(service: &str) -> bool {
-    // A UNIQUE probe name (never a fixed one that could clobber a real entry) and
-    // a confirmed delete: if any step fails, the store is not usable.
-    let name = format!("__probe__{}", std::process::id());
+    // A ONE-SHOT probe name: random, so it can never collide with a real entry
+    // nor with a previous probe (a PID can be reused). The delete is confirmed.
+    let name = format!("__probe__{}", random_hex());
     let Ok(entry) = keyring::Entry::new(service, &name) else {
         return false;
     };
@@ -93,6 +94,14 @@ fn probe_store(service: &str) -> bool {
     let ok = entry.get_password().map(|v| v == "probe").unwrap_or(false);
     let deleted = entry.delete_credential().is_ok();
     ok && deleted
+}
+
+/// 16 random hex bytes from the OS RNG (no timestamp, no PID: one-shot names).
+fn random_hex() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 16];
+    rand::rng().fill_bytes(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -109,7 +118,8 @@ mod tests {
 
     #[test]
     fn set_get_delete_roundtrip() {
-        let s = SecretStore::probe("agent-hub-test");
+        // A fresh SERVICE per run: two test runs never share an entry.
+        let s = SecretStore::probe(format!("agent-hub-test-{}", random_hex()));
         if !s.is_available() {
             eprintln!("SKIP: OS secret store unavailable on this host");
             return;

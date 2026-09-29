@@ -68,3 +68,19 @@ plaintext token is used to cross it.
   prompt's own return (an adapter ACK is not "stopped"). A **settle-once** guard means a late
   completion never overwrites a decided state (P1).
 - `cancel` is idempotent: no running turn returns the current state, not an error.
+
+## Review follow-up (TASK-048 REVIEW-495ce94)
+
+- **Admission is atomic**: `Db::admit_turn` decides identity AND busy in one
+  transaction; a refused admission leaves no `admitted` row (the previous code
+  inserted the new turn before checking busy).
+- **Terminal is the adapter's `turn_end`**: `ok|aborted|failed` → `completed|cancelled|
+  failed`. No pre-prompt cancel snapshot; "RPC success" is not "completed"; an
+  unreadable state is `failed`.
+- **Settle-once is in the database** (`WHERE ended IS NULL`); the event is published
+  only by the winner. A late non-terminal write (`cancelling`/`running`) cannot
+  resurrect a settled turn.
+- **Abort delivery is checked**: a send failure is `abort-failed` and the turn is
+  settled `interrupted` (not `cancelled`); a delivered-but-unconfirmed abort is
+  settled by the prompt's return.
+- The prompt no longer holds the lifecycle lock.

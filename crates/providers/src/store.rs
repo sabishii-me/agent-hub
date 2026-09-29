@@ -52,6 +52,22 @@ impl ProviderStore {
         Ok(())
     }
 
+    /// Record an in-flight credential transition (see `db::providers`).
+    pub fn begin_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<(), StoreError> {
+        self.db.begin_provider_op(provider, op, secret_ref)?;
+        Ok(())
+    }
+
+    pub fn finish_op(&self, provider: &str) -> Result<(), StoreError> {
+        self.db.finish_provider_op(provider)?;
+        Ok(())
+    }
+
+    /// In-flight credential transitions (for the boot sweep).
+    pub fn pending_ops(&self) -> Result<Vec<(String, String, String)>, StoreError> {
+        Ok(self.db.pending_provider_ops()?)
+    }
+
     /// Delete the row. The caller owns the credential deletion (the secret store
     /// is separate); this never touches the keychain.
     pub fn delete(&self, id: &str) -> Result<(), StoreError> {

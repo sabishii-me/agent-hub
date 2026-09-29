@@ -29,6 +29,12 @@ impl ProvidersState {
     pub fn new(providers: Providers, errors: ErrorRenderer) -> Self {
         ProvidersState { providers: Arc::new(providers), errors }
     }
+
+    /// From an existing shared handle (the composition root shares one instance
+    /// with the session provider resolver).
+    pub fn new_shared(providers: Arc<Providers>, errors: ErrorRenderer) -> Self {
+        ProvidersState { providers, errors }
+    }
 }
 
 fn table() -> RouteTable<ProvidersState> {
@@ -88,7 +94,7 @@ async fn list(State(s): State<ProvidersState>) -> Response {
 }
 
 async fn create(State(s): State<ProvidersState>, Json(req): Json<CreateProvider>) -> Response {
-    match s.providers.create(req) {
+    match s.providers.create(req).await {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
         Err(e) => err(&s, e),
     }
@@ -106,21 +112,21 @@ async fn patch_one(
     AxumPath(id): AxumPath<String>,
     Json(req): Json<PatchProvider>,
 ) -> Response {
-    match s.providers.patch(&id, req) {
+    match s.providers.patch(&id, req).await {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
         Err(e) => err(&s, e),
     }
 }
 
 async fn remove(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.delete(&id) {
+    match s.providers.delete(&id).await {
         Ok(()) => Json(serde_json::json!({ "ok": true, "id": id })).into_response(),
         Err(e) => err(&s, e),
     }
 }
 
 async fn logout(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.logout(&id) {
+    match s.providers.logout(&id).await {
         Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
         Err(e) => err(&s, e),
     }
