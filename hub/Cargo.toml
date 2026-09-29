@@ -1,0 +1,18 @@
+[package]
+name = "agent-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agent-hub"
+path = "src/main.rs"
+
+[dependencies]
+agent-hub-events = { path = "../crates/events" }
+agent-hub-transport = { path = "../crates/transport" }
+axum.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
