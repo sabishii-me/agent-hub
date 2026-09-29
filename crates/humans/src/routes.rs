@@ -29,6 +29,10 @@ impl HumansState {
     }
 }
 
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/sessions/{id}/approvals", "POST /v1/sessions/{id}/approvals/{aid}", "GET /v1/sessions/{id}/questions", "POST /v1/sessions/{id}/questions/{qid}"]
+}
+
 pub fn routes() -> Router<HumansState> {
     Router::new()
         .route("/v1/sessions/{id}/approvals", get(list_approvals))

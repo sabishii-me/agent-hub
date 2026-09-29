@@ -15,15 +15,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 /// A constant-time equality, so a token check does not leak the token by timing.
+/// The property comes from `subtle` (a maintained constant-time crate), not from
+/// a hand-written loop the compiler is free to reorder (TASK-048 C5).
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    use subtle::ConstantTimeEq;
+    a.ct_eq(b).into()
 }
 
 /// The bearer middleware. Wrap the whole router with it.

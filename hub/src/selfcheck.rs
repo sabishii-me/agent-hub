@@ -28,60 +28,25 @@ pub fn check_error_codes(declared: &[&str], table: &agent_hub_contract::ErrorTab
     }
 }
 
-/// The routes this build mounts, as `"METHOD /path"`. Kept beside the mounts so
-/// the surface check has a list to compare (ARCHITECTURE 13.4).
+/// The mounted surface, COLLECTED from each module's `surface()`. There is one
+/// source per module (beside its `route(...)` calls), so the check cannot drift
+/// from the router by editing a separate central table (TASK-048 C5).
 pub fn mounted_surface() -> BTreeSet<String> {
-    [
-        // transport
-        "GET /v1/status",
-        "GET /v1/events",
-        // plugins (only the routes this build actually mounts)
-        "GET /v1/plugins",
-        "POST /v1/plugins",
-        "DELETE /v1/plugins/{id}",
-        "POST /v1/plugins/{id}/prepare",
-        // sessions (all answer 501 until wired; the paths are mounted)
-        "GET /v1/sessions",
-        "POST /v1/sessions",
-        "GET /v1/sessions/{id}",
-        "PATCH /v1/sessions/{id}",
-        "DELETE /v1/sessions/{id}",
-        "GET /v1/sessions/{id}/turns",
-        "POST /v1/sessions/{id}/turns",
-        "POST /v1/sessions/{id}/cancel",
-        "POST /v1/sessions/{id}/close",
-        "POST /v1/sessions/{id}/reopen",
-        "POST /v1/sessions/{id}/fork",
-        // model providers
-        "GET /v1/model-providers",
-        "POST /v1/model-providers",
-        "GET /v1/model-providers/{id}",
-        "PATCH /v1/model-providers/{id}",
-        "DELETE /v1/model-providers/{id}",
-        "POST /v1/model-providers/{id}/logout",
-        "GET /v1/model-providers/{id}/models",
-        "PATCH /v1/model-providers/{id}/models",
-        "POST /v1/model-providers/{id}/models/refresh",
-        "GET /v1/models",
-        // harnesses
-        "GET /v1/harnesses",
-        "GET /v1/harnesses/{id}/presets",
-        "GET /v1/harnesses/{id}/models",
-        "GET /v1/harnesses/{id}/tools",
-        // skills
-        "GET /v1/skills",
-        "DELETE /v1/skills/{id}",
-        "PUT /v1/skills/{id}/files/{file...}",
-        "GET /v1/skills/{id}/files/{file...}",
-        // humans
-        "GET /v1/sessions/{id}/approvals",
-        "POST /v1/sessions/{id}/approvals/{aid}",
-        "GET /v1/sessions/{id}/questions",
-        "POST /v1/sessions/{id}/questions/{qid}",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    let mut out = BTreeSet::new();
+    for group in [
+        agent_hub_transport::surface(),
+        agent_hub_plugins::routes::surface(),
+        agent_hub_sessions::routes::surface(),
+        agent_hub_providers::routes::surface(),
+        agent_hub_harnesses::routes::surface(),
+        agent_hub_skills::routes::surface(),
+        agent_hub_humans::routes::surface(),
+    ] {
+        for r in group {
+            out.insert((*r).to_string());
+        }
+    }
+    out
 }
 
 /// Every route the hub mounts, as `"METHOD /path"`, compared against the

@@ -1,5 +1,12 @@
-//! Transport acceptance: the semantics the contract claims, exercised against a
-//! real listener (task T6 + the `202`/SSE parts of T4).
+//! Component tests for the transport PRIMITIVES.
+//!
+//! **Limited purpose (recorded):** these exercise the transport mechanisms -
+//! `Accepted` (`202 + Location`), bounded admission (`503 + Retry-After`), and
+//! SSE delivery/replay/resync - against a real listener. The routes they mount
+//! (`/v1/things`, `/v1/long`) are **test-only fixtures for the primitive**, not a
+//! product capability and not part of the contract. They must never be presented
+//! as product acceptance (TASK-048 C4/F05). No session, adapter, or model is
+//! involved.
 
 use std::sync::Arc;
 use std::time::Duration;

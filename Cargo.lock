@@ -30,6 +30,7 @@ name = "agent-hub-adapter"
 version = "0.1.0"
 dependencies = [
  "agent-hub-events",
+ "agent-hub-extensions",
  "serde",
  "serde_json",
  "thiserror",
@@ -107,6 +108,7 @@ name = "agent-hub-humans"
 version = "0.1.0"
 dependencies = [
  "agent-hub-contract",
+ "agent-hub-db",
  "agent-hub-events",
  "agent-hub-transport",
  "axum",
@@ -145,6 +147,7 @@ name = "agent-hub-providers"
 version = "0.1.0"
 dependencies = [
  "agent-hub-contract",
+ "agent-hub-db",
  "agent-hub-events",
  "agent-hub-transport",
  "axum",
@@ -205,12 +208,14 @@ dependencies = [
  "async-stream",
  "axum",
  "bytes",
+ "chrono",
  "futures",
  "getrandom 0.3.4",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
  "tokio-stream",
  "tower",

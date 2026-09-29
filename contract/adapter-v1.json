@@ -41,10 +41,11 @@
       "permissionModel": "how the harness gates tools: native|extension|none — reported, never guessed",
       "planMode": "how the harness carries plan mode; reported, never guessed",
       "repair": "whether the harness can repair an orphaned tail; reported, never guessed",
-      "provider": "{apiVersion, module}: this plugin ships a HUB provider module (one that is not built into the hub): the hub imports it for configuration validation, model catalog and — when the vendor has one — authorization. A provider-only plugin declares no command/protocol; a plugin may carry both. The module exports apiVersion 1, descriptor {id, version, owner:'hub', name, authMethods, configuration, catalog}, configure(input, previousEndpoint), fetchCatalog({endpoint, credential, catalogUrl}) and optionally beginAuth({providerId, report, signal, endpoint})/authLogout({credential}). configure and beginAuth may return {url, api, catalogUrl}: the endpoint and the rich model-catalog URL learned from sign-in, both persisted by the hub. fetchCatalog may return plain entries or {models, note}; entries may carry thinkingLevels, contextWindow, maxTokens, input and cost — the hub passes them on as data and lets declarations override per field. Nothing is built in: with no plugin for a type, a provider record naming it stays readable but unusable.",
-      "pluginType": "what this plugin is, from a fixed set: `harness-adapter` (drives a harness; declares command/protocol) or `model-provider` (ships a hub provider module; declares provider). The hub uses it as the plugin's own type - a harness-adapter and a model-provider may share an id, because they are different things. Also the repo prefix: agent-hub-<kind>-<id>.",
+      "provider": "{apiVersion, descriptor}: this plugin ships a model-provider TYPE as DATA. The descriptor states the type's id, version, owner:'hub', display name, authMethods, configuration fields and the CATALOG SHAPE (the dialect). It is data the hub reads and maps; the hub does NOT import or run plugin code in-process (ARCHITECTURE §5). The hub owns the HTTP request, the auth, the catalog fetch and the field mapping; auth is a declared method (device-code/browser), not a plugin function. A provider-only plugin declares no command/protocol. Nothing is built in: with no plugin for a type, a provider record naming it stays readable but unusable.",
+      "pluginType": "what this plugin is, from a fixed set: `harness-adapter` (drives a harness; declares command/protocol) or `model-provider` ( ships a model-provider TYPE as data; declares provider). The hub uses it as the plugin's own type - a harness-adapter and a model-provider may share an id, because they are different things. Also the repo prefix: agent-hub-<kind>-<id>.",
       "summary": "one line saying what this plugin is, shown in a catalog row. Metadata: it travels with every listing.",
-      "release": "{repository, ...}: where this plugin is published. Present in the plugin's own repo; the catalog is derived from it."
+      "release": "{repository, ...}: where this plugin is published. Present in the plugin's own repo; the catalog is derived from it.",
+      "kindRule": "id plus at least one of: command+protocol (harness adapter) or a provider descriptor (a model-provider type as data)."
     },
     "rule": "a field set that does not match this list stops the hub at startup (boot self-check), it is not a warning",
     "capabilityValues": [
@@ -65,7 +66,7 @@
       "runtime",
       "history-readonly"
     ],
-    "kindRule": "id plus at least one of: command+protocol (harness adapter) or provider (hub provider module). A manifest that declares neither, or a provider block whose module cannot be honoured, stops the hub at startup."
+    "kindRule": "id plus at least one of: command+protocol (harness adapter) or provider (a model-provider type as data). A manifest that declares neither, or a provider block whose descriptor cannot be honoured, stops the hub at startup."
   },
   "coreCompliance": {
     "requests": [

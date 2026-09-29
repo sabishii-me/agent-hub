@@ -10,11 +10,12 @@
 
 use std::sync::Arc;
 
+use axum::extract::State;
 use axum::response::Response;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Router;
 
-use agent_hub_transport::ErrorRenderer;
+use agent_hub_transport::{DomainError, ErrorRenderer};
 
 use crate::service::Sessions;
 
@@ -28,6 +29,10 @@ impl SessionsState {
     pub fn new(sessions: Sessions, errors: ErrorRenderer) -> Self {
         SessionsState { sessions: Arc::new(sessions), errors }
     }
+}
+
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/sessions", "POST /v1/sessions", "GET /v1/sessions/{id}", "PATCH /v1/sessions/{id}", "DELETE /v1/sessions/{id}", "GET /v1/sessions/{id}/turns", "POST /v1/sessions/{id}/turns", "POST /v1/sessions/{id}/cancel", "POST /v1/sessions/{id}/close", "POST /v1/sessions/{id}/reopen", "POST /v1/sessions/{id}/fork"]
 }
 
 pub fn routes() -> Router<SessionsState> {
@@ -44,24 +49,11 @@ pub fn routes() -> Router<SessionsState> {
         .route("/v1/sessions/{id}/fork", post(not_implemented))
 }
 
-async fn not_implemented() -> Response {
-    // `not_implemented` (501) is the contract's own code for "endpoint not
-    // implemented; never faked". Rendered without a renderer because it is a
-    // fixed, contract-declared answer.
-    Json(serde_json::json!({
-        "error": "not_implemented",
-        "detail": "sessions are not wired to an adapter yet; a session cannot be started, and no state is faked"
-    }))
-    .into_response_with_status()
-}
-
-trait WithStatus {
-    fn into_response_with_status(self) -> Response;
-}
-impl WithStatus for Json<serde_json::Value> {
-    fn into_response_with_status(self) -> Response {
-        use axum::http::StatusCode;
-        use axum::response::IntoResponse;
-        (StatusCode::NOT_IMPLEMENTED, self).into_response()
-    }
+/// `not_implemented` goes through the SAME error renderer as every domain, so
+/// there is one mapping (invariant 13.7, TASK-048 C5).
+async fn not_implemented(State(s): State<SessionsState>) -> Response {
+    s.errors.render(&DomainError::new(
+        "not_implemented",
+        "sessions are not wired to an adapter yet; a session cannot be started, and no state is faked",
+    ))
 }

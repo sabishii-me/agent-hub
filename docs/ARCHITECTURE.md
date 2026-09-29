@@ -588,10 +588,12 @@ follows distinguishes a real, narrow component fact from a product capability.
   ignores its content; `fork` writes a row. There is **no execution boundary** behind
   `active`/`running`/`fork`. These must be made **honestly unavailable** until an adapter is
   wired (see the rework in progress).
-- **providers**: the token is written **in plaintext** to a JSON file; there is no secret store.
-  Until the credential path is real, a provider must not accept a secret.
-- **the served binary**: there is **no inbound authentication**, so the binary must not be run
-  as a product against real data or credentials.
+- **providers** (now): the credential is **not part of the record** (no `token` field), so a
+  secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
+  Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.
+- **the served binary** (now): every route requires a **bearer token** (the inbound boundary
+  exists). That is a possession check, not an authorization boundary (§7); the binary is still
+  not a product (sessions/skills are `501`, no secret store).
 - **adapter / harnesses / skills / extensions / humans**: adapter plugins can be spoken to over
   the bus at the protocol level, but nothing product-level is wired through them; the skills and
   extensions models here follow the **pre-decision** contract (see

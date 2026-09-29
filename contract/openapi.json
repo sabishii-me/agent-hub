@@ -1604,7 +1604,7 @@
     },
     "/v1/model-providers": {
       "get": {
-        "description": "the providers the hub manages. One provider is one file in the hub's data dir (`providers/<id>.json`): the endpoint it lives at, the protocol it speaks, the declarations for its models, the selection, and the catalog it last served. A provider is reported as `{id, label, url, api, providerType, providerTypeVersion, providerTypeAvailable, catalogUrl, tokenConfigured, declarations, selection, catalogRevision, createdAt, updatedAt}`; the token itself is never returned. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. Legacy untyped records are read as custom-compatible v1 without rewriting storage or guessing from endpoint/name.",
+        "description": "the providers the hub manages. A provider is data the hub manages: the endpoint, the protocol it speaks, the per-model declarations and the selection. The storage layout is the implementation's, not the contract. A provider is reported as `{id, label, url, api, providerType, providerTypeVersion, providerTypeAvailable, catalogUrl, tokenConfigured, declarations, selection, catalogRevision, createdAt, updatedAt}`; a credential is never stored in plaintext and never returned. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. There is no legacy compatibility and no migration: a fresh program. A credential is a secret and is NOT accepted until an OS secret store exists; the hub refuses one rather than storing it in plaintext.",
         "responses": {
           "200": {
             "description": "success",
@@ -1708,7 +1708,7 @@
     },
     "/v1/model-providers/{id}": {
       "get": {
-        "description": "read one provider by id. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. Legacy untyped records are read as custom-compatible v1 without rewriting storage or guessing from endpoint/name.",
+        "description": "read one provider by id. Each provider also reports providerType, providerTypeVersion, providerTypeAvailable. There is no legacy compatibility and no migration: a fresh program. A credential is a secret and is NOT accepted until an OS secret store exists; the hub refuses one rather than storing it in plaintext.",
         "responses": {
           "200": {
             "description": "success",
@@ -2660,7 +2660,7 @@
     },
     "/v1/model-providers/types": {
       "get": {
-        "description": "Installed hub provider plugins, as data. A provider type is not built into the hub: each entry here was imported from a plugin directory (manifest.provider.module). Types unavailable because no plugin ships them stay absent — a provider record naming one remains readable but unusable. `broken` lists provider modules that were declared but could not load, with their reason. A plugin's fetchCatalog may return plain model entries or {models, note}; entries may carry metadata (thinkingLevels, contextWindow, maxTokens, input, cost) stated by the vendor — declarations still override per field, and both are what a harness receives at session start.",
+        "description": "Installed model-provider plugins, as data: each entry was imported from a plugin's declared provider module. A provider type is data, not code the hub runs in-process; a type no plugin ships stays absent, and a record naming one stays readable but unusable. The plugin provider-module protocol is a later specification, not legacy compatibility.",
         "responses": {
           "200": {
             "description": "success",

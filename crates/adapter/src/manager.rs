@@ -48,6 +48,10 @@ pub enum AdapterError {
     Manifest(#[from] crate::manifest::ManifestError),
     #[error(transparent)]
     Bus(#[from] crate::bus::BusError),
+    #[error("extension placement failed: {0}")]
+    Placement(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Where the hub's data for one harness lives, so the adapter can be pointed at
@@ -98,31 +102,48 @@ impl Adapters {
     /// The environment a harness's adapter is started with, derived from the
     /// hub's own layout. The hub creates the directories it hands over; an
     /// adapter refuses to invent its own (the real ones do).
-    pub fn harness_env(&self, id: &str, session_id: Option<String>) -> HarnessEnv {
+    ///
+    /// A **declared** extension whose source directory is missing, or whose copy
+    /// fails, is an **error** that must stop the start (TASK-048 C3). Placement
+    /// has one implementation (the extensions crate's rule); a missing trust
+    /// component is never a warning that still spawns.
+    pub fn harness_env(
+        &self,
+        id: &str,
+        session_id: Option<String>,
+    ) -> Result<HarnessEnv, AdapterError> {
         let base = self.data_dir.join("agents").join(id);
         let harness_dir = base.clone();
         let skills_dir = base.join("skills");
         let extensions_dir = base.join("extensions");
-        let _ = std::fs::create_dir_all(&harness_dir);
-        let _ = std::fs::create_dir_all(&skills_dir);
-        // Install the plugin's shipped extensions (its registry defaults). The
-        // hub writes them here; the adapter places them where its harness reads
-        // them, with discovery off. A selection a PATCH narrows is a later step.
+        std::fs::create_dir_all(&harness_dir)?;
+        std::fs::create_dir_all(&skills_dir)?;
+
+        // Replace the installed set (a removed extension is gone next run).
         let _ = std::fs::remove_dir_all(&extensions_dir);
-        let _ = std::fs::create_dir_all(&extensions_dir);
+        std::fs::create_dir_all(&extensions_dir)?;
+
         if let Ok(harness) = self.get(id) {
-            for e in harness.manifest.shipped_extensions(&harness.directory) {
-                // Only a real directory is installed; a declared id with no
-                // directory is skipped, never replaced by an empty marker that
-                // would look installed (TASK-048 F07).
-                if e.dir.exists() {
-                    let _ = copy_tree(&e.dir, &extensions_dir.join(&e.id));
-                } else {
-                    tracing::warn!(id = %e.id, "declared extension has no directory; not installed");
-                }
-            }
+            // ONE placement implementation: the extensions crate's rule. It
+            // refuses a declared id with no directory (SourceMissing); the start
+            // does not swallow it.
+            let shipped: Vec<(String, std::path::PathBuf)> = harness
+                .manifest
+                .shipped_extensions(&harness.directory)
+                .into_iter()
+                .map(|e| (e.id, e.dir))
+                .collect();
+            let selected: Vec<String> = shipped.iter().map(|(id, _)| id.clone()).collect();
+            agent_hub_extensions::install_for_harness(
+                &self.data_dir.join("agents"),
+                id,
+                &shipped,
+                &selected,
+            )
+            .map_err(|e| AdapterError::Placement(e.to_string()))?;
         }
-        HarnessEnv {
+
+        Ok(HarnessEnv {
             harness_dir,
             skills_dir,
             extensions_dir,
@@ -131,7 +152,7 @@ impl Adapters {
             additional_dirs: Vec::new(),
             presets_dir: None,
             connection_env: Vec::new(),
-        }
+        })
     }
 
     /// Scan the roots and register every adapter plugin found. A directory with
@@ -211,7 +232,7 @@ impl Adapters {
             return Err(AdapterError::Unsupported(format!("harness `{id}` is disabled")));
         }
         let command = harness.manifest.command.clone().unwrap_or_default();
-        let env = self.adapter_env(&harness);
+        let env = self.adapter_env(&harness)?;
         let bus = AgentBus::spawn(&command, &harness.directory, &env)?;
         let handle = bus.requests.clone();
         self.running
@@ -237,11 +258,11 @@ impl Adapters {
     /// credentials, exactly as the contract and the old hub define it: the
     /// process environment with `AGENT_HUB_SECRET_KEY` removed, then the hub's
     /// own variables (`server.mjs:802/2964`).
-    pub fn adapter_env(&self, harness: &Harness) -> Vec<(String, String)> {
+    pub fn adapter_env(&self, harness: &Harness) -> Result<Vec<(String, String)>, AdapterError> {
         let mut env: Vec<(String, String)> = std::env::vars()
             .filter(|(k, _)| k != "AGENT_HUB_SECRET_KEY")
             .collect();
-        let he = self.harness_env(&harness.id, None);
+        let he = self.harness_env(&harness.id, None)?;
         env.push(("AGENT_HUB_HARNESS_DIR".into(), he.harness_dir.to_string_lossy().into()));
         env.push(("AGENT_HUB_CWD".into(), he.cwd.to_string_lossy().into()));
         env.push(("AGENT_HUB_INSTALLED_SKILLS_DIR".into(), he.skills_dir.to_string_lossy().into()));
@@ -252,7 +273,7 @@ impl Adapters {
         if let Some(argv) = harness.manifest.runtime_argv(&harness.directory) {
             env.push(("AGENT_HUB_RUNTIME_COMMAND".into(), serde_json::to_string(&argv).unwrap()));
         }
-        env
+        Ok(env)
     }
 
     /// A capability call, gated on the harness declaring it.
@@ -270,20 +291,6 @@ impl Adapters {
         let handle = self.ensure_started(id).await?;
         Ok(handle.request(method, params).await?)
     }
-}
-
-fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &to)?;
-        } else {
-            std::fs::copy(entry.path(), &to)?;
-        }
-    }
-    Ok(())
 }
 
 /// Map an adapter notification to the contract's event name and payload.

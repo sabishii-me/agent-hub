@@ -1,16 +1,23 @@
 //! The `/v1/skills` routes.
+//!
+//! **NOT WIRED.** Skills are a top-level mechanism whose **content comes from a
+//! plugin**, delivered the way extensions are (workspace/session layering), per
+//! the decided direction. The earlier version was a hub-authored store with real
+//! `PUT`/`DELETE` mutators - the excluded model (TASK-048 C2). Those mutators are
+//! stopped: every route answers `501 not_implemented` until the plugin-source,
+//! layered model is real. A success endpoint over the wrong model is not honest
+//! unavailability.
 
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, State};
-use axum::response::{IntoResponse, Response};
+use axum::extract::State;
+use axum::response::Response;
 use axum::routing::{delete, get};
-use axum::{Json, Router};
-use serde::Deserialize;
+use axum::Router;
 
-use agent_hub_transport::ErrorRenderer;
+use agent_hub_transport::{DomainError, ErrorRenderer};
 
-use crate::service::{SkillError, Skills};
+use crate::service::Skills;
 
 #[derive(Clone)]
 pub struct SkillsState {
@@ -24,56 +31,24 @@ impl SkillsState {
     }
 }
 
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/skills", "DELETE /v1/skills/{id}", "GET /v1/skills/{id}/files/{file...}", "PUT /v1/skills/{id}/files/{file...}"]
+}
+
 pub fn routes() -> Router<SkillsState> {
     Router::new()
-        .route("/v1/skills", get(list))
-        .route("/v1/skills/{id}", delete(remove))
-        .route("/v1/skills/{id}/files/{*file}", get(read_file).put(write_file))
+        .route("/v1/skills", get(not_implemented))
+        .route("/v1/skills/{id}", delete(not_implemented))
+        .route(
+            "/v1/skills/{id}/files/{*file}",
+            get(not_implemented).put(not_implemented),
+        )
 }
 
-fn err(s: &SkillsState, e: SkillError) -> Response {
-    s.errors.render(&e.to_domain_error())
-}
-
-async fn list(State(s): State<SkillsState>) -> Response {
-    match s.skills.list() {
-        Ok(skills) => Json(serde_json::json!({ "skills": skills })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn remove(State(s): State<SkillsState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.skills.delete(&id) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "id": id })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn read_file(
-    State(s): State<SkillsState>,
-    AxumPath((id, file)): AxumPath<(String, String)>,
-) -> Response {
-    match s.skills.read_file(&id, &file) {
-        Ok(content) => Json(serde_json::json!({ "skillId": id, "path": file, "content": content }))
-            .into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-#[derive(Deserialize)]
-struct WriteBody {
-    content: String,
-}
-
-async fn write_file(
-    State(s): State<SkillsState>,
-    AxumPath((id, file)): AxumPath<(String, String)>,
-    Json(body): Json<WriteBody>,
-) -> Response {
-    match s.skills.write_file(&id, &file, &body.content) {
-        Ok(bytes) => {
-            Json(serde_json::json!({ "skillId": id, "path": file, "bytes": bytes })).into_response()
-        }
-        Err(e) => err(&s, e),
-    }
+async fn not_implemented(State(s): State<SkillsState>) -> Response {
+    // Through the SAME error renderer as every domain (invariant 13.7, C5).
+    s.errors.render(&DomainError::new(
+        "not_implemented",
+        "skills are a plugin-sourced, layered mechanism that is not wired yet; the hub does not serve a self-authored store",
+    ))
 }

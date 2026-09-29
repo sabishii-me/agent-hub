@@ -23,6 +23,10 @@ impl ProvidersState {
     }
 }
 
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/model-providers", "POST /v1/model-providers", "GET /v1/model-providers/{id}", "PATCH /v1/model-providers/{id}", "DELETE /v1/model-providers/{id}", "POST /v1/model-providers/{id}/logout", "GET /v1/model-providers/{id}/models", "PATCH /v1/model-providers/{id}/models", "POST /v1/model-providers/{id}/models/refresh", "GET /v1/models"]
+}
+
 pub fn routes() -> Router<ProvidersState> {
     Router::new()
         .route("/v1/model-providers", get(list).post(create))

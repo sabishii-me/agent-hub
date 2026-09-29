@@ -23,6 +23,10 @@ impl HarnessesState {
     }
 }
 
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/harnesses", "GET /v1/harnesses/{id}/presets", "GET /v1/harnesses/{id}/models", "GET /v1/harnesses/{id}/tools", "GET /v1/harnesses/{id}/extensions"]
+}
+
 pub fn routes() -> Router<HarnessesState> {
     Router::new()
         // One roster: the thin projection (which is also the management view).

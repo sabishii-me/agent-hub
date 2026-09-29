@@ -13,7 +13,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 jsonschema = "0.58"
 thiserror = "2"
 
-axum = "0.8"
+axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util", "process"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
@@ -21,6 +21,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 getrandom = "0.3"
+subtle = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-stream = "0.3"

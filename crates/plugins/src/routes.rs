@@ -31,6 +31,13 @@ impl PluginsState {
     }
 }
 
+/// The routes this module mounts, as `"METHOD /path"`. The boot self-check
+/// compares this to the contract; it lives beside the `route(...)` calls it
+/// describes, not in a central hand table (TASK-048 C5).
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/plugins", "POST /v1/plugins", "GET /v1/plugins/{id}", "DELETE /v1/plugins/{id}", "POST /v1/plugins/{id}/prepare"]
+}
+
 pub fn routes() -> Router<PluginsState> {
     Router::new()
         .route("/v1/plugins", get(list).post(install))

@@ -68,6 +68,13 @@ pub struct Humans {
     counter: std::sync::atomic::AtomicU64,
 }
 
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 impl Humans {
     pub fn new(bus: Bus) -> Self {
         Humans {
@@ -80,7 +87,7 @@ impl Humans {
 
     fn next_id(&self, prefix: &str) -> String {
         let n = self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{prefix}-{}", crate::now_millis() + n)
+        format!("{prefix}-{}", now_millis() + n)
     }
 
     /// Register an approval the adapter raised (`approval_need`).
@@ -99,7 +106,7 @@ impl Humans {
             tool: tool.into(),
             args,
             options,
-            requested_at: crate::now_rfc3339(),
+            requested_at: agent_hub_db::now_utc(),
             decision: None,
             reason: None,
         };
@@ -165,7 +172,7 @@ impl Humans {
             id: id.clone(),
             session_id: session_id.into(),
             questions,
-            requested_at: crate::now_rfc3339(),
+            requested_at: agent_hub_db::now_utc(),
             answers: None,
         };
         self.questions.lock().expect("questions").insert(id.clone(), question.clone());

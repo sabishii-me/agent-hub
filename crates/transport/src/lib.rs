@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use agent_hub_events::{Bus, CatchUp};
 use axum::{
-    body::Body,
     extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
@@ -118,6 +117,11 @@ impl Transport {
 /// The transport-owned routes (`/v1/status`, `/v1/events`) as a
 /// **stateful** builder. Domains merge their own routes onto this, then call
 /// [`finish`] with the shared [`Transport`].
+/// The routes this module mounts (the boot surface check reads every module's).
+pub fn surface() -> &'static [&'static str] {
+    &["GET /v1/status", "GET /v1/events"]
+}
+
 pub fn routes() -> Router<Transport> {
     Router::new()
         .route("/v1/status", get(status))
@@ -143,35 +147,16 @@ async fn status(State(t): State<Transport>) -> impl IntoResponse {
 }
 
 fn now_rfc3339() -> String {
-    // A fixed, dependency-free RFC 3339 UTC timestamp.
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = d.as_secs();
-    let (y, mo, day, h, mi, s) = civil_from_unix(secs);
-    format!("{y:04}-{mo:02}-{day:02}T{h:02}:{mi:02}:{s:02}Z")
+    // A maintained date library, not a hand-written civil algorithm (C5).
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-/// Days-from-civil inverse (Howard Hinnant's algorithm).
-fn civil_from_unix(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m as u32, d as u32, (rem / 3600) as u32, ((rem % 3600) / 60) as u32, (rem % 60) as u32)
-}
 
 /// The SSE stream. `Last-Event-ID` (header or `?lastEventId=` query) selects
 /// catch-up: replay what is in the window, or resync when it has fallen out.
-async fn sse(State(t): State<Transport>, headers: HeaderMap) -> Response {
+async fn sse(State(t): State<Transport>, headers: HeaderMap) -> axum::response::sse::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    use axum::response::sse::{KeepAlive, Sse};
+
     let wanted = parse_last_event_id(&headers);
     let sub = t.bus.subscribe(wanted);
 
@@ -179,32 +164,37 @@ async fn sse(State(t): State<Transport>, headers: HeaderMap) -> Response {
         match sub.catch_up {
             CatchUp::Replay(events) => {
                 for e in events {
-                    yield Ok::<_, std::convert::Infallible>(frame(&e.name, e.id, &e.data));
+                    yield Ok(event_with_id(&e.name, e.id, &e.data));
                 }
             }
             CatchUp::Fresh => {
                 // The handshake: no id, no state (contract's `/v1/events`).
-                yield Ok(frame_no_id("hub.connected", &json!({ "at": now_rfc3339() })));
+                yield Ok(event_no_id("hub.connected", &json!({ "at": now_rfc3339() })));
             }
             CatchUp::Resync => {
-                // The gap cannot be described; tell the client to re-read.
-                yield Ok(frame_no_id("hub.resync", &json!({ "reason": "last-event-id out of window" })));
+                yield Ok(event_no_id("hub.resync", &json!({ "reason": "last-event-id out of window" })));
             }
         }
-
         let mut rx = sub.receiver;
         while let Some(e) = rx.recv().await {
-            yield Ok(frame(&e.name, e.id, &e.data));
+            yield Ok(event_with_id(&e.name, e.id, &e.data));
         }
     };
 
-    let body = Body::from_stream(stream);
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(body)
-        .unwrap()
+    // axum's Sse owns the `event:`/`data:`/`id:` framing (a maintained
+    // component), not hand-written strings (TASK-048 C5).
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+fn event_with_id(name: &str, id: u64, data: &serde_json::Value) -> axum::response::sse::Event {
+    axum::response::sse::Event::default()
+        .id(id.to_string())
+        .event(name)
+        .data(data.to_string())
+}
+
+fn event_no_id(name: &str, data: &serde_json::Value) -> axum::response::sse::Event {
+    axum::response::sse::Event::default().event(name).data(data.to_string())
 }
 
 fn parse_last_event_id(headers: &HeaderMap) -> Option<u64> {
@@ -214,10 +204,4 @@ fn parse_last_event_id(headers: &HeaderMap) -> Option<u64> {
         .and_then(|s| s.trim().parse().ok())
 }
 
-fn frame(name: &str, id: u64, data: &serde_json::Value) -> String {
-    format!("id: {id}\nevent: {name}\ndata: {data}\n\n")
-}
 
-fn frame_no_id(name: &str, data: &serde_json::Value) -> String {
-    format!("event: {name}\ndata: {data}\n\n")
-}
