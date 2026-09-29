@@ -39,7 +39,7 @@ is its own Hono app, exported and mounted with `app.route()`** - the entry stays
 route change touches one small file, not one giant one.
 
 ```
-prts-hub/
+agent-hub/
 |
 |- main.mjs                     entry: new Hono(); Bearer auth; app.route() each area; listen;
 |                                open the db; run the boot self-check
