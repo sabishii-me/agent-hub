@@ -263,12 +263,34 @@ the adapter - see "Extensions: two kinds" - the point here is only WHERE they ar
 
 ## Open questions (the ones still real)
 
-**(o4) harness registry vs harness runtime answers.** `/v1/harnesses` today mixes the hub's
-registry row (enabled/extensions/skills) with the harness's own runtime answers
-(models/presets/tools/auth/connections). With `enabled` going to the plugin lifecycle,
-extensions/skills becoming the layered mechanism above, what is left of the registry row, and
-does `GET /v1/harnesses` still exist (or is "which harnesses" just
-`GET /v1/plugins?type=harness-adapter`)?
+**(o4) the harness registry is a filtered plugin list (analysed; a decision is needed).**
+
+Confirmed from the consumer (the desktop) and the two shapes: `/v1/harnesses` returns almost
+exactly a `Plugin` restricted to `pluginType === 'harness-adapter'`. The desktop already calls
+BOTH `/v1/hub/plugins` (the plugin list) and `/v1/harnesses` (the roster), and the two types
+overlap field for field:
+
+| harness row field | also a plugin field |
+|---|---|
+| id, name, icons, capabilities | yes |
+| enabled, missing, state | yes (plugin enable/state) |
+| adapterVersion | plugin.version |
+| runtimeVersion, runtimePackage | plugin.runtime / manifest |
+
+So the "harness registry" is **the plugin list, filtered by type**, with a harness-flavoured
+naming. It is not a second source of truth; it is a projection.
+
+Two honest options:
+
+- **(A) drop the list endpoint.** The UI asks `GET /v1/plugins?type=harness-adapter` and reads
+  the two versions off the plugin fields (`version`, `runtime.version`). One list.
+- **(B) keep `/v1/harnesses` as a thin, explicitly-derived projection of the plugin list**
+  (filter by type), so the UI keeps a stable "harness roster" shape - but it is a VIEW, derived
+  from `/v1/plugins`, never a second store.
+
+Either way, the **runtime answers stay per harness** at `/v1/harnesses/{id}/...`
+(models/presets/tools/auth/connections) - those are the harness speaking, not the plugin list.
+And `/v1/harnesses/{id}/extensions` is the extension sub-resource (harness context).
 
 **(o6) is the security delivery rule settled enough to implement?** The direction is decided
 (above): hub-owned paths outside the workspace, discovery off, adapter-enforced gate. What is
