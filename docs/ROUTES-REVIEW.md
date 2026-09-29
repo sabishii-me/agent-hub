@@ -172,34 +172,71 @@ a sub-detail of the hub's provider records).
 
 ---
 
-## Summary of the proposals
+## Decided (from the review conversation)
 
-- **RENAME**: drop the inconsistent `/hub/` prefix; one prefix `/v1/` (classes 2-7).
-- **MERGE (1 real duplicate)**: `POST /v1/harnesses/{id}/enable|disable` == the `/hub/`
-  twin; keep one.
-- **MOVE**: `registry`, `catalog` -> the plugins class; `openapi.json` -> the status class;
-  `providers/models/list` -> `/v1/models` (class 10).
-- **REMOVE A ROUTE (internal, not user-facing)**: `plugins/orphans` - see class 3.
-- **RENAME a verb out of a path**: drop `list` where it is a verb (now moot for models,
-  which moved to `/v1/models`).
-- **ADD DESCRIPTIONS** (6 routes have none): harness enable/disable, `GET /sessions/{id}`,
-  `sessions/{id}/approvals`, `sessions/{id}/artifacts`, `sessions/{id}/cancel`,
-  `/hub/shutdown`.
-- **KEEP** everything else (the harness/hub pairs of models/auth/connections are two
-  different owners, not duplicates).
+- **Drop `/hub/`.** One prefix, `/v1/`. (A breaking contract change; ships on the contract.)
+- **The prefix already forced the duplicates into the open:** once `/hub/` is gone, the
+  "discovery `/v1/harnesses`" and the "management `/v1/hub/harnesses`" collide on one path, and
+  `enable|disable` has two routes on one path. They must become one route each.
+- **`providers` -> `model-providers`.** The system's word is *model provider* (a service
+  serving models); "provider" alone took too much. `/v1/hub/provider-types` ->
+  `/v1/model-providers/types`.
+- **`/v1/models` — three views, three owners, never derived from one another:**
+  - `/v1/models` = the models the HUB manages (its model providers only; NOT a harness's own);
+  - `/v1/harnesses/{id}/models` = the view through that harness (its own + the hub's it reaches);
+  - `/v1/model-providers/{id}/models` = one provider's cached catalog.
+- **`orphans` is not a route.** Leftover manifestless directories are an internal defect
+  (replace is not atomic); fix it internally (atomic replace + sweep transient dirs at boot).
+  The user never sees one.
+- **Actions may be verbs in a path.** A resource can have many actions
+  (`refresh`, `auth`, `logout`, `enable`, `disable`, `prepare`, ...). REST's noun-style is a
+  preference, not a rule; ADR-0009 only says a LONG action returns `202 + Location`, it says
+  nothing about verbs. (This reverses an earlier note in this file.)
+- **Three layers, kept apart (the abstraction the owner stated):**
+  - **plugin** — the *general* plugin logic only: lifecycle, version, install/uninstall,
+    metadata. It does NOT implement each plugin's specifics and does NOT leak their detail.
+    `enabled` (on/off) is here too, as plugin lifecycle.
+  - **extensions** — a top-level mechanism, but each is a **harness-specific** extension.
+    Being specific, a bare id is meaningless across harnesses, so it is **private** and lives
+    under the harness id: `/v1/harnesses/{id}/extensions` (list + manage, harness context).
+  - **skills** — a top-level mechanism, meant to work **across all harnesses**; it has **no
+    harness id context**: `/v1/skills`. Content comes from a plugin, but the mechanism and its
+    entry point are top-level.
+- **plugin API scope**: plugin lifecycle, version, install/uninstall, metadata, enable/disable.
+  Not extensions, not skills, not provider records.
 
-## Open questions (need your call before I write the final route docs)
+## Open questions (the ones still real)
 
-**(a) Action-shaped paths.** `registry/refresh` and `model-providers/{id}/models/refresh` are
-verbs. ADR-0009 says a long action should be `202 + Location` on a resource, not a verb path.
-Options: keep `POST /v1/<resource>/refresh` (clear, common), or model it as
-`POST /v1/<resource>` (the resource refreshes itself). Your call.
+**(o1) skills' granularity: harness-based, session-based, or workspace-based?**
+Today a skill's *selection* is stored on the **harness row** (`harnessRow.skills`: null = all,
+or an id list) and installed into `<DATA_DIR>/agents/<harness>/skills` before the harness
+process starts — so it is **per-harness** today: every session of a harness shares one set.
+But `GET /v1/sessions/{id}/skills` reports **per session** (it asks the harness's own
+`skills/list` with a sid). So selection (harness) and report (session) do not have the same
+granularity.
 
-**(b) The harness registry's path.** The hub's registry row and the harness's own answers
-share `/v1/harnesses`. Proposal: keep the harness's own surface at `/v1/harnesses/{id}/...`
-and put the registry at a distinct sub-path. Which name - `/v1/harnesses` for the registry
-and `/v1/harnesses/{id}/owned` for the rest, or another split? Your call.
+The question: should a skill set be chosen **per session** or **per workspace** (a session has
+a `cwd`), so different sessions/projects can carry different skills? This is a product
+granularity decision, not derivable from the code. **Blocked on:** whether the harness
+adapters (pi, dsh) can even *do* workspace-based skills (see o2).
 
-**(c) The `/v1/` prefix removal is a breaking contract change** (every consumer). Do it now
-with the model change, or as its own change after? (It can be both: the rename is a contract
-change that ships on the contract.)
+**(o2) can the adapters do workspace-based skills?** To be checked in the adapter sources
+(pi, dsh): does the harness read skills from a per-session/per-workspace location, or only
+from one directory fixed at process start? If only the latter, workspace-based is not
+achievable without a restart-per-workspace.
+
+**(o3) extensions/skills "selection" ownership.** With the three layers above: extensions'
+selection is harness-scoped (`/v1/harnesses/{id}/extensions`). If skills become
+session/workspace-based (o1), their selection moves to the session/workspace, not the harness
+row. Pending o1/o2.
+
+**(o4) harness registry vs harness runtime answers.** `/v1/harnesses` today mixes the hub's
+registry row (enabled/extensions/skills) with the harness's own runtime answers
+(models/presets/tools/auth/connections). With `enabled` going to the plugin lifecycle and
+`extensions` to `/v1/harnesses/{id}/extensions` and `skills` to its own mechanism, what is
+left of the registry row, and does `GET /v1/harnesses` still exist (or is "which harnesses"
+just `GET /v1/plugins?type=harness-adapter`)? Pending the above.
+
+**(o5) anonymous discovery.** `/v1/harnesses` is today the only token-free route. Once it
+becomes the management view (o4), does it stay token-free, or does it require the token like
+everything else (discovery on loopback needs no anonymity)? A contract change either way.
