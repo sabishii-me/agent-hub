@@ -286,6 +286,35 @@ Facts, from the adapters:
 
 
 
+**(o6 analysis - from the harness sources, read directly.)**
+
+The harnesses the plugins drive are npm packages; their real discovery rules were read from
+the packed packages (pi `@earendil-works/pi-coding-agent`, jouzu `jouzu`, dsh `@deepseek-ai/dsh`):
+
+- **pi** (`dist/cli/args.js`) has explicit-path flags:
+  `--extension, -e <path>` (repeatable), `--no-extensions, -ne` (disable discovery; explicit
+  `-e` still counts), `--skill <path>` (repeatable), `--no-skills, -ns`. So **pi can load
+  extensions and skills from ANY absolute path with discovery off** - the workspace is a
+  CHOICE the adapter makes, not a pi requirement.
+- **jouzu** runs the same shape (`--extension <path>` / `--skill <path>` from its resolved
+  paths).
+- **dsh** already keeps extensions in `$DSH_HOME/profiles/...` (outside the workspace); its
+  workspace root is the invoking directory and its skills come from `DSH_AGENTS_HOME/skills`.
+
+**So the exposure is the hub's own choice, not a harness limit.** pi and jouzu adapters place
+extensions into `<cwd>/.pi/extensions` and pass `--approve`, which puts the GATING extension
+inside the agent's writable workspace. The fix is entirely adapter-side and requires no harness
+change:
+
+1. place extensions and skills in a **hub-owned directory outside the workspace**;
+2. launch with **discovery off** and explicit paths:
+   pi: `-ne -e <hub>/ext/<id> ...` and `--no-skills --skill <hub>/skills`;
+   jouzu: the same; dsh: already outside;
+3. the agent then cannot add or edit a trust-bearing extension (discovery off, paths outside),
+   and skills are handed from a directory it cannot write;
+4. the approval gate rests on the adapter (it already sees every tool call) plus an extension
+   loaded from the hub-owned dir - never on a file in the workspace.
+
 **(o5) anonymous discovery.** `/v1/harnesses` is today the only token-free route. Once it
 becomes the management view (o4), does it stay token-free, or does it require the token like
 everything else (discovery on loopback needs no anonymity)? A contract change either way.
