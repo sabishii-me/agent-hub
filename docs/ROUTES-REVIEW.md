@@ -253,13 +253,38 @@ registry row (enabled/extensions/skills) with the harness's own runtime answers
 left of the registry row, and does `GET /v1/harnesses` still exist (or is "which harnesses"
 just `GET /v1/plugins?type=harness-adapter`)? Pending the above.
 
-**(o6) the agent must not be able to rewrite its skills.** A skill today is a mutable
-directory on disk, and the harness is pointed at the installed copy
-(`<DATA_DIR>/agents/<harnessId>/skills`). If the harness process can write there, the agent can
-edit its own skills - the hub stops being the single source of truth (ADR-0001) and a session
-silently changes what later sessions read. The question: how do we hand skills to the harness
-**read-only**, or hand a copy it cannot write back to the store? (This interacts with o1: a
-per-session/per-workspace install is one more copy, and the same write-protection question.)
+**(o6) SECURITY: the agent must not be able to rewrite its skills, and must not be able to
+reach its extensions.** (Owner: skills must not be rewritable; extensions must not be directly
+accessible to the agent - today the agent can edit an extension and **bypass approval gating**.)
+
+Facts, from the adapters:
+
+- **Skills** are installed to the hub's data dir (`<DATA_DIR>/agents/<id>/skills`, outside the
+  agent's workspace) but nothing enforces read-only. If the harness process can write there, a
+  session silently changes what later sessions read (ADR-0001 broken).
+- **Extensions are placed into the AGENT'S WORKSPACE** for pi and jouzu
+  (`<cwd>/.pi/extensions/`, because that is where pi/jouzu discover them). The agent's own file
+  tools can edit them. That is the bypass: the gating extension can be edited to stop asking.
+- The **approval DECISION** already flows through the adapter/hub (pi: `extension_ui_request`
+  -> `approval_need` -> the hub answers); what is editable is the **GATING** (which tool calls
+  ask), which is an extension in the workspace.
+- **dsh** places extensions into `$DSH_HOME` (hub data dir, not the workspace), which is
+  already outside the workspace - the two pi-family adapters are the exposure.
+
+**Feasible, because the adapters are ours.** Directions (a decision is needed):
+
+1. **The enforcement point must be the adapter, not a workspace extension.** The adapter
+   already sees every tool call; the gate that decides "ask the hub" belongs there, where the
+   agent cannot edit it. A trust-bearing extension must not be the gate.
+2. **Extensions the agent must not touch must live outside the workspace**, or be re-placed
+   from the hub's copy before they are trusted (so an edit does not survive), or be
+   OS-read-only to the agent. For pi/jouzu this needs the harness to load an extension from
+   outside `<cwd>/.pi/extensions`, or a re-verify-and-replace before each turn.
+3. **Skills are handed read-only**, or as content the harness cannot write back (which is what
+   the `skills://` mechanism already models: read-only, versioned by sha256, no paths - but
+   nothing consumes it today and the harnesses read a directory, not the protocol).
+
+
 
 **(o5) anonymous discovery.** `/v1/harnesses` is today the only token-free route. Once it
 becomes the management view (o4), does it stay token-free, or does it require the token like
