@@ -22,6 +22,10 @@ pub struct ProviderRow {
     pub revision: u64,
     /// The keychain reference for this provider's credential, when one is stored.
     pub secret_ref: Option<String>,
+    /// A fresh id minted on every INSERT: a row read before a delete+recreate of
+    /// the same id has a DIFFERENT incarnation, so a stale save is refused
+    /// (TASK-048 F2: an old refresh cannot overwrite a rebuilt provider).
+    pub incarnation: String,
     /// The cached catalog: `{fetchedAt, revision, models}` or null.
     pub catalog: Option<serde_json::Value>,
 }
@@ -38,6 +42,7 @@ CREATE TABLE IF NOT EXISTS providers (
   enabled_model_ids     TEXT NOT NULL DEFAULT '[]',
   revision              INTEGER NOT NULL DEFAULT 1,
   secret_ref            TEXT,
+  incarnation           TEXT NOT NULL DEFAULT '',
   catalog               TEXT
 );
 "#;
@@ -46,7 +51,7 @@ impl crate::Db {
     pub fn list_providers(&self) -> Result<Vec<ProviderRow>, DbError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, label, url, api, provider_type, provider_type_version, declarations, enabled_model_ids, revision, secret_ref, catalog FROM providers ORDER BY id",
+            "SELECT id, label, url, api, provider_type, provider_type_version, declarations, enabled_model_ids, revision, secret_ref, incarnation, catalog FROM providers ORDER BY id",
         )?;
         let rows = stmt
             .query_map([], |r| Ok(read_row(r)))?
@@ -58,7 +63,7 @@ impl crate::Db {
         let conn = self.lock();
         Ok(conn
             .query_row(
-                "SELECT id, label, url, api, provider_type, provider_type_version, declarations, enabled_model_ids, revision, secret_ref, catalog FROM providers WHERE id = ?1",
+                "SELECT id, label, url, api, provider_type, provider_type_version, declarations, enabled_model_ids, revision, secret_ref, incarnation, catalog FROM providers WHERE id = ?1",
                 params![id],
                 |r| Ok(read_row(r)),
             )
@@ -75,24 +80,42 @@ impl crate::Db {
         if exists {
             return Err(DbError::Conflict(format!("provider `{}` already exists", p.id)));
         }
-        write_provider(&conn, p)?;
+        let mut p = p.clone();
+        p.incarnation = new_incarnation();
+        write_provider(&conn, &p)?;
         Ok(())
     }
 
+    /// Save a provider row, **guarded by its incarnation**: the UPDATE matches
+    /// only when the row currently has the SAME incarnation the caller read. A
+    /// row read before a delete+recreate of the same id has a different
+    /// incarnation and the save is refused with `Conflict` (TASK-048 F2), so a
+    /// stale object can never overwrite a rebuilt one.
     pub fn save_provider(&self, p: &ProviderRow) -> Result<(), DbError> {
         let conn = self.lock();
         let n = conn.execute(
-            "UPDATE providers SET label=?2, url=?3, api=?4, provider_type=?5, provider_type_version=?6, declarations=?7, enabled_model_ids=?8, revision=?9, secret_ref=?10, catalog=?11 WHERE id=?1",
+            "UPDATE providers SET label=?2, url=?3, api=?4, provider_type=?5, provider_type_version=?6, declarations=?7, enabled_model_ids=?8, revision=?9, secret_ref=?10, catalog=?11 WHERE id=?1 AND incarnation=?12",
             params![
                 p.id, p.label, p.url, p.api, p.provider_type, p.provider_type_version,
                 serde_json::to_string(&p.declarations).unwrap_or_else(|_| "{}".into()),
                 serde_json::to_string(&p.enabled_model_ids).unwrap_or_else(|_| "[]".into()),
                 p.revision as i64, p.secret_ref,
                 p.catalog.as_ref().map(|c| serde_json::to_string(c).unwrap_or_default()),
+                p.incarnation,
             ],
         )?;
         if n == 0 {
-            return Err(DbError::NotFound(p.id.clone()));
+            // Either the id is gone or the incarnation changed: report a conflict
+            // so the caller re-reads rather than clobbering.
+            let exists: bool = conn
+                .query_row("SELECT 1 FROM providers WHERE id = ?1", params![p.id], |_| Ok(true))
+                .optional()?
+                .unwrap_or(false);
+            return Err(if exists {
+                DbError::Conflict(format!("provider `{}` changed since it was read", p.id))
+            } else {
+                DbError::NotFound(p.id.clone())
+            });
         }
         Ok(())
     }
@@ -110,7 +133,7 @@ impl crate::Db {
 fn read_row(r: &rusqlite::Row<'_>) -> ProviderRow {
     let decl: String = r.get(6).unwrap_or_else(|_| "{}".into());
     let enabled: String = r.get(7).unwrap_or_else(|_| "[]".into());
-    let catalog: Option<String> = r.get(10).unwrap_or(None);
+    let catalog: Option<String> = r.get(11).unwrap_or(None);
     ProviderRow {
         id: r.get(0).unwrap_or_default(),
         label: r.get(1).unwrap_or(None),
@@ -122,19 +145,20 @@ fn read_row(r: &rusqlite::Row<'_>) -> ProviderRow {
         enabled_model_ids: serde_json::from_str(&enabled).unwrap_or_default(),
         revision: r.get::<_, i64>(8).unwrap_or(1) as u64,
         secret_ref: r.get(9).unwrap_or(None),
+        incarnation: r.get(10).unwrap_or_default(),
         catalog: catalog.and_then(|c| serde_json::from_str(&c).ok()),
     }
 }
 
 fn write_provider(conn: &Connection, p: &ProviderRow) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO providers (id, label, url, api, provider_type, provider_type_version, declarations, enabled_model_ids, revision, secret_ref, catalog)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO providers (id, label, url, api, provider_type, provider_type_version, declarations, enabled_model_ids, revision, secret_ref, incarnation, catalog)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             p.id, p.label, p.url, p.api, p.provider_type, p.provider_type_version,
             serde_json::to_string(&p.declarations).unwrap_or_else(|_| "{}".into()),
             serde_json::to_string(&p.enabled_model_ids).unwrap_or_else(|_| "[]".into()),
-            p.revision as i64, p.secret_ref,
+            p.revision as i64, p.secret_ref, p.incarnation,
             p.catalog.as_ref().map(|c| serde_json::to_string(c).unwrap_or_default()),
         ],
     )?;
@@ -163,13 +187,18 @@ impl crate::Db {
     /// Record an in-flight credential transition (delete a pre-existing op with
     /// the same provider first, so one provider has at most one in-flight op).
     pub fn begin_provider_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<String, DbError> {
-        let conn = self.lock();
+        let mut conn = self.conn.lock().expect("db mutex");
+        // ONE transaction: replacing the previous entry and inserting the new one
+        // either both happen or neither does, so a failure cannot silently drop
+        // the ownership of an earlier unfinished operation (TASK-048 F1).
+        let tx = conn.transaction()?;
         let id = format!("{provider}:{op}");
-        conn.execute("DELETE FROM provider_ops WHERE provider = ?1", params![provider])?;
-        conn.execute(
+        tx.execute("DELETE FROM provider_ops WHERE provider = ?1", params![provider])?;
+        tx.execute(
             "INSERT INTO provider_ops (id, provider, op, secret_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, provider, op, secret_ref, crate::now_utc()],
         )?;
+        tx.commit()?;
         Ok(id)
     }
 
@@ -242,5 +271,82 @@ mod instance_tests {
         assert_eq!(a, b, "the instance id must persist across opens");
         assert_eq!(a.len(), 32);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A fresh incarnation id for a newly inserted provider.
+fn new_incarnation() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 8];
+    rand::rng().fill_bytes(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Additive upgrade: an existing `providers` table gains `incarnation` (empty for
+/// rows that predate it; the next save mints one through a re-read).
+pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let exists: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='providers'", [], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !exists {
+        return Ok(());
+    }
+    let has: bool = conn
+        .prepare("PRAGMA table_info(providers)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|n| n == "incarnation");
+    if !has {
+        conn.execute("ALTER TABLE providers ADD COLUMN incarnation TEXT NOT NULL DEFAULT ''", [])?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod incarnation_tests {
+    use super::*;
+    use crate::Db;
+
+    fn row(id: &str, url: &str) -> ProviderRow {
+        ProviderRow {
+            id: id.into(),
+            label: None,
+            url: Some(url.into()),
+            api: None,
+            provider_type: None,
+            provider_type_version: None,
+            declarations: serde_json::json!({}),
+            enabled_model_ids: vec![],
+            revision: 1,
+            secret_ref: None,
+            incarnation: String::new(),
+            catalog: None,
+        }
+    }
+
+    /// A row read before a delete+recreate of the same id carries a different
+    /// incarnation, so its save is refused (F2: no stale overwrite).
+    #[test]
+    fn a_stale_incarnation_cannot_overwrite_a_rebuilt_provider() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_provider(&row("p", "old")).unwrap();
+        let stale = db.provider("p").unwrap().unwrap();
+        db.delete_provider("p").unwrap();
+        db.insert_provider(&row("p", "new")).unwrap();
+
+        // The stale object (old incarnation) must not overwrite the rebuilt one.
+        let mut bad = stale.clone();
+        bad.url = Some("clobbered".into());
+        assert!(matches!(db.save_provider(&bad), Err(DbError::Conflict(_))));
+
+        let current = db.provider("p").unwrap().unwrap();
+        assert_eq!(current.url.as_deref(), Some("new"), "the rebuilt row is intact");
+
+        // A save with the CURRENT row succeeds.
+        let mut ok = current.clone();
+        ok.revision += 1;
+        db.save_provider(&ok).unwrap();
+        assert_eq!(db.provider("p").unwrap().unwrap().revision, 2);
     }
 }

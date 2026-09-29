@@ -84,3 +84,13 @@ plaintext token is used to cross it.
   settled `interrupted` (not `cancelled`); a delivered-but-unconfirmed abort is
   settled by the prompt's return.
 - The prompt no longer holds the lifecycle lock.
+
+## Review follow-up (TASK-048 REVIEW-ed896102)
+
+- Admission is one atomic decision; a refused turn leaves no `admitted` row, and the
+  real-hub race test asserts accepted == new rows (F4/evidence).
+- Cancel: intent recorded; no prompt dispatched for a cancelled/settled turn; an
+  abort SEND failure does NOT release busy; the terminal is the prompt's return;
+  stalled cancels are settled `interrupted` at boot (F4).
+- `settle_turn` retries a transient DB failure and publishes only on a confirmed
+  write.

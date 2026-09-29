@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider_resolver = move |id: &str| -> Result<agent_hub_sessions::runtime::Grant, String> {
         let g = resolver_providers
             .resolve_grant(id)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{}|{}", e.code(), e))?;
         Ok(agent_hub_sessions::runtime::Grant {
             connection_id: g.connection_id,
             value: g.value,
@@ -174,7 +174,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {}
         Err(e) => tracing::error!(error = %e, "session reconciliation failed"),
     }
-    let session_state = SessionsState::new_shared(sessions, errors.clone());
+    let session_state = SessionsState::new_shared(sessions.clone(), errors.clone());
+    // A cancel whose prompt never returned must not hold `busy` forever.
+    tokio::spawn(async move {
+        match sessions.reconcile_stalled_cancels().await {
+            Ok(n) if n > 0 => tracing::info!(stalled = n, "settled stalled cancels as interrupted"),
+            Ok(_) => {}
+            Err(e) => tracing::error!(error = %e, "stalled-cancel reconciliation failed"),
+        }
+    });
 
 
     // Skills: the hub stores the bytes and installs the effective set per harness.

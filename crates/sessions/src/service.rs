@@ -34,6 +34,11 @@ pub enum SessionError {
     Start(String),
     #[error("the abort could not be delivered: {0}")]
     AbortFailed(String),
+    /// A provider resolution failure with its OWN contract code (e.g.
+    /// `provider_unauthorized`), so the identity survives to the response
+    /// (TASK-048 F5).
+    #[error("{message}")]
+    Provider { code: String, message: String },
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
     #[error("io: {0}")]
@@ -41,6 +46,18 @@ pub enum SessionError {
 }
 
 impl SessionError {
+    /// Build a provider error from the resolver's typed string. The resolver
+    /// returns `<code>|<message>` so the contract identity is preserved.
+    pub fn provider(raw: String) -> Self {
+        match raw.split_once('|') {
+            Some((code, message)) => SessionError::Provider {
+                code: code.to_string(),
+                message: message.to_string(),
+            },
+            None => SessionError::Validation(raw),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             SessionError::NotFound(_) => "unknown_session",
@@ -48,6 +65,18 @@ impl SessionError {
             SessionError::Validation(_) => "validation_failed",
             SessionError::Unsupported(_) => "unsupported",
             SessionError::AbortFailed(_) => "abort_failed",
+            SessionError::Provider { code, .. } => {
+                // A leaked &'static is fine here: the codes are a closed set.
+                match code.as_str() {
+                    "provider_unauthorized" => "provider_unauthorized",
+                    "provider_not_found" => "provider_not_found",
+                    "provider_catalog_failed" => "provider_catalog_failed",
+                    "revision_conflict" => "revision_conflict",
+                    "catalog_not_loaded" => "catalog_not_loaded",
+                    "not_implemented" => "not_implemented",
+                    _ => "validation_failed",
+                }
+            }
             SessionError::Conflict(_) => "idempotency_conflict",
             SessionError::Start(_) => "adapter_crash",
             SessionError::Db(_) | SessionError::Io(_) => "internal_error",
@@ -71,6 +100,12 @@ pub struct SessionView {
     pub model_id: Option<String>,
     #[serde(rename = "appliedModel")]
     pub applied_model: Option<String>,
+    /// The provider the adapter CONFIRMED applied (`applied.modelProviderId`).
+    #[serde(rename = "appliedProvider", skip_serializing_if = "Option::is_none")]
+    pub applied_provider: Option<String>,
+    /// The native route the adapter resolved (`applied.connectionId`).
+    #[serde(rename = "appliedRoute", skip_serializing_if = "Option::is_none")]
+    pub applied_route: Option<String>,
     pub plan: Option<bool>,
     pub review: Option<bool>,
     pub cwd: Option<String>,
@@ -229,9 +264,15 @@ impl Sessions {
         let resolver = self.provider_resolver.as_ref().ok_or_else(|| {
             SessionError::Unsupported("this hub has no provider resolver; a managed provider is refused".into())
         })?;
-        let mut grant = resolver(pid).map_err(SessionError::Validation)?;
+        let mut grant = resolver(pid).map_err(SessionError::provider)?;
         grant.requested_model_id = model_id.map(str::to_string);
+        // The owning contract (`adapter-v1:386`) selects the provider by
+        // `config.connectionId`; the model is selected WITHIN that route by
+        // `config.model`. The adapter then reports `applied.modelProviderId` (the
+        // requested identity) and `applied.connectionId` (its resolved native
+        // route).
         let mut config = serde_json::json!({
+            "connectionId": grant.connection_id,
             "modelProviderId": grant.connection_id,
         });
         if let Some(m) = model_id {
@@ -307,6 +348,8 @@ impl Sessions {
             model_provider_id: req.model_provider_id.clone(),
             model_id: req.model_id.clone(),
             applied_model: None,
+            applied_provider: None,
+            applied_route: None,
             plan: None,
             review: None,
             cwd: Some(cwd),
@@ -407,6 +450,8 @@ impl Sessions {
                 // not the request. Recorded so a turn's model is read from
                 // reality, never assumed.
                 row.applied_model = process.applied_model.clone();
+                row.applied_provider = process.applied_provider.clone();
+                row.applied_route = process.applied_route.clone();
                 row.start_error = None;
                 row.updated_at = now_utc();
                 if let Err(e) = self.db.update_session(&row) {
@@ -522,6 +567,8 @@ impl Sessions {
         row.status = "active".into();
         row.native_ref = Some(process.native_ref.clone());
         row.applied_model = process.applied_model.clone();
+        row.applied_provider = process.applied_provider.clone();
+        row.applied_route = process.applied_route.clone();
         row.updated_at = now_utc();
         self.db.update_session(&row)?;
         let view = self.view(&row);
@@ -555,6 +602,8 @@ impl Sessions {
             model_provider_id: row.model_provider_id.clone(),
             model_id: row.model_id.clone(),
             applied_model: row.applied_model.clone(),
+            applied_provider: row.applied_provider.clone(),
+            applied_route: row.applied_route.clone(),
             plan: row.plan,
             review: row.review,
             cwd: row.cwd.clone(),
@@ -679,14 +728,25 @@ impl Sessions {
             self.settle_turn(&turn_id, "failed", Some("the session has no running process")).await;
             return;
         }
-        // `running` is a NON-terminal move: if a terminal was already committed
-        // (a cancel raced us) the guarded update is a no-op.
-        if self.db.set_turn_state(&turn_id, "running").unwrap_or(false) {
-            self.bus.publish(
-                "turn.running",
-                serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
-            );
+        // Dispatch is a single decision with the cancel intent: if the turn is
+        // already terminal (a cancel settled it) or was cancelled before the
+        // prompt was sent, do NOT dispatch - a prompt sent for a cancelled turn is
+        // exactly the race that used to leave an unconfirmed stop (TASK-048 F4).
+        let already_cancelled = self.cancelled.lock().await.contains(&turn_id);
+        if already_cancelled {
+            self.settle_turn(&turn_id, "cancelled", None).await;
+            return;
         }
+        // `running` is a NON-terminal move: if a terminal was already committed
+        // (a cancel raced us) the guarded update is a no-op, and `false` means the
+        // turn was settled - do not dispatch.
+        if !self.db.set_turn_state(&turn_id, "running").unwrap_or(false) {
+            return;
+        }
+        self.bus.publish(
+            "turn.running",
+            serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
+        );
         let params = serde_json::json!({
             "sid": session_id,
             "message": text,
@@ -715,15 +775,55 @@ impl Sessions {
     /// SQL `WHERE ended IS NULL`). Only the call that performed the settle
     /// publishes, so the streamed fact and the stored row cannot disagree.
     async fn settle_turn(&self, turn_id: &str, ended: &str, cause: Option<&str>) {
-        let settled = self.db.end_turn(turn_id, ended, &now_utc()).unwrap_or(false);
-        if !settled {
-            return;
+        // Commit the terminal in the DATABASE first, retrying a transient failure
+        // so a known terminal is not left un-persisted (TASK-048 F4). We publish
+        // ONLY after the database confirms, so the stream never announces a fact
+        // the store does not hold.
+        let mut last_err = None;
+        for attempt in 0..5u32 {
+            match self.db.end_turn(turn_id, ended, &now_utc()) {
+                Ok(true) => {
+                    self.settled.lock().await.insert(turn_id.to_string());
+                    self.bus.publish(
+                        "turn.ended",
+                        serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
+                    );
+                    return;
+                }
+                // Already settled by a racing winner: nothing to publish.
+                Ok(false) => return,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1))).await;
+                }
+            }
         }
-        self.settled.lock().await.insert(turn_id.to_string());
-        self.bus.publish(
-            "turn.ended",
-            serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
-        );
+        // The database never accepted the terminal. Do NOT publish a lie; leave
+        // the turn visibly un-settled so reconciliation/boot can finish it.
+        if let Some(e) = last_err {
+            tracing::error!(turn = %turn_id, ended, error = %e, "the turn terminal could not be persisted; left for reconciliation");
+        }
+    }
+
+    /// Reconcile a turn whose cancel was requested but whose prompt never
+    /// returned a terminal (a delivered-but-unconfirmed abort, or a crash). The
+    /// turn is settled `interrupted` - the honest answer when we cannot prove it
+    /// stopped - so `busy` is released deliberately, not by a send failure
+    /// (TASK-048 F4).
+    pub async fn reconcile_stalled_cancels(&self) -> Result<usize, SessionError> {
+        let mut n = 0;
+        for row in self.db.sessions_with_cancelling_turns()? {
+            if self.runtime.is_running(&row) {
+                continue; // still alive: let run_turn settle it
+            }
+            if let Some(t) = self.db.active_turn(&row)? {
+                if t.state == "cancelling" {
+                    self.settle_turn(&t.id, "interrupted", Some("the cancel was not confirmed")).await;
+                    n += 1;
+                }
+            }
+        }
+        Ok(n)
     }
 
     pub fn list_turns(&self, session_id: &str) -> Result<Vec<TurnView>, SessionError> {
@@ -747,21 +847,28 @@ impl Sessions {
                     .ok_or_else(|| SessionError::Validation("the session has no turns".into()));
             }
         };
+        // Record the cancel INTENT durably (before the abort), so a prompt that has
+        // not yet been dispatched sees it (run_turn) and a restart can reconcile.
+        // `cancelling` is a NON-terminal move: the busy state is NOT released.
         self.cancelled.lock().await.insert(active.id.clone());
-        // `cancelling` is a non-terminal move (guarded: a terminal already
-        // committed by a late prompt result is not resurrected).
         let _ = self.db.set_turn_state(&active.id, "cancelling");
-        // Abort delivery is CHECKED, not swallowed: a request that could not be
-        // SENT is `abort-failed` (adapter-v1:385). A delivered-but-unconfirmed
-        // abort is NOT settled here - `run_turn` settles it when the prompt
-        // returns (the adapter's `turn_end` is the proof it stopped).
+        // Deliver the abort. A send failure does NOT settle the turn: the prompt
+        // may still be running, so releasing busy would be a lie. The turn stays
+        // held; the caller sees `abort-failed` and can retry. The terminal is
+        // decided by the prompt's own return, or by reconciliation (TASK-048 F4).
         if let Err(e) = self
             .runtime
             .request(session_id, "session/abort", serde_json::json!({ "sid": session_id }))
             .await
         {
-            let _ = self.db.end_turn(&active.id, "interrupted", &now_utc());
-            return Err(SessionError::AbortFailed(e.to_string()));
+            let t = self
+                .db
+                .turn(&active.id)?
+                .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+            return Err(SessionError::AbortFailed(format!(
+                "{e}; the turn is still held (state {}), retry cancel",
+                t.state
+            )));
         }
         let t = self
             .db

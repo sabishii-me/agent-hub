@@ -14,6 +14,10 @@ pub struct SessionRow {
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
     pub applied_model: Option<String>,
+    /// The provider identity the adapter CONFIRMED (`applied.modelProviderId`).
+    pub applied_provider: Option<String>,
+    /// The native route the adapter resolved (`applied.connectionId`).
+    pub applied_route: Option<String>,
     pub plan: Option<bool>,
     pub review: Option<bool>,
     pub cwd: Option<String>,
@@ -52,6 +56,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   model_provider_id      TEXT,
   model_id               TEXT,
   applied_model          TEXT,
+  applied_provider       TEXT,
+  applied_route          TEXT,
   plan                   INTEGER,
   review                 INTEGER,
   cwd                    TEXT,
@@ -103,10 +109,10 @@ impl crate::Db {
 
     fn insert_session_tx(conn: &Connection, s: &SessionRow) -> Result<(), rusqlite::Error> {
         conn.execute(
-            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
-                s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model,
+                s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.cwd, s.title,
                 s.status, s.created_at, s.updated_at, s.deleted as i64,
                 s.forked_from_session, s.forked_from_turn, s.native_ref, s.start_error
@@ -122,22 +128,24 @@ impl crate::Db {
             model_provider_id: r.get(2)?,
             model_id: r.get(3)?,
             applied_model: r.get(4)?,
-            plan: r.get::<_, Option<i64>>(5)?.map(|v| v != 0),
-            review: r.get::<_, Option<i64>>(6)?.map(|v| v != 0),
-            cwd: r.get(7)?,
-            title: r.get(8)?,
-            status: r.get(9)?,
-            created_at: r.get(10)?,
-            updated_at: r.get(11)?,
-            deleted: r.get::<_, i64>(12)? != 0,
-            forked_from_session: r.get(13)?,
-            forked_from_turn: r.get(14)?,
-            native_ref: r.get(15)?,
-            start_error: r.get(16)?,
+            applied_provider: r.get(5)?,
+            applied_route: r.get(6)?,
+            plan: r.get::<_, Option<i64>>(7)?.map(|v| v != 0),
+            review: r.get::<_, Option<i64>>(8)?.map(|v| v != 0),
+            cwd: r.get(9)?,
+            title: r.get(10)?,
+            status: r.get(11)?,
+            created_at: r.get(12)?,
+            updated_at: r.get(13)?,
+            deleted: r.get::<_, i64>(14)? != 0,
+            forked_from_session: r.get(15)?,
+            forked_from_turn: r.get(16)?,
+            native_ref: r.get(17)?,
+            start_error: r.get(18)?,
         })
     }
 
-    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
+    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, DbError> {
         let conn = self.lock();
@@ -156,9 +164,9 @@ impl crate::Db {
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, plan=?5, review=?6, title=?7, status=?8, updated_at=?9, native_ref=?10, start_error=?11 WHERE id=?1",
+            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, plan=?7, review=?8, title=?9, status=?10, updated_at=?11, native_ref=?12, start_error=?13 WHERE id=?1",
             params![
-                s.id, s.model_provider_id, s.model_id, s.applied_model,
+                s.id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.title, s.status, s.updated_at,
                 s.native_ref, s.start_error
             ],
@@ -394,6 +402,14 @@ impl crate::Db {
         Ok(n > 0)
     }
 
+    /// Session ids that have a `cancelling` turn (for the stalled-cancel sweep).
+    pub fn sessions_with_cancelling_turns(&self) -> Result<Vec<String>, DbError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT DISTINCT session_id FROM turns WHERE state = 'cancelling' AND ended IS NULL")?;
+        let rows = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// A turn that was admitted but never reached the adapter (its detached start
     /// failed) is reconciled to `failed` so it does not hold the session busy.
     pub fn fail_admitted_turn(&self, id: &str, reason: &str) -> Result<bool, DbError> {
@@ -440,6 +456,8 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // Sessions columns added after the first release.
     add("sessions", "native_ref", "TEXT")?;
     add("sessions", "start_error", "TEXT")?;
+    add("sessions", "applied_provider", "TEXT")?;
+    add("sessions", "applied_route", "TEXT")?;
     add("turns", "intent", "TEXT NOT NULL DEFAULT ''")?;
     Ok(())
 }
@@ -491,6 +509,8 @@ mod turn_admission_tests {
             model_provider_id: None,
             model_id: None,
             applied_model: None,
+            applied_provider: None,
+            applied_route: None,
             plan: None,
             review: None,
             cwd: None,
@@ -561,5 +581,54 @@ mod turn_admission_tests {
         db.admit_turn("s1", "k1", "turn:a", "t1").unwrap();
         db.end_turn("t1", "completed", &crate::now_utc()).unwrap();
         assert_eq!(db.admit_turn("s1", "k2", "turn:b", "t2").unwrap(), TurnAdmission::Reserved);
+    }
+}
+
+#[cfg(test)]
+mod cancel_hold_tests {
+    use super::*;
+    use crate::Db;
+
+    /// A `cancelling` turn still counts as ACTIVE (`ended IS NULL`): an
+    /// unconfirmed cancel must NOT release busy. It appears in the stalled sweep.
+    #[test]
+    fn a_cancelling_turn_holds_the_session_and_is_swept() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_session(&SessionRow {
+            id: "s1".into(),
+            harness_id: "pi".into(),
+            model_provider_id: None,
+            model_id: None,
+            applied_model: None,
+            applied_provider: None,
+            applied_route: None,
+            plan: None,
+            review: None,
+            cwd: None,
+            title: None,
+            status: "active".into(),
+            created_at: crate::now_utc(),
+            updated_at: crate::now_utc(),
+            deleted: false,
+            forked_from_session: None,
+            forked_from_turn: None,
+            native_ref: None,
+            start_error: None,
+        })
+        .unwrap();
+        db.admit_turn("s1", "k", "turn:a", "t1").unwrap();
+        db.set_turn_state("t1", "cancelling").unwrap();
+
+        // Still active: a new turn is refused (busy held).
+        assert!(matches!(
+            db.admit_turn("s1", "k2", "turn:b", "t2").unwrap(),
+            TurnAdmission::Busy(_)
+        ));
+        assert_eq!(db.sessions_with_cancelling_turns().unwrap(), vec!["s1".to_string()]);
+
+        // After the stalled-cancel sweep settles it, the session frees up.
+        assert!(db.end_turn("t1", "interrupted", &crate::now_utc()).unwrap());
+        assert!(db.sessions_with_cancelling_turns().unwrap().is_empty());
+        assert_eq!(db.admit_turn("s1", "k3", "turn:c", "t3").unwrap(), TurnAdmission::Reserved);
     }
 }

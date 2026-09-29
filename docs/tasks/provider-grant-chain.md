@@ -20,3 +20,12 @@ Verified live (mock provider): session accepted → active, adapter log shows
 `provider="hub-mockp" model="deepseek-flash"`, endpoint received `POST /v1/chat/completions`.
 The mock's reply shape was not a valid turn, so the turn ended `failed` with the
 adapter's reason — honest, and not a fake `completed`.
+
+## Review follow-up (TASK-048 REVIEW-ed896102)
+
+- `config/set` sends the owning contract's `connectionId` selection (+ `model`).
+- The adapter's `applied.modelProviderId` / `applied.connectionId` / `applied.model`
+  are VERIFIED against the request; a mismatch or missing `applied` fails the start.
+- The confirmed identity is persisted (`applied_provider`/`applied_route`/
+  `applied_model`) and shown on the session view; a reopen re-grants and re-checks.
+- Grant errors keep their contract code (`provider_unauthorized`, ...).

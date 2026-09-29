@@ -107,6 +107,7 @@ impl Db {
         // a column added after a database was created must be added explicitly.
         // This is the upgrade path: adding a column that is missing (idempotent).
         sessions::migrate(&conn)?;
+        providers::migrate(&conn)?;
         Ok(Db { conn: std::sync::Mutex::new(conn) })
     }
 

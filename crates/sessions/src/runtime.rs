@@ -32,6 +32,9 @@ pub struct SessionProcess {
     pub applied_provider: Option<String>,
     /// The model the adapter confirmed (from the applied proof, not the request).
     pub applied_model: Option<String>,
+    /// The resolved native route the adapter confirmed (`applied.connectionId` /
+    /// native route), when it reports one.
+    pub applied_route: Option<String>,
 }
 
 impl SessionProcess {
@@ -196,7 +199,36 @@ impl Sessions {
             .or_else(|| applied.get("modelId"))
             .and_then(Value::as_str)
             .map(str::to_string);
+        let applied_route = applied
+            .get("connectionId")
+            .or_else(|| applied.get("nativeRoute"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        // Confirm the adapter applied WHAT WE ASKED (TASK-048 F3). If the adapter
+        // answers a different provider/model - or no `applied` at all - the
+        // session is NOT started: an unconfirmed identity is never recorded as
+        // applied.
+        if let Some(grant) = &spec.grant {
+            let want_provider = Some(grant.requested_provider_id.as_str());
+            let want_model = grant.requested_model_id.as_deref();
+            let ok_provider = applied_provider.as_deref() == want_provider;
+            let ok_model = match want_model {
+                Some(m) => applied_model.as_deref() == Some(m),
+                None => true,
+            };
+            if !applied.is_object() || !ok_provider || !ok_model {
+                let _ = bus.shutdown().await;
+                return Err(StartError::Protocol(format!(
+                    "the adapter did not confirm the requested provider/model: requested provider={:?} model={:?}, applied={}",
+                    want_provider, want_model, applied
+                )));
+            }
+        }
         let applied_out = applied.clone();
+        let applied_provider_out = applied_provider.clone();
+        let applied_model_out = applied_model.clone();
+        let applied_route_out = applied_route.clone();
         let bus_requests = bus.requests.clone();
         let requests_out = bus_requests.clone();
         // Pump this session's notifications into the event bus. Every frame names
@@ -227,6 +259,7 @@ impl Sessions {
             applied,
             applied_provider,
             applied_model,
+            applied_route,
         };
         self.requests.lock().expect("requests").insert(sid.clone(), bus_requests.clone());
         self.running
@@ -242,8 +275,9 @@ impl Sessions {
             bus: None,
             requests: bus_requests,
             applied: applied_out,
-            applied_provider: None,
-            applied_model: None,
+            applied_provider: applied_provider_out,
+            applied_model: applied_model_out,
+            applied_route: applied_route_out,
         })
     }
 

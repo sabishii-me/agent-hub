@@ -22,6 +22,17 @@ pub enum ProviderError {
     NoSecretStore,
     #[error("the stored credential could not be read: {0}")]
     SecretUnreadable(String),
+    /// A managed provider has no stored credential (contract
+    /// `provider_unauthorized`): a distinct identity so a caller can tell "log in
+    /// first" apart from a bad request.
+    #[error("managed provider `{0}` has no stored credential; log in first")]
+    Unauthorized(String),
+    /// The provider changed during a refresh (contract `revision_conflict`).
+    #[error("provider `{0}` changed during refresh; refresh again")]
+    RevisionConflict(String),
+    /// No catalog has been fetched yet (contract `catalog_not_loaded`).
+    #[error("provider `{0}` has no catalog; fetch it first")]
+    CatalogNotLoaded(String),
 }
 
 impl ProviderError {
@@ -34,6 +45,9 @@ impl ProviderError {
             ProviderError::Catalog(_) => "provider_catalog_failed",
             ProviderError::NoSecretStore => "not_implemented",
             ProviderError::SecretUnreadable(_) => "internal_error",
+            ProviderError::Unauthorized(_) => "provider_unauthorized",
+            ProviderError::RevisionConflict(_) => "revision_conflict",
+            ProviderError::CatalogNotLoaded(_) => "catalog_not_loaded",
         }
     }
 
@@ -104,18 +118,24 @@ impl Providers {
         format!("{}:provider-{id}", self.namespace)
     }
 
-    /// Set the derived `token_configured` from the authoritative secret store.
-    /// A read ERROR (not "absent") is surfaced, never read as "not configured"
-    /// (P1/P2: an unreadable credential is not a missing one).
+    /// Set `token_configured` from the authoritative secret store, using the
+    /// row's OWN stored reference. A row with no reference is simply not
+    /// configured: we do NOT fall back to a re-derived key, so a rebuilt provider
+    /// with the same id can never re-acquire a previous instance's credential
+    /// (TASK-048 F1). A read ERROR is surfaced, never read as "absent".
     fn with_configured(&self, mut r: ProviderRecord) -> Result<ProviderRecord, ProviderError> {
-        let has = match self.secrets.get(&self.secret_ref(&r.id)) {
-            Ok(v) => v.is_some(),
-            Err(e) => return Err(ProviderError::SecretUnreadable(e.to_string())),
+        let has = match &r.secret_ref {
+            Some(reference) => self
+                .secrets
+                .get(reference)
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
+                .is_some(),
+            None => false,
         };
         r.token_configured = has;
-        // The stored reference is the row's own record of where its credential
-        // lives; the derived key is the same string (kept in sync above).
-        r.secret_ref = if has { Some(self.secret_ref(&r.id)) } else { None };
+        if !has {
+            r.secret_ref = None;
+        }
         Ok(r)
     }
 
@@ -155,10 +175,12 @@ impl Providers {
             revision: 1,
             catalog: None,
             token_configured: false,
+            incarnation: String::new(),
         }
         .with_defaults();
         // 2. the row first: a duplicate id is refused with no secret written.
-        self.store.create(&record)?;
+        //    Re-read it: the database minted the incarnation our save is guarded by.
+        record = self.store.create(&record)?;
         // 3. the credential, into the keychain only, then PERSIST the reference so
         //    the row actually records where its credential lives.
         if let Some(t) = &req.token {
@@ -180,10 +202,21 @@ impl Providers {
             record.token_configured = true;
             // Persist the reference (so the row owns it, not just the return value).
             if let Err(e) = self.store.save(&record) {
-                // The credential exists but the row does not point at it: remove
-                // the credential rather than leave an unowned secret.
-                let _ = self.secrets.delete(&self.secret_ref(&id));
-                let _ = self.store.delete(&id);
+                // The credential exists but the row does not point at it. Try to
+                // remove it; if THAT fails, the journal entry is KEPT so the next
+                // boot retries - we never claim a clean state we did not reach
+                // (TASK-048 F1).
+                match self.secrets.delete(&self.secret_ref(&id)) {
+                    Ok(()) => {
+                        let _ = self.store.delete(&id);
+                    }
+                    Err(cleanup) => {
+                        tracing::warn!(provider = %id, error = %cleanup, "unowned credential left; journal kept for recovery");
+                        return Err(ProviderError::SecretUnreadable(format!(
+                            "the reference could not be saved ({e}) and the credential could not be removed ({cleanup}); recovery is pending"
+                        )));
+                    }
+                }
                 return Err(ProviderError::Store(e));
             }
         }
@@ -278,11 +311,13 @@ impl Providers {
         self.with_configured(rec)
     }
 
-    pub fn set_selection(
+    pub async fn set_selection(
         &self,
         id: &str,
         enabled: Vec<String>,
     ) -> Result<ProviderRecord, ProviderError> {
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
         let mut rec = self.store.get(id)?;
         if let Some(cat) = &rec.catalog {
             for want in &enabled {
@@ -292,23 +327,46 @@ impl Providers {
             }
         }
         rec.enabled_model_ids = enabled;
-        let has = self.secrets.get(&self.secret_ref(id)).map(|v| v.is_some()).unwrap_or(false);
+        rec.revision += 1;
+        // The reference is the ROW's own (never re-derived from the id).
+        let has = self
+            .secrets
+            .get(&self.secret_ref(id))
+            .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
+            .is_some();
         rec.secret_ref = if has { Some(self.secret_ref(id)) } else { None };
         self.store.save(&rec)?;
         self.with_configured(rec)
     }
 
     pub async fn refresh(&self, id: &str) -> Result<ProviderRecord, ProviderError> {
-        let mut rec = self.store.get(id)?;
-        let url = rec
+        // Hold the provider's operation lock for the whole read-fetch-write, so a
+        // refresh cannot interleave with a patch/delete/create of the same id.
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
+        let read = self.store.get(id)?;
+        let url = read
             .url
             .clone()
             .ok_or_else(|| ProviderError::Validation("this provider has no url".into()))?;
-        let token = self
-            .secrets
-            .get(&self.secret_ref(id))
-            .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
-        let models = catalog::fetch(rec.api.as_deref(), &url, token.as_deref()).await?;
+        // The credential comes from the ROW's reference, not a re-derived key.
+        let token = match &read.secret_ref {
+            Some(r) => self
+                .secrets
+                .get(r)
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?,
+            None => None,
+        };
+        // Network await: the row may change under us (a delete+recreate, a patch).
+        let models = catalog::fetch(read.api.as_deref(), &url, token.as_deref()).await?;
+        // Re-read and REFUSE to write back over a different incarnation/revision:
+        // the object we fetched for is gone (TASK-048 F2). Confirm the reference
+        // is unchanged too, so we never attach a new token's route to an old fetch.
+        let current = self.store.get(id)?;
+        if current.incarnation != read.incarnation || current.revision != read.revision {
+            return Err(ProviderError::RevisionConflict(id.to_string()));
+        }
+        let mut rec = current;
         let previous_enabled = rec.enabled_model_ids.clone();
         let previous_models = rec.catalog.as_ref().map(|c| c.models.clone()).unwrap_or_default();
         let mut merged = models.clone();
@@ -327,10 +385,10 @@ impl Providers {
                 }
             }
         }
+        rec.revision += 1;
         rec.catalog = Some(catalog::catalog_at(merged, rec.revision));
         rec.enabled_model_ids = enabled;
-        let has = self.secrets.get(&self.secret_ref(id)).map(|v| v.is_some()).unwrap_or(false);
-        rec.secret_ref = if has { Some(self.secret_ref(id)) } else { None };
+        // The reference is unchanged (verified above); keep the row's own value.
         self.store.save(&rec)?;
         self.with_configured(rec)
     }
@@ -348,15 +406,11 @@ fn new_id(prefix: &str) -> String {
 
 impl Providers {
     /// The boot sweep: resolve every credential transition that was in flight
-    /// when the process stopped. This is the "recoverable state" half of the
-    /// cross-store story - an interrupted create/delete/patch is finished here
-    /// rather than left as a silent orphan.
-    ///
-    /// * `create`/`patch`/`logout` never completed: the row is the source of truth.
-    ///   If a credential exists but the row does not point at it, drop the
-    ///   credential; if the row points at a credential that does not exist, clear
-    ///   the reference. Either way the journal entry is removed.
-    /// * `delete`: the credential was (probably) removed; finish the row delete.
+    /// when the process stopped. It is **retry-safe**: a journal entry is removed
+    /// ONLY when every necessary step is confirmed. A failure or an unknown state
+    /// (an unreadable credential, an unreadable row) keeps the entry, so the next
+    /// boot tries again and the orphan remains visible. Nothing is ever claimed
+    /// recovered on a guess (TASK-048 F1).
     pub fn recover_pending(&self) {
         let pending = match self.store.pending_ops() {
             Ok(v) => v,
@@ -366,39 +420,69 @@ impl Providers {
             }
         };
         for (provider, op, secret_ref) in pending {
-            let _ = match op.as_str() {
-                "delete" => {
-                    let _ = self.secrets.delete(&secret_ref);
-                    self.store.delete(&provider).map(|_| ()).or_else(|e| match e {
-                        crate::store::StoreError::NotFound(_) => Ok(()),
-                        other => Err(other),
-                    })
-                }
-                _ => {
-                    // A create/patch/logout that did not finish: reconcile the
-                    // credential with the row.
-                    let has = self.secrets.get(&secret_ref).map(|v| v.is_some()).unwrap_or(false);
-                    let row = match self.store.get(&provider) {
-                        Ok(r) => Some(r),
-                        Err(_) => None,
-                    };
-                    match row {
-                        Some(mut r) if has => {
-                            r.secret_ref = Some(secret_ref.clone());
-                            self.store.save(&r).map(|_| ())
-                        }
-                        Some(mut r) => {
-                            r.secret_ref = None;
-                            self.store.save(&r).map(|_| ())
-                        }
-                        // No row, but a credential exists: it is unowned -> remove.
-                        None => self.secrets.delete(&secret_ref).map(|_| ()).map_err(|e| {
-                            crate::store::StoreError::Db(agent_hub_db::DbError::Conflict(e.to_string()))
-                        }),
+            match self.recover_one(&provider, &op, &secret_ref) {
+                Ok(()) => {
+                    if let Err(e) = self.store.finish_op(&provider) {
+                        tracing::warn!(provider, error = %e, "recovery finished but the journal entry could not be cleared");
                     }
                 }
+                Err(e) => {
+                    // Keep the entry: the state is still unresolved and must stay
+                    // visible for the next boot. Never clear the journal on a
+                    // failure.
+                    tracing::warn!(provider, op, error = %e, "provider recovery deferred (journal kept)");
+                }
+            }
+        }
+    }
+
+    /// Resolve ONE journal entry. `Ok` means every necessary step was confirmed;
+    /// any error leaves the entry in place.
+    fn recover_one(&self, provider: &str, op: &str, secret_ref: &str) -> Result<(), ProviderError> {
+        if op == "delete" {
+            // The row is the source of truth after a delete: remove the credential
+            // (a missing one is fine), then the row (a missing one is fine).
+            self.secrets
+                .delete(secret_ref)
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
+            match self.store.delete(provider) {
+                Ok(()) => Ok(()),
+                Err(StoreError::NotFound(_)) => Ok(()),
+                Err(e) => Err(ProviderError::Store(e)),
+            }
+        } else {
+            // create/patch/logout did not finish: reconcile the credential with
+            // the row. An unreadable credential or row is an ERROR, never read as
+            // "absent" (that is what would let a rebuilt id re-acquire an old
+            // secret).
+            let has = self
+                .secrets
+                .get(secret_ref)
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
+                .is_some();
+            let row = match self.store.get(provider) {
+                Ok(r) => Some(r),
+                Err(StoreError::NotFound(_)) => None,
+                Err(e) => return Err(ProviderError::Store(e)),
             };
-            let _ = self.store.finish_op(&provider);
+            match row {
+                Some(mut r) => {
+                    // The row exists: make its ownership match reality.
+                    r.secret_ref = if has { Some(secret_ref.to_string()) } else { None };
+                    self.store.save(&r)?;
+                    Ok(())
+                }
+                None if has => {
+                    // No row but a credential exists: it is unowned. A failed
+                    // delete keeps the journal (retry), it does not pretend the
+                    // orphan is gone.
+                    self.secrets
+                        .delete(secret_ref)
+                        .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
+                    Ok(())
+                }
+                None => Ok(()),
+            }
         }
     }
 }
@@ -430,15 +514,16 @@ impl Providers {
             .url
             .clone()
             .ok_or_else(|| ProviderError::Validation(format!("provider `{id}` has no url")))?;
-        let value = self
-            .secrets
-            .get(&self.secret_ref(id))
-            .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
-            .ok_or_else(|| {
-                ProviderError::Validation(format!(
-                    "provider `{id}` has no stored credential; log in first"
-                ))
-            })?;
+        // The credential location is the ROW's reference. A row with none is
+        // simply unauthorized - never a re-derived key (TASK-048 F1/F5).
+        let value = match &rec.secret_ref {
+            Some(reference) => self
+                .secrets
+                .get(reference)
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
+                .ok_or_else(|| ProviderError::Unauthorized(id.to_string()))?,
+            None => return Err(ProviderError::Unauthorized(id.to_string())),
+        };
         let declarations = if rec.declarations.is_empty() {
             None
         } else {
@@ -452,5 +537,26 @@ impl Providers {
             declarations,
             requested_provider_id: id.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    /// A journal entry whose secret store is UNREACHABLE must be KEPT: recovery
+    /// does not claim a state it could not confirm (F1).
+    #[test]
+    fn an_unresolvable_entry_keeps_its_journal() {
+        let db = agent_hub_db::Db::open_in_memory().unwrap();
+        let store = ProviderStore::new(db);
+        // An unavailable secret store: every read/write errors.
+        let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe_unavailable_for_test());
+        let p = Providers::new(store, secrets, "test-instance");
+        p.store.begin_op("p1", "create", "test-instance:provider-p1").unwrap();
+        p.recover_pending();
+        // The entry is still there: the failure kept it for retry.
+        let pending = p.store.pending_ops().unwrap();
+        assert_eq!(pending.len(), 1, "an unresolvable recovery keeps its journal");
     }
 }

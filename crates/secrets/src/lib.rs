@@ -39,6 +39,13 @@ impl SecretStore {
         self.available
     }
 
+    /// A store that is known-unavailable, for tests that exercise the refusal
+    /// path without touching the OS keychain.
+    #[doc(hidden)]
+    pub fn probe_unavailable_for_test() -> Self {
+        SecretStore { service: "agent-hub-unavailable".into(), available: false }
+    }
+
     fn entry(&self, key: &str) -> Result<keyring::Entry, SecretError> {
         keyring::Entry::new(&self.service, key).map_err(|e| SecretError::Store(e.to_string()))
     }

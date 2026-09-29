@@ -73,6 +73,7 @@ fn view(rec: &crate::record::ProviderRecord) -> serde_json::Value {
     if let Some(obj) = v.as_object_mut() {
         // The secret REFERENCE is an internal keychain id: never exposed.
         obj.remove("secret_ref");
+        obj.remove("incarnation"); // internal: the version guard is not a wire field
         obj.insert("tokenConfigured".into(), serde_json::json!(rec.token_configured));
         obj.insert(
             "providerTypeAvailable".into(),

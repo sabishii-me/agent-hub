@@ -698,3 +698,37 @@ still unresolved and tracked in `docs/review/VERIFICATION-TASKS.md`.
   and the model are read from the adapter's **proof** and stored. Verified live: a
   registered provider reached pi as `provider="hub-mockp"`, `model="deepseek-flash"`,
   and the endpoint received a real `POST /v1/chat/completions`.
+
+## 20. Provider versioning, recovery ownership, grant confirmation (TASK-048 REVIEW-ed896102)
+
+- **Recovery never guesses (F1).** `recover_pending` removes a journal entry ONLY
+  when every necessary step is confirmed. An unreadable credential or row is an
+  ERROR that keeps the entry, so the orphan stays visible and retryable. `begin_op`
+  replaces the previous entry in ONE transaction. `with_configured`/`resolve_grant`
+  read the ROW's own `secret_ref`; a row with none is simply unauthorized - never a
+  re-derived key, so a rebuilt id cannot re-acquire an old credential.
+- **Every write participates in the version decision (F2).** A provider row carries
+  an `incarnation` (minted on INSERT) and a `revision`. `save_provider` is guarded by
+  `(id, incarnation)`: a row read before a delete+recreate has a different
+  incarnation and its save is refused `Conflict`. `refresh` holds the provider lock,
+  re-reads after the network await, and refuses a changed incarnation/revision
+  (`revision_conflict`). `set_selection` is serialized on the same lock.
+- **Grant is confirmed, not assumed (F3).** `config/set` sends `connectionId` (the
+  owning contract's provider selection) and `model`. After it returns, the hub
+  verifies the adapter's `applied.modelProviderId` equals the requested provider and
+  `applied.model` equals the requested model; a mismatch or a missing `applied` stops
+  the start. The confirmed `applied.modelProviderId`/`applied.connectionId`/model are
+  returned to the service and PERSISTED (`applied_provider`/`applied_route`/
+  `applied_model`), and exposed on the session view. A reopen re-grants and re-checks.
+- **Cancel holds busy until a real stop (F4).** The cancel intent is recorded
+  durably; `run_turn` refuses to dispatch a prompt for an already-cancelled or
+  settled turn. An abort SEND failure does NOT settle the turn (the prompt may still
+  run) - the turn stays held and the caller sees `abort-failed`. The terminal comes
+  from the prompt's own return; a cancel whose prompt never returns is settled
+  `interrupted` by `reconcile_stalled_cancels` at boot. `settle_turn` commits the
+  terminal in the database (retrying a transient failure) and publishes only on a
+  confirmed write.
+- **Grant errors keep their identity (F5).** `provider_unauthorized`,
+  `provider_not_found`, `provider_catalog_failed`, `revision_conflict` and
+  `catalog_not_loaded` are distinct; the resolver returns `<code>|<message>` and the
+  sessions domain preserves the code to the response.

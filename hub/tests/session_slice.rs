@@ -236,11 +236,14 @@ async fn real_hub_session_202_start_close() {
     );
     let a = a.unwrap();
     let b = b.unwrap();
-    let accepted = [a.status().as_u16(), b.status().as_u16()].iter().filter(|s| **s == 202).count();
-    assert!(accepted <= 1, "at most one of two concurrent new turns is admitted (busy)");
+    let a_accepted = a.status().as_u16() == 202;
+    let b_accepted = b.status().as_u16() == 202;
+    let accepted = [a_accepted, b_accepted].iter().filter(|x| **x).count();
+    assert!(accepted >= 1, "at least one concurrent turn is admitted");
 
-    // No orphaned admitted row: every turn in the list is either running or ended,
-    // and the count grew by at most the number of accepted turns.
+    // The INVARIANT (not a timing guess): the number of NEW rows equals the number
+    // of ACCEPTED requests - an accepted request always has its row, a refused one
+    // never leaves an `admitted` row (F: admission is one atomic decision).
     let after: serde_json::Value = client
         .get(format!("{base}/v1/sessions/{id}/turns"))
         .header("authorization", format!("Bearer {token}"))
@@ -253,9 +256,10 @@ async fn real_hub_session_202_start_close() {
     let turns = after["turns"].as_array().cloned().unwrap_or_default();
     let admitted = turns.iter().filter(|t| t["state"] == "admitted").count();
     assert_eq!(admitted, 0, "a refused admission leaves no admitted row: {after}");
-    assert!(
-        turns.len() <= before_count + 2,
-        "a refused admission does not add a row: before={before_count} after={}",
+    let new_rows = turns.len() - before_count;
+    assert_eq!(
+        new_rows, accepted,
+        "accepted requests == new rows (accepted={accepted}, before={before_count}, after={})",
         turns.len()
     );
 
@@ -411,10 +415,14 @@ async fn a_session_with_a_managed_provider_is_accepted_and_granted() {
     assert_eq!(body["session"]["modelProviderId"], "managed");
     let id = body["session"]["id"].as_str().unwrap().to_string();
 
-    // It reaches active: the grant was delivered and config applied. (If the
-    // provider is unreachable the adapter may still start; the assertion is that
-    // the hub did not refuse the managed provider and the start completed.)
+    // It reaches active AND the applied identity is CONFIRMED and persisted: the
+    // adapter's `applied.modelProviderId` must equal the requested provider, and
+    // its resolved route (`applied.connectionId` = `hub-<id>` for pi) is stored.
+    // This is the F3 acceptance: a grant that returned but did not apply the
+    // requested target must NOT show up as active with a matched identity.
     let mut status = String::new();
+    let mut applied_provider: Option<String> = None;
+    let mut applied_route: Option<String> = None;
     for _ in 0..400 {
         let s: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}"))
@@ -425,14 +433,33 @@ async fn a_session_with_a_managed_provider_is_accepted_and_granted() {
             .json()
             .await
             .unwrap();
-        status = s["session"]["status"].as_str().unwrap_or("").to_string();
+        let sess = &s["session"];
+        status = sess["status"].as_str().unwrap_or("").to_string();
+        applied_provider = sess["appliedProvider"].as_str().map(str::to_string);
+        applied_route = sess["appliedRoute"].as_str().map(str::to_string);
         if status == "active" || status == "starting_failed" {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(status, "active", "the managed-provider session starts");
+    assert_eq!(
+        applied_provider.as_deref(),
+        Some("managed"),
+        "the adapter's applied provider identity is confirmed and persisted"
+    );
+    assert!(
+        applied_route.as_deref().map(|r| r.contains("managed")).unwrap_or(false),
+        "the resolved native route is persisted, got {applied_route:?}"
+    );
 
+    // Clean up this run's credential through the API (never leave a keychain
+    // entry behind for a reused id), then stop the hub.
+    let _ = client
+        .delete(format!("{base}/v1/model-providers/managed"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await;
     let _ = hub.0.kill();
     let _ = std::fs::remove_dir_all(&data);
 }

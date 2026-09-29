@@ -39,9 +39,11 @@ impl ProviderStore {
     }
 
     /// Insert a new provider; a duplicate id is refused with no side effect.
-    pub fn create(&self, record: &ProviderRecord) -> Result<(), StoreError> {
+    /// Insert a provider. Returns the stored record (with the incarnation the
+    /// database minted), so the caller can update it without a stale-guard miss.
+    pub fn create(&self, record: &ProviderRecord) -> Result<ProviderRecord, StoreError> {
         match self.db.insert_provider(&to_row(record)) {
-            Ok(()) => Ok(()),
+            Ok(()) => self.get(&record.id),
             Err(agent_hub_db::DbError::Conflict(_)) => Err(StoreError::Exists(record.id.clone())),
             Err(e) => Err(StoreError::Db(e)),
         }
@@ -91,6 +93,7 @@ fn to_row(r: &ProviderRecord) -> ProviderRow {
         enabled_model_ids: r.enabled_model_ids.clone(),
         revision: r.revision,
         secret_ref: r.secret_ref.clone(),
+        incarnation: r.incarnation.clone(),
         catalog: r
             .catalog
             .as_ref()
@@ -110,6 +113,7 @@ fn to_record(r: &ProviderRow) -> ProviderRecord {
         enabled_model_ids: r.enabled_model_ids.clone(),
         revision: r.revision,
         secret_ref: r.secret_ref.clone(),
+        incarnation: r.incarnation.clone(),
         catalog: r.catalog.as_ref().and_then(|c| serde_json::from_value(c.clone()).ok()),
         token_configured: false, // set by the service from the secret store
     }

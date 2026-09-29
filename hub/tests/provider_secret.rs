@@ -104,16 +104,24 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
+/// Scan every file's BYTES (not UTF-8 text): a binary store such as SQLite must
+/// be searched too, so "no plaintext secret on disk" is a real claim (TASK-048).
 fn dir_contains(dir: &std::path::Path, needle: &str) -> bool {
+    dir_contains_bytes(dir, needle.as_bytes())
+}
+
+fn dir_contains_bytes(dir: &std::path::Path, needle: &[u8]) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else { return false };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
-            if dir_contains(&p, needle) {
+            if dir_contains_bytes(&p, needle) {
                 return true;
             }
-        } else if std::fs::read_to_string(&p).map(|s| s.contains(needle)).unwrap_or(false) {
-            return true;
+        } else if let Ok(bytes) = std::fs::read(&p) {
+            if bytes.windows(needle.len()).any(|w| w == needle) {
+                return true;
+            }
         }
     }
     false

@@ -39,6 +39,11 @@ pub struct ProviderRecord {
     /// provider. `None` = no credential. The record itself has **no token**.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<String>,
+    /// The incarnation read from the database: a save is guarded by it, so a stale
+    /// record cannot overwrite a rebuilt provider (TASK-048 F2). Empty for a new
+    /// record (the insert mints one).
+    #[serde(default)]
+    pub incarnation: String,
     /// Whether a credential is stored. Derived from the secret store at read
     /// time, **not** persisted (P2: never a stale bool from a file).
     #[serde(skip)]

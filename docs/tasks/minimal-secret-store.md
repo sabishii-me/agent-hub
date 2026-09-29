@@ -70,3 +70,10 @@ and turn slices recorded (a real model call needs a credential).
   inspectable and recoverable; no orphan credential.
 - **One-shot probe** (random name, confirmed delete) and a **fresh identity per test
   run**.
+
+## Review follow-up (TASK-048 REVIEW-ed896102)
+
+- Recovery keeps the journal on any failure/unknown (F1); `begin_op` is a transaction.
+- Reads use the ROW's `secret_ref`; a rebuilt id cannot re-acquire an old credential.
+- Provider rows carry `incarnation` + `revision`; saves and row writes are guarded
+  (F2).
