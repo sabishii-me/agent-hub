@@ -142,7 +142,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_state = SessionsState::new_shared(sessions, errors.clone());
 
     // Providers: one JSON file per provider under the data dir.
-    let providers = Providers::new(ProviderStore::new(data_dir.join("providers")));
+    // The OS secret store: probed once. If it is unavailable, the credential
+    // path stays refused (never a plaintext fallback).
+    let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe("agent-hub"));
+    let providers = Providers::new(ProviderStore::new(data_dir.join("providers")), secrets);
     let provider_state = ProvidersState::new(providers, errors.clone());
 
     // Skills: the hub stores the bytes and installs the effective set per harness.

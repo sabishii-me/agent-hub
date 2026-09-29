@@ -70,11 +70,18 @@ pub struct PatchProvider {
 
 pub struct Providers {
     pub store: ProviderStore,
+    /// The OS secret store. A credential is kept here, never in the record file.
+    pub secrets: std::sync::Arc<agent_hub_secrets::SecretStore>,
 }
 
 impl Providers {
-    pub fn new(store: ProviderStore) -> Self {
-        Providers { store }
+    pub fn new(store: ProviderStore, secrets: std::sync::Arc<agent_hub_secrets::SecretStore>) -> Self {
+        Providers { store, secrets }
+    }
+
+    /// The keychain key for a provider's credential.
+    fn secret_key(id: &str) -> String {
+        format!("provider-{id}-token")
     }
 
     pub fn list(&self) -> Result<(Vec<ProviderRecord>, Vec<Broken>), ProviderError> {
@@ -86,16 +93,25 @@ impl Providers {
     }
 
     pub fn create(&self, req: CreateProvider) -> Result<ProviderRecord, ProviderError> {
-        if req.token.is_some() {
+        if req.token.is_some() && !self.secrets.is_available() {
             return Err(ProviderError::NoSecretStore);
         }
         let id = req.id.unwrap_or_else(|| new_id("prov"));
+        let token_configured = match &req.token {
+            Some(t) => {
+                self.secrets
+                    .set(&Self::secret_key(&id), t)
+                    .map_err(|_| ProviderError::NoSecretStore)?;
+                true
+            }
+            None => false,
+        };
         let record = ProviderRecord {
             id,
             label: req.label,
             url: req.url,
             api: req.api,
-            token_configured: false,
+            token_configured,
             provider_type: req.provider_type,
             provider_type_version: req.provider_type_version,
             declarations: req.declarations.unwrap_or_default(),
@@ -128,8 +144,24 @@ impl Providers {
             }
             rec.api = v;
         }
-        if req.token.is_some() {
-            return Err(ProviderError::NoSecretStore);
+        if let Some(tok) = req.token {
+            match tok {
+                Some(t) => {
+                    self.secrets
+                        .set(&Self::secret_key(id), &t)
+                        .map_err(|_| ProviderError::NoSecretStore)?;
+                    if !rec.token_configured {
+                        rec.token_configured = true;
+                    }
+                    bump = true;
+                }
+                None => {
+                    // Clearing the credential.
+                    let _ = self.secrets.delete(&Self::secret_key(id));
+                    rec.token_configured = false;
+                    bump = true;
+                }
+            }
         }
         if let Some(v) = req.declarations {
             rec.declarations = v;
@@ -151,7 +183,12 @@ impl Providers {
     /// credential here (no secret store yet), so this is a no-op on the record;
     /// it exists for the contract shape. It never invents a token change.
     pub fn logout(&self, id: &str) -> Result<ProviderRecord, ProviderError> {
-        let rec = self.store.get(id)?;
+        let mut rec = self.store.get(id)?;
+        self.secrets
+            .delete(&Self::secret_key(id))
+            .map_err(|_| ProviderError::NoSecretStore)?;
+        rec.token_configured = false;
+        self.store.save(&rec)?;
         Ok(rec)
     }
 
@@ -185,8 +222,9 @@ impl Providers {
             .url
             .clone()
             .ok_or_else(|| ProviderError::Validation("this provider has no url".into()))?;
-        // No credential: the catalog fetch is unauthenticated until a secret store exists.
-        let models = catalog::fetch(rec.api.as_deref(), &url, None).await?;
+        // Authenticate with the stored credential when one is present.
+        let token = self.secrets.get(&Self::secret_key(id)).ok().flatten();
+        let models = catalog::fetch(rec.api.as_deref(), &url, token.as_deref()).await?;
 
         let previous_enabled = rec.enabled_model_ids.clone();
         let previous_models = rec.catalog.as_ref().map(|c| c.models.clone()).unwrap_or_default();

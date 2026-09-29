@@ -620,9 +620,15 @@ follows distinguishes a real, narrow component fact from a product capability.
   own reason - honest, not a fake success.** The plumbing (admit -> prompt -> events -> terminal
   state) is verified against the real pi adapter; the model call itself is a credential dependency,
   not claimed.
-- **providers** (now): the credential is **not part of the record** (no `token` field), so a
-  secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
-  Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.
+- **providers** (now): a provider is data (one file), and a **credential is kept in the OS
+  secret store** (`crates/secrets`, `keyring`), never in the record file - the record has no
+  `token` field by construction. The store is **probed at boot**; if it is unreachable the
+  credential path refuses (`501`) rather than falling back to plaintext. `POST /v1/model-providers`
+  with a `token` stores it in the keychain and reports `tokenConfigured`; `logout` deletes it; the
+  catalog fetch authenticates with the stored credential. Verified live: the secret is in the OS
+  keychain, `grep` finds no plaintext under the data dir. Still not a product: the fuller provider
+  type / auth-flow surface (types, device-code) stays `501`, and a real model call needs a
+  provider whose credential is valid.
 - **the served binary** (now): every route requires a **bearer token** (the inbound boundary
   exists). That is a possession check, not an authorization boundary (§7); the binary is still
   not a product (sessions/skills are `501`, no secret store).
