@@ -144,8 +144,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Providers: one JSON file per provider under the data dir.
     // The OS secret store: probed once. If it is unavailable, the credential
     // path stays refused (never a plaintext fallback).
-    let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe("agent-hub"));
-    let providers = Providers::new(ProviderStore::new(data_dir.join("providers")), secrets);
+    // The secret store is scoped to THIS instance: the namespace is derived from
+    // the data dir, so two instances never share a keychain entry, and the probe
+    // uses a unique name that cannot clobber a real one.
+    let instance = instance_id(&data_dir);
+    let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::for_instance(&instance));
+    let providers_db = Db::open(data_dir.join("hub.sqlite"))?;
+    let providers = Providers::new(ProviderStore::new(providers_db), secrets, instance);
     let provider_state = ProvidersState::new(providers, errors.clone());
 
     // Skills: the hub stores the bytes and installs the effective set per harness.
@@ -199,4 +204,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+/// A stable id for this hub instance, derived from its data dir so two instances
+/// (same OS user, different data dirs) get different keychain namespaces.
+fn instance_id(data_dir: &std::path::Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let canon = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    canon.to_string_lossy().hash(&mut h);
+    format!("{:016x}", h.finish())
 }

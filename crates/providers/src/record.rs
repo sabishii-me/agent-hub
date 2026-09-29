@@ -35,12 +35,12 @@ pub struct ProviderRecord {
     /// The wire protocol in the harness vocabulary (openai-completions, ...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
-    /// **The credential is NOT part of this record.** A token is a secret and
-    /// belongs in an OS secret store, never in the plaintext provider file. The
-    /// record has no `token` field at all, so a secret cannot be persisted here
-    /// by construction. A provider with no reachable secret store accepts no
-    /// credential (the API refuses one); the catalog fetch is unauthenticated
-    /// until the store exists.
+    /// A keychain reference, never a value: what the secret store holds for this
+    /// provider. `None` = no credential. The record itself has **no token**.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_ref: Option<String>,
+    /// Whether a credential is stored. Derived from the secret store at read
+    /// time, **not** persisted (P2: never a stale bool from a file).
     #[serde(skip)]
     pub token_configured: bool,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "providerType")]

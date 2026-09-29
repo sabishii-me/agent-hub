@@ -59,3 +59,12 @@ plaintext token is used to cross it.
    `running`).
 5. Not-wired routes stay `501`; workspace zero warnings; the real-hub integration
    test covers the slice (gated on the plugin dir).
+
+## Review follow-up (TASK-048 PROVIDER-TURN-REVIEW-6d495c3)
+
+- The prompt no longer holds the session lock: the request handle is cloneable and lives outside
+  the process mutex, so `session/abort` and `stop` are not blocked by a running prompt (P1).
+- Cancel sends `session/abort` and records an intent; the terminal state is settled by the
+  prompt's own return (an adapter ACK is not "stopped"). A **settle-once** guard means a late
+  completion never overwrites a decided state (P1).
+- `cancel` is idempotent: no running turn returns the current state, not an error.

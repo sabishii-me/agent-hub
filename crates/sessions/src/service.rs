@@ -143,6 +143,10 @@ pub struct Sessions {
     /// One lock per session: start/close/reopen on the same session never race
     /// (R4). A lock held across the lifecycle of one session.
     locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
+    /// Turns a cancel was requested for (the run settles them as cancelled).
+    cancelled: Mutex<std::collections::HashSet<String>>,
+    /// Turns already settled (a late result never overwrites a decided one).
+    settled: Mutex<std::collections::HashSet<String>>,
 }
 
 /// A canonical, unambiguous fingerprint of the semantic request (R2). Lengths are
@@ -182,6 +186,8 @@ impl Sessions {
             harness_exists,
             harness_spec,
             locks: Mutex::new(std::collections::HashMap::new()),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
+            settled: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -608,33 +614,56 @@ impl Sessions {
     pub async fn run_turn(self: Arc<Self>, session_id: String, turn_id: String, text: String) {
         // A turn must have a running process; otherwise fail honestly.
         if !self.runtime.is_running(&session_id) {
-            self.end_turn(&turn_id, "failed", Some("the session has no running process")).await;
+            self.settle_turn(&turn_id, "failed", Some("the session has no running process")).await;
             return;
         }
-        let _ = self
-            .db
-            .set_turn_state(&turn_id, "running")
-            .map(|_| self.bus.publish(
-                "turn.running",
-                serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
-            ));
+        let _ = self.db.set_turn_state(&turn_id, "running");
+        self.bus.publish(
+            "turn.running",
+            serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
+        );
         let params = serde_json::json!({
             "sid": session_id,
             "message": text,
             "clientMessageId": turn_id,
         });
+        // The prompt ends only when the turn does (adapter contract). Its result
+        // is the authoritative terminal, EXCEPT when a cancel was requested, in
+        // which case the run's own end is `cancelled` (the adapter confirmed).
+        let cancelled = self
+            .cancelled
+            .lock()
+            .await
+            .contains(&turn_id);
         match self.runtime.request(&session_id, "session/prompt", params).await {
-            Ok(_) => self.end_turn(&turn_id, "completed", None).await,
-            Err(e) => self.end_turn(&turn_id, "failed", Some(&e.to_string())).await,
+            Ok(_) => {
+                if cancelled {
+                    self.settle_turn(&turn_id, "cancelled", None).await;
+                } else {
+                    self.settle_turn(&turn_id, "completed", None).await;
+                }
+            }
+            Err(e) => {
+                if cancelled {
+                    self.settle_turn(&turn_id, "cancelled", None).await;
+                } else {
+                    self.settle_turn(&turn_id, "failed", Some(&e.to_string())).await;
+                }
+            }
         }
     }
 
-    async fn end_turn(&self, turn_id: &str, ended: &str, cause: Option<&str>) {
-        let _ = self.db.end_turn(turn_id, ended, &now_utc());
-        if let Some(c) = cause {
-            let _ = self.db.set_turn_state(turn_id, "ended");
-            let _ = c;
+    /// Settle a turn's terminal state **once**. A later settle (a late completion
+    /// racing a cancel) is a no-op, so a stale result never overwrites a
+    /// determined one (TASK-048 P1).
+    async fn settle_turn(&self, turn_id: &str, ended: &str, cause: Option<&str>) {
+        {
+            let mut done = self.settled.lock().await;
+            if !done.insert(turn_id.to_string()) {
+                return; // already settled
+            }
         }
+        let _ = self.db.end_turn(turn_id, ended, &now_utc());
         self.bus.publish(
             "turn.ended",
             serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
@@ -651,16 +680,29 @@ impl Sessions {
     /// Cancel: idempotent. Sends `session/abort`; the turn ends when the adapter
     /// confirms (an adapter ACK is NOT "stopped").
     pub async fn cancel_turn(self: Arc<Self>, session_id: &str) -> Result<TurnView, SessionError> {
-        let active = self.db.active_turn(session_id)?.ok_or_else(|| {
-            SessionError::Validation("the session has no running turn to cancel".into())
-        })?;
+        // Idempotent: no running turn -> return the current (terminal) state.
+        let active = match self.db.active_turn(session_id)? {
+            Some(t) => t,
+            None => {
+                let turns = self.db.list_turns(session_id)?;
+                return turns
+                    .last()
+                    .map(turn_view)
+                    .ok_or_else(|| SessionError::Validation("the session has no turns".into()));
+            }
+        };
+        self.cancelled.lock().await.insert(active.id.clone());
         let _ = self.db.set_turn_state(&active.id, "cancelling");
+        // Send abort; an ACK is only "requested", so the terminal state is set by
+        // run_turn when the prompt actually returns (adapter contract).
         let _ = self
             .runtime
             .request(session_id, "session/abort", serde_json::json!({ "sid": session_id }))
             .await;
-        self.end_turn(&active.id, "cancelled", None).await;
-        let t = self.db.turn(&active.id)?.ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+        let t = self
+            .db
+            .turn(&active.id)?
+            .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
         Ok(turn_view(&t))
     }
 }

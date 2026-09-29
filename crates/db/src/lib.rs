@@ -10,10 +10,12 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+pub mod providers;
 pub mod recovery;
 pub mod sessions;
 
 pub use recovery::{install, recover, Layout, RecoveryOutcome};
+pub use providers::ProviderRow;
 pub use sessions::{ReserveOutcome, SessionRow, TurnRow};
 
 /// The externally visible state of a plugin (mirrors the contract's `plugin.state`).
@@ -58,6 +60,8 @@ pub enum DbError {
     Sqlite(#[from] rusqlite::Error),
     #[error("plugin `{0}` not found")]
     NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,6 +98,7 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(sessions::SCHEMA_SESSIONS)?;
+        conn.execute_batch(providers::SCHEMA_PROVIDERS)?;
         // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so
         // a column added after a database was created must be added explicitly.
         // This is the upgrade path: adding a column that is missing (idempotent).

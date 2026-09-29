@@ -82,6 +82,9 @@ pub struct StartSpec {
 /// The session runtime: the running session processes, keyed by sid.
 pub struct Sessions {
     running: Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<SessionProcess>>>>,
+    /// A cloneable request handle per session, OUTSIDE the process mutex, so a
+    /// turn's prompt/abort never contends with the lifecycle lock.
+    requests: Mutex<std::collections::HashMap<String, agent_hub_adapter::RequestHandle>>,
     /// Where an adapter's notifications become events.
     events: agent_hub_events::Bus,
 }
@@ -90,6 +93,7 @@ impl Sessions {
     pub fn new(events: agent_hub_events::Bus) -> Self {
         Sessions {
             running: Mutex::new(std::collections::HashMap::new()),
+            requests: Mutex::new(std::collections::HashMap::new()),
             events,
         }
     }
@@ -166,6 +170,7 @@ impl Sessions {
             requests: requests_out,
             applied,
         };
+        self.requests.lock().expect("requests").insert(sid.clone(), bus_requests.clone());
         self.running
             .lock()
             .expect("running")
@@ -185,15 +190,21 @@ impl Sessions {
     /// Send a request on a session's own process (a turn's prompt/abort). Fails
     /// if the session has no running process.
     pub async fn request(&self, sid: &str, method: &str, params: Value) -> Result<Value, StartError> {
-        let handle = self
-            .running
+        // Take the CLONEABLE request handle under a SHORT lock, then release it.
+        // Holding the session mutex across a full prompt (which ends only when the
+        // turn does) would make abort/stop wait for the turn - the turn could
+        // never be interrupted (TASK-048 P1).
+        let requests = self
+            .requests
             .lock()
-            .expect("running")
+            .expect("requests")
             .get(sid)
             .cloned()
             .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
-        let guard = handle.lock().await;
-        guard.request(method, params).await
+        requests
+            .request(method, params)
+            .await
+            .map_err(|e| StartError::Protocol(e.to_string()))
     }
 
     /// Whether a process is running for this session.
@@ -213,6 +224,7 @@ impl Sessions {
                 guard.stop().await?;
                 drop(guard);
                 self.running.lock().expect("running").remove(sid);
+                self.requests.lock().expect("requests").remove(sid);
                 Ok(())
             }
         }

@@ -65,6 +65,8 @@ fn err(s: &ProvidersState, e: ProviderError) -> Response {
 fn view(rec: &crate::record::ProviderRecord) -> serde_json::Value {
     let mut v = serde_json::to_value(rec).unwrap_or(serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
+        // The secret REFERENCE is an internal keychain id: never exposed.
+        obj.remove("secret_ref");
         obj.insert("tokenConfigured".into(), serde_json::json!(rec.token_configured));
         obj.insert(
             "providerTypeAvailable".into(),
@@ -76,9 +78,9 @@ fn view(rec: &crate::record::ProviderRecord) -> serde_json::Value {
 
 async fn list(State(s): State<ProvidersState>) -> Response {
     match s.providers.list() {
-        Ok((records, broken)) => Json(serde_json::json!({
+        Ok(records) => Json(serde_json::json!({
             "providers": records.iter().map(view).collect::<Vec<_>>(),
-            "broken": broken,
+            "broken": [],
         }))
         .into_response(),
         Err(e) => err(&s, e),
@@ -148,7 +150,7 @@ async fn refresh(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>
 }
 
 async fn list_models(State(s): State<ProvidersState>) -> Response {
-    let (records, _) = match s.providers.list() {
+    let records = match s.providers.list() {
         Ok(v) => v,
         Err(e) => return err(&s, e),
     };

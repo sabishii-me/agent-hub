@@ -12,4 +12,4 @@ pub mod store;
 
 pub use record::{Catalog, CatalogModel, Declaration, ProviderRecord};
 pub use service::{CreateProvider, PatchProvider, ProviderError, Providers};
-pub use store::{Broken, ProviderStore};
+pub use store::{ProviderStore, StoreError};

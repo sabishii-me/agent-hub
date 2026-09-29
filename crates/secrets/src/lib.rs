@@ -26,6 +26,14 @@ impl SecretStore {
         SecretStore { service, available }
     }
 
+    /// A store scoped to a hub INSTANCE: the namespace is part of the keychain
+    /// service, so two instances (different data dirs, same OS user) never share
+    /// an entry. `instance` should be a stable, unique id for this hub instance.
+    pub fn for_instance(instance: &str) -> Self {
+        let service = format!("agent-hub:{instance}");
+        Self::probe(service)
+    }
+
     pub fn is_available(&self) -> bool {
         self.available
     }
@@ -73,15 +81,18 @@ impl SecretStore {
 }
 
 fn probe_store(service: &str) -> bool {
-    let Ok(entry) = keyring::Entry::new(service, "__probe__") else {
+    // A UNIQUE probe name (never a fixed one that could clobber a real entry) and
+    // a confirmed delete: if any step fails, the store is not usable.
+    let name = format!("__probe__{}", std::process::id());
+    let Ok(entry) = keyring::Entry::new(service, &name) else {
         return false;
     };
     if entry.set_password("probe").is_err() {
         return false;
     }
     let ok = entry.get_password().map(|v| v == "probe").unwrap_or(false);
-    let _ = entry.delete_credential();
-    ok
+    let deleted = entry.delete_credential().is_ok();
+    ok && deleted
 }
 
 #[derive(Debug, thiserror::Error)]

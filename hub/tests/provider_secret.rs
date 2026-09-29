@@ -64,12 +64,21 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["provider"]["tokenConfigured"], true);
 
-    // The record file must NOT contain the secret.
-    let record = std::fs::read_to_string(data.join("providers/acme.json")).unwrap();
-    assert!(!record.contains(secret), "the credential must not be on disk: {record}");
-    assert!(!record.contains("token"), "no token field in the record: {record}");
+    // GET reflects the credential from the AUTHORITATIVE store (not a stale flag).
+    let got: serde_json::Value = client
+        .get(format!("{base}/v1/model-providers/acme"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(got["provider"]["tokenConfigured"], true, "GET reflects the stored credential");
 
-    // Nothing in the whole data dir has the plaintext secret.
+    // Nothing in the whole data dir has the plaintext secret (provider rows are
+    // in SQLite now; the secret is only in the OS keychain).
+    assert!(!dir_contains(&data, secret), "no plaintext secret anywhere under the data dir");
     assert!(!dir_contains(&data, secret), "no plaintext secret anywhere under the data dir");
 
     // Logout deletes it.

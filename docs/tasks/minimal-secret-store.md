@@ -45,3 +45,15 @@ and turn slices recorded (a real model call needs a credential).
    plaintext on disk and the keychain holds it. No model call is required.
 6. Workspace zero warnings; the real-hub integration test covers the credential path
    (gated on the OS store being available).
+
+## Review follow-up (TASK-048 PROVIDER-TURN-REVIEW-6d495c3)
+
+- **Data boundary**: the provider store is now the **database**, not `{id}.json` files (P1
+  regression closed).
+- **Instance namespace**: the secret store service is `agent-hub:<instance>` (instance = a hash of
+  the data dir); the probe uses a unique name and confirms the delete (P1).
+- **No side effect on refusal**: `create` inserts the row first (a duplicate is `already_exists`
+  with no secret written), then the secret; a failed secret write rolls the row back (P1).
+- **Honest configured state**: `tokenConfigured` is derived from the store on GET/list, and an
+  unreadable credential is an error, never read as "not configured" (P2).
+- **Delete removes the credential** with the row (P1).

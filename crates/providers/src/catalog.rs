@@ -90,5 +90,5 @@ fn parse_models(body: &Value) -> Result<Vec<CatalogModel>, CatalogError> {
 
 /// Build a fresh catalog at a given revision.
 pub fn catalog_at(models: Vec<CatalogModel>, revision: u64) -> Catalog {
-    Catalog { fetched_at: Some(crate::store::now_utc()), revision, models }
+    Catalog { fetched_at: Some(agent_hub_db::now_utc()), revision, models }
 }
