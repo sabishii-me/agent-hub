@@ -39,7 +39,7 @@ fn install_fake(root: &std::path::Path, id: &str, capabilities: &[&str]) -> Path
 async fn spawns_a_real_adapter_and_routes_calls() {
     let root = tmp("spawn");
     install_fake(&root, "fake", &["models", "presets", "tools"]);
-    let adapters = Adapters::new(vec![root.clone()], Bus::new(64, 64));
+    let adapters = Adapters::new(vec![root.clone()], std::env::temp_dir(), Bus::new(64, 64));
 
     let found = adapters.scan();
     assert_eq!(found.len(), 1);
@@ -72,7 +72,7 @@ async fn spawns_a_real_adapter_and_routes_calls() {
 async fn a_protocol_error_surfaces_as_an_rpc_error() {
     let root = tmp("rpcerr");
     install_fake(&root, "fake", &["models"]);
-    let adapters = Adapters::new(vec![root], Bus::new(16, 16));
+    let adapters = Adapters::new(vec![root], std::env::temp_dir(), Bus::new(16, 16));
     adapters.scan();
 
     let err = adapters
@@ -93,7 +93,7 @@ async fn adapter_notifications_become_events() {
     let root = tmp("events");
     install_fake(&root, "fake", &["models"]);
     let bus = Bus::new(64, 64);
-    let adapters = Adapters::new(vec![root], bus.clone());
+    let adapters = Adapters::new(vec![root], std::env::temp_dir(), bus.clone());
     adapters.scan();
 
     // Subscribe to the event stream, then prompt: the adapter emits turn.running
@@ -133,6 +133,52 @@ async fn adapter_notifications_become_events() {
 }
 
 #[tokio::test]
+async fn a_real_manifest_shape_parses_and_resolves_the_runtime_argv() {
+    // The real manifests carry runtime.command as an ARGV ARRAY
+    // (["node","runtime/dist/cli.js"]), and the hub resolves the parts against
+    // the plugin directory to hand the adapter AGENT_HUB_RUNTIME_COMMAND.
+    let root = tmp("realm");
+    let dir = root.join("pi");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("manifest.json"),
+        r#"{
+          "id": "pi",
+          "pluginType": "harness-adapter",
+          "protocol": 0,
+          "command": ["node", "pi-adapter.cjs"],
+          "runtime": {"package": "@x/y", "version": "1.0.0", "command": ["node", "runtime/dist/cli.js"]},
+          "capabilities": ["models"]
+        }"#,
+    )
+    .unwrap();
+    let adapters = Adapters::new(vec![root], std::env::temp_dir(), Bus::new(8, 8));
+    let found = adapters.scan();
+    assert_eq!(found.len(), 1, "the real manifest shape must parse");
+    let argv = found[0].manifest.runtime_argv(&found[0].directory).unwrap();
+    assert_eq!(argv[0], "node");
+    assert!(argv[1].ends_with("runtime/dist/cli.js"));
+    assert!(std::path::Path::new(&argv[1]).is_absolute(), "resolved to absolute: {argv:?}");
+}
+
+#[tokio::test]
+async fn the_adapter_receives_the_agent_hub_environment() {
+    // The env the hub builds names the dirs it created and the runtime argv.
+    let root = tmp("env");
+    install_fake(&root, "fake", &["models"]);
+    let data = tmp("env-data");
+    let adapters = Adapters::new(vec![root], data.clone(), Bus::new(8, 8));
+    adapters.scan();
+    let env = adapters.adapter_env(&adapters.get("fake").unwrap());
+    let get = |k: &str| -> Option<String> { env.iter().find(|(n, _): &&(String, String)| n == k).map(|(_, v)| v.clone()) };
+    assert!(get("AGENT_HUB_HARNESS_DIR").unwrap().contains("agents"));
+    assert!(get("AGENT_HUB_CWD").is_some());
+    assert!(get("AGENT_HUB_INSTALLED_SKILLS_DIR").unwrap().contains("skills"));
+    // The secret key is never forwarded.
+    assert!(get("AGENT_HUB_SECRET_KEY").is_none());
+}
+
+#[tokio::test]
 async fn a_bad_protocol_version_is_refused() {
     let root = tmp("protocol");
     let dir = root.join("bad");
@@ -142,7 +188,7 @@ async fn a_bad_protocol_version_is_refused() {
         r#"{"id":"bad","pluginType":"harness-adapter","protocol":99,"command":["node","x"]}"#,
     )
     .unwrap();
-    let adapters = Adapters::new(vec![root], Bus::new(8, 8));
+    let adapters = Adapters::new(vec![root], std::env::temp_dir(), Bus::new(8, 8));
     // The wrong protocol means the plugin is not registered as an adapter.
     assert!(adapters.scan().is_empty());
 }
@@ -151,7 +197,7 @@ async fn a_bad_protocol_version_is_refused() {
 async fn disabled_harness_is_not_started() {
     let root = tmp("disabled");
     install_fake(&root, "fake", &["models"]);
-    let adapters = Adapters::new(vec![root], Bus::new(8, 8));
+    let adapters = Adapters::new(vec![root], std::env::temp_dir(), Bus::new(8, 8));
     adapters.scan();
 
     adapters.set_status("fake", HarnessStatus::Disabled).unwrap();

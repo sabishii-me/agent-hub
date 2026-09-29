@@ -30,7 +30,10 @@ pub struct AdapterManifest {
 pub struct RuntimeSpec {
     pub package: Option<String>,
     pub version: Option<String>,
-    pub command: Option<String>,
+    /// The harness argv (`["node","runtime/dist/cli.js"]`). The hub resolves the
+    /// parts against the plugin directory and hands the absolute argv to the
+    /// adapter as `AGENT_HUB_RUNTIME_COMMAND` (`contract/adapter-v1.json`).
+    pub command: Option<Vec<String>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -78,5 +81,29 @@ impl AdapterManifest {
 
     pub fn declares(&self, capability: &str) -> bool {
         self.capabilities.iter().any(|c| c == capability)
+    }
+
+    /// The absolute argv the hub hands to the adapter as
+    /// `AGENT_HUB_RUNTIME_COMMAND`: the first part is kept, the rest are resolved
+    /// against the plugin directory (the old hub did exactly this,
+    /// `server.mjs:782`).
+    pub fn runtime_argv(&self, dir: &std::path::Path) -> Option<Vec<String>> {
+        let command = self.runtime.as_ref()?.command.as_ref()?;
+        if command.is_empty() {
+            return None;
+        }
+        Some(
+            command
+                .iter()
+                .enumerate()
+                .map(|(i, part)| {
+                    if i == 0 {
+                        part.clone()
+                    } else {
+                        dir.join(part).to_string_lossy().to_string()
+                    }
+                })
+                .collect(),
+        )
     }
 }

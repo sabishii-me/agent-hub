@@ -50,22 +50,71 @@ pub enum AdapterError {
     Bus(#[from] crate::bus::BusError),
 }
 
+/// Where the hub's data for one harness lives, so the adapter can be pointed at
+/// it. The hub owns this layout; the adapter receives it as `AGENT_HUB_*`
+/// variables (`contract/adapter-v1.json`, `contract/v1.json`).
+#[derive(Debug, Clone)]
+pub struct HarnessEnv {
+    /// `AGENT_HUB_HARNESS_DIR`: per-harness data (sessions, credentials state).
+    pub harness_dir: std::path::PathBuf,
+    /// `AGENT_HUB_INSTALLED_SKILLS_DIR`: skills the hub installed.
+    pub skills_dir: std::path::PathBuf,
+    /// `AGENT_HUB_INSTALLED_EXTENSIONS_DIR`: extensions the hub installed.
+    pub extensions_dir: std::path::PathBuf,
+    /// The working directory for a session (`AGENT_HUB_CWD`).
+    pub cwd: std::path::PathBuf,
+    /// The session id (`AGENT_HUB_SESSION_ID`), when the spawn is per session.
+    pub session_id: Option<String>,
+    /// Extra roots (`AGENT_HUB_ADDITIONAL_DIRS`).
+    pub additional_dirs: Vec<String>,
+    /// The preset directory (`AGENT_HUB_PRESETS_DIR`), when presets are active.
+    pub presets_dir: Option<std::path::PathBuf>,
+    /// Connection credentials keyed by env name (`envName`), never written down.
+    pub connection_env: Vec<(String, String)>,
+}
+
 /// The adapter domain: the harness registry and the running adapters.
 pub struct Adapters {
     /// The plugin roots the hub searches, in order.
     roots: Vec<std::path::PathBuf>,
+    /// The hub's data root; per-harness dirs are derived from it.
+    data_dir: std::path::PathBuf,
     harnesses: Mutex<HashMap<String, Harness>>,
     running: Mutex<HashMap<String, RequestHandle>>,
     events: Bus,
 }
 
 impl Adapters {
-    pub fn new(roots: Vec<std::path::PathBuf>, events: Bus) -> Self {
+    pub fn new(roots: Vec<std::path::PathBuf>, data_dir: impl Into<std::path::PathBuf>, events: Bus) -> Self {
         Adapters {
             roots,
+            data_dir: data_dir.into(),
             harnesses: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
             events,
+        }
+    }
+
+    /// The environment a harness's adapter is started with, derived from the
+    /// hub's own layout. The hub creates the directories it hands over; an
+    /// adapter refuses to invent its own (the real ones do).
+    pub fn harness_env(&self, id: &str, session_id: Option<String>) -> HarnessEnv {
+        let base = self.data_dir.join("agents").join(id);
+        let harness_dir = base.clone();
+        let skills_dir = base.join("skills");
+        let extensions_dir = base.join("extensions");
+        let _ = std::fs::create_dir_all(&harness_dir);
+        let _ = std::fs::create_dir_all(&skills_dir);
+        let _ = std::fs::create_dir_all(&extensions_dir);
+        HarnessEnv {
+            harness_dir,
+            skills_dir,
+            extensions_dir,
+            cwd: self.data_dir.clone(),
+            session_id,
+            additional_dirs: Vec::new(),
+            presets_dir: None,
+            connection_env: Vec::new(),
         }
     }
 
@@ -146,7 +195,8 @@ impl Adapters {
             return Err(AdapterError::Unsupported(format!("harness `{id}` is disabled")));
         }
         let command = harness.manifest.command.clone().unwrap_or_default();
-        let bus = AgentBus::spawn(&command, &harness.directory, &[])?;
+        let env = self.adapter_env(&harness);
+        let bus = AgentBus::spawn(&command, &harness.directory, &env)?;
         let handle = bus.requests.clone();
         self.running
             .lock()
@@ -165,6 +215,28 @@ impl Adapters {
             }
         });
         Ok(handle)
+    }
+
+    /// The `AGENT_HUB_*` environment for an adapter, plus the connection
+    /// credentials, exactly as the contract and the old hub define it: the
+    /// process environment with `AGENT_HUB_SECRET_KEY` removed, then the hub's
+    /// own variables (`server.mjs:802/2964`).
+    pub fn adapter_env(&self, harness: &Harness) -> Vec<(String, String)> {
+        let mut env: Vec<(String, String)> = std::env::vars()
+            .filter(|(k, _)| k != "AGENT_HUB_SECRET_KEY")
+            .collect();
+        let he = self.harness_env(&harness.id, None);
+        env.push(("AGENT_HUB_HARNESS_DIR".into(), he.harness_dir.to_string_lossy().into()));
+        env.push(("AGENT_HUB_CWD".into(), he.cwd.to_string_lossy().into()));
+        env.push(("AGENT_HUB_INSTALLED_SKILLS_DIR".into(), he.skills_dir.to_string_lossy().into()));
+        env.push(("AGENT_HUB_INSTALLED_EXTENSIONS_DIR".into(), he.extensions_dir.to_string_lossy().into()));
+        if !he.additional_dirs.is_empty() {
+            env.push(("AGENT_HUB_ADDITIONAL_DIRS".into(), serde_json::to_string(&he.additional_dirs).unwrap()));
+        }
+        if let Some(argv) = harness.manifest.runtime_argv(&harness.directory) {
+            env.push(("AGENT_HUB_RUNTIME_COMMAND".into(), serde_json::to_string(&argv).unwrap()));
+        }
+        env
     }
 
     /// A capability call, gated on the harness declaring it.

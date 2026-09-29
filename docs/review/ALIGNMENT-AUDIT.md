@@ -123,6 +123,20 @@ does not deserialize.
   `plugin_archive_invalid` (502), not a made-up code. The boot self-check refuses to start if a
   domain names a code the contract does not declare.
 
-### Open
+- **D4 - the adapter is started with the contract's environment.**
+  `Adapters::adapter_env` builds the `AGENT_HUB_*` set the contract and the old hub define:
+  `AGENT_HUB_HARNESS_DIR`, `AGENT_HUB_CWD`, `AGENT_HUB_INSTALLED_SKILLS_DIR`,
+  `AGENT_HUB_INSTALLED_EXTENSIONS_DIR`, `AGENT_HUB_ADDITIONAL_DIRS`, `AGENT_HUB_RUNTIME_COMMAND`
+  - over the process environment with `AGENT_HUB_SECRET_KEY` removed. `harness_env` creates the
+  directories it hands over.
+- **D5 - `runtime.command` is an argv array, resolved to absolute.**
+  `RuntimeSpec.command: Option<Vec<String>>`; `runtime_argv(dir)` keeps the first part and
+  resolves the rest against the plugin directory, then it is handed over as
+  `AGENT_HUB_RUNTIME_COMMAND`. A test loads the **real manifest shape** and asserts the resolved
+  argv is absolute.
 
-- **D4** (adapter environment) and **D5** (`runtime.command` is an argv array): next.
+### Still open
+
+- The **real-adapter end-to-end** (a session against pi/jouzu/dsh) needs the harness runtime
+  installed; the protocol level is already verified (the real adapters answer `presets/list` over
+  this bus). This is a `VERIFICATION-TASKS` item, not an alignment deviation.
