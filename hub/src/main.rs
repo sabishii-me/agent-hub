@@ -1,12 +1,16 @@
-//! The agent-hub process (`ARCHITECTURE` §17, the frame).
+//! The agent-hub process (`ARCHITECTURE` §17).
 //!
-//! This is the executable shell: a non-blocking axum server over the shared
-//! [`Transport`]. Domains mount their routes onto [`transport::routes`] as they
-//! are implemented; today it serves the transport-owned surface (`/v1/hub/status`
-//! and the `/v1/hub/events` SSE stream).
+//! The executable shell: a non-blocking axum server over the shared
+//! [`Transport`], with the plugins domain mounted. As more domains are
+//! implemented they mount here the same way.
 
+use std::path::PathBuf;
+
+use agent_hub_db::Db;
 use agent_hub_events::Bus;
-use agent_hub_transport::{routes, Admission, Transport};
+use agent_hub_plugins::routes::{routes as plugin_routes, PluginsState};
+use agent_hub_plugins::Plugins;
+use agent_hub_transport::{finish, routes, Admission, Transport};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,18 +21,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let bus = Bus::new(1024, 256);
-    let admission = Admission::new(64);
-    let state = Transport::new(bus, admission);
+    let data_dir: PathBuf = std::env::var("AGENT_HUB_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("agent-hub"));
+    std::fs::create_dir_all(&data_dir)?;
 
-    let app = routes().with_state(state);
+    let bus = Bus::new(1024, 256);
+    let transport = Transport::new(bus.clone(), Admission::new(64));
+
+    // The data layer and the plugins domain. Recovery runs before serving.
+    let db = Db::open(data_dir.join("hub.sqlite"))?;
+    let plugins_root = data_dir.join("plugins");
+    std::fs::create_dir_all(&plugins_root)?;
+    match agent_hub_db::recover(&db, &plugins_root) {
+        Ok(done) if !done.is_empty() => {
+            tracing::info!(recovered = done.len(), "finished unfinished plugin operations");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::error!(error = %e, "plugin recovery failed"),
+    }
+    let plugins = Plugins::new(db, &plugins_root, bus.clone());
+    let plugin_state = PluginsState::new(plugins, transport.clone());
+
+    // One axum app: the transport surface plus the domain routes.
+    let app = finish(routes(), transport)
+        .merge(plugin_routes().with_state(plugin_state));
 
     let addr = std::env::var("AGENT_HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local = listener.local_addr()?;
-    tracing::info!(%local, "agent-hub listening");
-
-    // Print the bound address for a supervisor that asked for port 0.
+    tracing::info!(%local, data_dir = %data_dir.display(), "agent-hub listening");
     println!("{local}");
 
     axum::serve(listener, app)

@@ -1,0 +1,22 @@
+[package]
+name = "agent-hub-plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+agent-hub-db = { path = "../db" }
+agent-hub-events = { path = "../events" }
+agent-hub-transport = { path = "../transport" }
+axum.workspace = true
+tokio = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+reqwest.workspace = true
+bytes = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

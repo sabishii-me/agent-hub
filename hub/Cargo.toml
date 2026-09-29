@@ -11,6 +11,8 @@ path = "src/main.rs"
 [dependencies]
 agent-hub-events = { path = "../crates/events" }
 agent-hub-transport = { path = "../crates/transport" }
+agent-hub-plugins = { path = "../crates/plugins" }
+agent-hub-db = { path = "../crates/db" }
 axum.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
