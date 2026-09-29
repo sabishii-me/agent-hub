@@ -117,14 +117,18 @@ Distinct owner from class 4's harness-connections: these are the **hub-managed**
 | `PATCH /v1/hub/connections/{id}` | change a connection (a new token replaces the stored one). | **RENAME** `/v1/connections/{id}` |
 | `DELETE /v1/hub/connections/{id}` | remove a connection and its credential. | **RENAME** `/v1/connections/{id}` |
 
-## 7. skills - the skills the hub holds
+## 7. skills - a top-level mechanism (content from a plugin)
+
+**Decided (see the decided sections):** skills are a **top-level** mechanism (across harnesses, no
+harness-id context); the **content comes from a plugin** (adapter-shipped today), and the hub
+hands it to a harness the way extensions are handed. So this is not "a store the hub authors".
 
 | route | what it does | verdict |
 |---|---|---|
-| `GET /v1/hub/skills` | the skills the hub holds (one directory each). | **RENAME** `/v1/skills` |
-| `GET /v1/hub/skills/{id}/files/{file...}` | read one file of a skill, byte for byte. | **RENAME** `/v1/skills/{id}/files/{file...}` |
-| `PUT /v1/hub/skills/{id}/files/{file...}` | write one file (the hub is a courier; it does not interpret). | **RENAME** likewise |
-| `DELETE /v1/hub/skills/{id}` | remove one skill directory. | **RENAME** `/v1/skills/{id}` |
+| `GET /v1/hub/skills` | the skills available (today a hub directory; to become the plugin-provided set). | **RENAME** `/v1/skills`; **the source becomes the plugin**, not a hub-authored store |
+| `GET /v1/hub/skills/{id}/files/{file...}` | read one file of a skill, byte for byte. | **RENAME** `/v1/skills/{id}/files/{file...}`; a read view (this can back `skills://` for a client) |
+| `PUT /v1/hub/skills/{id}/files/{file...}` | write one file. | **REVIEW - a write route to skills conflicts with the security rule** (the agent must not rewrite skills). If the hub no longer authors skills (content from a plugin), this write has no owner; keep only if a non-plugin author is decided. |
+| `DELETE /v1/hub/skills/{id}` | remove one skill directory. | same as above - a hub-side mutation to re-decide |
 
 ## 8. sessions - one harness conversation
 
