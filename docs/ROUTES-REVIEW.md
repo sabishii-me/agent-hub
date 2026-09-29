@@ -205,115 +205,61 @@ a sub-detail of the hub's provider records).
 - **plugin API scope**: plugin lifecycle, version, install/uninstall, metadata, enable/disable.
   Not extensions, not skills, not provider records.
 
+## Skills and extensions: granularity and delivery (decided direction)
+
+**Decision: extensions and skills must support MORE THAN ONE granularity, not be pinned to
+one.** A session **inherits the workspace's** set, and may also carry a **session-private**
+set. The layers compose: workspace set (inherited) + session-private additions/removals.
+
+This is not a product preference imposed on the code; the harnesses already work this way (read
+from their sources, packed from npm as `@earendil-works/pi-coding-agent`, `jouzu`,
+`@deepseek-ai/dsh`):
+
+- **pi** (`dist/cli/args.js`): `--extension/-e <path>` (repeatable), `--no-extensions/-ne`
+  (discovery off; explicit paths still load), `--skill <path>` (repeatable),
+  `--no-skills/-ns`. So pi loads extensions and skills from **any absolute path** with
+  discovery off - the workspace is a choice, not a requirement. **One adapter process per
+  session**, spawned with the session `cwd`.
+- **jouzu**: the same (`--extension <path>` / `--skill <path>`).
+- **dsh**: extensions live in `$DSH_HOME/profiles/...` (outside the workspace); its workspace
+  root is the invoking directory; skills resolve **per session's project root**
+  (`skill.list({ sessionId })`).
+
+**Consequence for the hub:** the hub must not store a single set on the harness row. The
+selection is **layered** - workspace and session - and the adapter resolves the effective set,
+then hands the harness explicit paths with discovery off. Today the hub is pinned to the
+coarsest (one set per harness); that is the thing to remove.
+
+**SECURITY (the delivery rule).** The agent must not be able to rewrite its skills, and must
+not be able to reach (edit) its extensions - today it can edit the gating extension and bypass
+approval. The delivery rule that fixes both:
+
+1. place extensions and skills in a **hub-owned directory outside the agent's workspace**;
+2. launch the harness with **discovery off** and explicit paths (pi/jouzu: `-ne -e <path> ...`,
+   `--no-skills --skill <path>`; dsh: already outside);
+3. the agent can then neither add nor edit a trust-bearing extension, nor write a skill;
+4. the approval gate rests on the **adapter** (which already sees every tool call) plus an
+   extension loaded from the hub-owned dir - never on a file in the workspace.
+
+The pi/jouzu adapters currently do the opposite (place extensions into `<cwd>/.pi/extensions`
+and pass `--approve`), which is the exposure. The fix is adapter-side; no harness change.
+
 ## Open questions (the ones still real)
-
-**(o1) skills' granularity: harness-based, session-based, or workspace-based?**
-Today a skill's *selection* is stored on the **harness row** (`harnessRow.skills`: null = all,
-or an id list) and installed into `<DATA_DIR>/agents/<harness>/skills` before the harness
-process starts — so it is **per-harness** today: every session of a harness shares one set.
-But `GET /v1/sessions/{id}/skills` reports **per session** (it asks the harness's own
-`skills/list` with a sid). So selection (harness) and report (session) do not have the same
-granularity.
-
-The question: should a skill set be chosen **per session** or **per workspace** (a session has
-a `cwd`), so different sessions/projects can carry different skills? This is a product
-granularity decision, not derivable from the code. **Blocked on:** whether the harness
-adapters (pi, dsh) can even *do* workspace-based skills (see o2).
-
-**(o2) can the adapters do workspace-based skills?  ANSWERED (adapter sources read). ALL THREE can.**
-
-- **pi** and **jouzu**: **one adapter process per session**, spawned with the session's `cwd`;
-  their **extensions are already installed per-workspace** (the adapter copies the extension
-  into `cwd/.pi/extensions/`). Skills ride the spawn argv as `--no-skills --skill <dir>`, so a
-  per-session/per-workspace skills dir is achievable - the process is already per session.
-- **dsh**: one shared server per home, but **dsh's own skill resolution is per session's
-  project root** - the adapter queries `skill.list({ sessionId })` and dsh returns "the
-  user-invocable skills for this session's project root". So dsh is **already workspace-based
-  in its own mechanism**; `DSH_AGENTS_HOME` is only where the hub-installed skills live.
-
-**So all three harnesses can carry skills at session/workspace granularity**, each through its
-own mechanism (pi/jouzu: per-session process + argv; dsh: its own per-session project root).
-That is exactly the adapter's job (ADR-0010: the adapter translates to the harness's own
-dialect) - the hub must not assume one granularity.
-
-**The inconsistency this exposes:** today the HUB stores a skill selection on the **harness
-row** and installs one fixed directory per harness, while extensions are installed
-**per-workspace** and the harnesses' own skill resolution (dsh) is **per session**. The hub is
-the side pinned to the coarsest granularity.
-
-**(o3) extensions/skills "selection" ownership.** With the three layers above: extensions'
-selection is harness-scoped (`/v1/harnesses/{id}/extensions`). If skills become
-session/workspace-based (o1), their selection moves to the session/workspace, not the harness
-row. Pending o1/o2.
 
 **(o4) harness registry vs harness runtime answers.** `/v1/harnesses` today mixes the hub's
 registry row (enabled/extensions/skills) with the harness's own runtime answers
-(models/presets/tools/auth/connections). With `enabled` going to the plugin lifecycle and
-`extensions` to `/v1/harnesses/{id}/extensions` and `skills` to its own mechanism, what is
-left of the registry row, and does `GET /v1/harnesses` still exist (or is "which harnesses"
-just `GET /v1/plugins?type=harness-adapter`)? Pending the above.
+(models/presets/tools/auth/connections). With `enabled` going to the plugin lifecycle,
+extensions/skills becoming the layered mechanism above, what is left of the registry row, and
+does `GET /v1/harnesses` still exist (or is "which harnesses" just
+`GET /v1/plugins?type=harness-adapter`)?
 
-**(o6) SECURITY: the agent must not be able to rewrite its skills, and must not be able to
-reach its extensions.** (Owner: skills must not be rewritable; extensions must not be directly
-accessible to the agent - today the agent can edit an extension and **bypass approval gating**.)
-
-Facts, from the adapters:
-
-- **Skills** are installed to the hub's data dir (`<DATA_DIR>/agents/<id>/skills`, outside the
-  agent's workspace) but nothing enforces read-only. If the harness process can write there, a
-  session silently changes what later sessions read (ADR-0001 broken).
-- **Extensions are placed into the AGENT'S WORKSPACE** for pi and jouzu
-  (`<cwd>/.pi/extensions/`, because that is where pi/jouzu discover them). The agent's own file
-  tools can edit them. That is the bypass: the gating extension can be edited to stop asking.
-- The **approval DECISION** already flows through the adapter/hub (pi: `extension_ui_request`
-  -> `approval_need` -> the hub answers); what is editable is the **GATING** (which tool calls
-  ask), which is an extension in the workspace.
-- **dsh** places extensions into `$DSH_HOME` (hub data dir, not the workspace), which is
-  already outside the workspace - the two pi-family adapters are the exposure.
-
-**Feasible, because the adapters are ours.** Directions (a decision is needed):
-
-1. **The enforcement point must be the adapter, not a workspace extension.** The adapter
-   already sees every tool call; the gate that decides "ask the hub" belongs there, where the
-   agent cannot edit it. A trust-bearing extension must not be the gate.
-2. **Extensions the agent must not touch must live outside the workspace**, or be re-placed
-   from the hub's copy before they are trusted (so an edit does not survive), or be
-   OS-read-only to the agent. For pi/jouzu this needs the harness to load an extension from
-   outside `<cwd>/.pi/extensions`, or a re-verify-and-replace before each turn.
-3. **Skills are handed read-only**, or as content the harness cannot write back (which is what
-   the `skills://` mechanism already models: read-only, versioned by sha256, no paths - but
-   nothing consumes it today and the harnesses read a directory, not the protocol).
-
-
-
-**(o6 analysis - from the harness sources, read directly.)**
-
-The harnesses the plugins drive are npm packages; their real discovery rules were read from
-the packed packages (pi `@earendil-works/pi-coding-agent`, jouzu `jouzu`, dsh `@deepseek-ai/dsh`):
-
-- **pi** (`dist/cli/args.js`) has explicit-path flags:
-  `--extension, -e <path>` (repeatable), `--no-extensions, -ne` (disable discovery; explicit
-  `-e` still counts), `--skill <path>` (repeatable), `--no-skills, -ns`. So **pi can load
-  extensions and skills from ANY absolute path with discovery off** - the workspace is a
-  CHOICE the adapter makes, not a pi requirement.
-- **jouzu** runs the same shape (`--extension <path>` / `--skill <path>` from its resolved
-  paths).
-- **dsh** already keeps extensions in `$DSH_HOME/profiles/...` (outside the workspace); its
-  workspace root is the invoking directory and its skills come from `DSH_AGENTS_HOME/skills`.
-
-**So the exposure is the hub's own choice, not a harness limit.** pi and jouzu adapters place
-extensions into `<cwd>/.pi/extensions` and pass `--approve`, which puts the GATING extension
-inside the agent's writable workspace. The fix is entirely adapter-side and requires no harness
-change:
-
-1. place extensions and skills in a **hub-owned directory outside the workspace**;
-2. launch with **discovery off** and explicit paths:
-   pi: `-ne -e <hub>/ext/<id> ...` and `--no-skills --skill <hub>/skills`;
-   jouzu: the same; dsh: already outside;
-3. the agent then cannot add or edit a trust-bearing extension (discovery off, paths outside),
-   and skills are handed from a directory it cannot write;
-4. the approval gate rests on the adapter (it already sees every tool call) plus an extension
-   loaded from the hub-owned dir - never on a file in the workspace.
+**(o6) is the security delivery rule settled enough to implement?** The direction is decided
+(above): hub-owned paths outside the workspace, discovery off, adapter-enforced gate. What is
+left is not a design question but a per-adapter one - confirm each harness accepts the exact
+flags (pi/jouzu verified: `-e`/`--extension`, `--skill`, `-ne`/`--no-skills`; dsh already keeps
+extensions in `$DSH_HOME`), and decide whether skills are handed as a directory the agent
+cannot write, or through the `skills://` read-only protocol the hub already models (nothing
+consumes it today).
 
 **(o5) anonymous discovery.** `/v1/harnesses` is today the only token-free route. Once it
 becomes the management view (o4), does it stay token-free, or does it require the token like
