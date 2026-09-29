@@ -37,10 +37,15 @@ marks nothing - the prefix is present on some routes and absent on others for no
 | `DELETE /v1/hub/plugins/{id}` | remove a plugin the HUB installed (refuses a deployment's tree, and a harness with open sessions). | **RENAME** `/v1/plugins/{id}` |
 | `POST /v1/hub/plugins/{id}/prepare` | ask the adapter to materialise the runtime its manifest pins (idempotent). | **RENAME** `/v1/plugins/{id}/prepare` |
 | `GET /v1/hub/plugins/{id}/icon/{variant}` | one variant (light/dark) of a plugin's own icon. | **RENAME** `/v1/plugins/{id}/icon/{variant}` |
-| `GET /v1/hub/orphans` | plugin directories under the hub's own root with no manifest (what a failed install leaves). | **MOVE** into plugins -> `/v1/plugins/orphans` |
-| `DELETE /v1/hub/orphans/{id}` | remove one such leftover (refuses a directory that has a manifest). | **MOVE** into plugins -> `/v1/plugins/orphans/{id}` |
 | `POST /v1/hub/registry/refresh` | read the configured registry URL and write it where the hub reads the catalog; the ONLY way the URL is contacted. | **RENAME**; `refresh` is an action, not a resource - see "open questions" (a). |
 | `GET /v1/hub/catalog` | the plugin catalog the hub was shipped with (the registry file restating where each plugin's releases are). | **RENAME** to say it is the registry cache, and place it by plugins |
+
+**REMOVE (not a route):** `GET/DELETE /v1/hub/orphans`. Leftover manifestless directories are an
+INTERNAL problem - the hub's install/replace is not atomic, so it leaves half-directories,
+and the route handed that cleanup to the user. The fix is internal: (1) make the replace
+atomic (old dir -> `.outgoing`, staging -> dir, then delete `.outgoing`; roll back on failure,
+so a directory is never half), and (2) sweep transient dirs (`.staging-*`, `.outgoing-*`,
+`.runtime-carry-*`) at boot. The user never sees a leftover and has no route for it.
 
 ## 4. harnesses - the hub's harness registry, and each harness's own surface
 
@@ -89,7 +94,7 @@ plugin kind is `model-provider` (the twin of `harness-adapter`). Distinct owner 
 | `PATCH /v1/hub/providers/{id}` | change a model provider (label, url, api, token, declarations). | **RENAME** `/v1/model-providers/{id}` |
 | `DELETE /v1/hub/providers/{id}` | remove a model provider and its credential. | **RENAME** `/v1/model-providers/{id}` |
 | `POST /v1/hub/providers/{id}/logout` | drop the credential, keep the row. | **RENAME** `/v1/model-providers/{id}/logout` |
-| `GET /v1/hub/providers/models/list` | API 1: the hub-managed model providers' catalogs, what the hub owns and can inject. Explicitly NOT the model-selection source. | **RENAME** `/v1/model-providers/models`; drop the `list` verb |
+| `GET /v1/hub/providers/models/list` | API 1: the models the HUB manages (across its model providers) - what the hub owns and can inject. Explicitly NOT the model-selection source and does NOT include a harness's own models. | **MOVE** to its own class -> `/v1/models` (see class 10) |
 | `GET /v1/hub/providers/{id}/models` | the cached catalog of ONE model provider (no network). | **RENAME** `/v1/model-providers/{id}/models` |
 | `PATCH /v1/hub/providers/{id}/models` | replace the enabled selection. | **RENAME** `/v1/model-providers/{id}/models` |
 | `POST /v1/hub/providers/{id}/models/refresh` | refresh one model provider's catalog (a network fetch). | **RENAME** `/v1/model-providers/{id}/models/refresh`; an action - see "open questions" (a) |
@@ -150,6 +155,21 @@ Distinct owner from class 4's harness-connections: these are the **hub-managed**
 | `GET /v1/sessions/{id}/questions` | the questions the harness asked this session (answer-seeking, not permission). | **KEEP** |
 | `POST /v1/sessions/{id}/questions/{qid}` | answer a pending question. | **KEEP** |
 
+## 10. models - the models themselves, three views, three owners
+
+The word "models" hides three different lists. They are kept apart on purpose; each answers a
+different question and one must not be derived from another (no reverse coupling):
+
+| route | what it is | owner |
+|---|---|---|
+| `GET /v1/models` (new; today `GET /v1/hub/providers/models/list`) | **the models the HUB manages** - across its model providers. What the hub owns and can inject. Does **not** include a harness's own models. | the hub |
+| `GET /v1/harnesses/{id}/models` | the view **through this harness** = its own models **+** the hub-managed ones it can reach. The selection source for a session on that harness. | the harness (+ hub, merged) |
+| `GET /v1/model-providers/{id}/models` | ONE model provider's catalog (cached, no network). | that provider |
+
+**MOVE** `providers/models/list` -> `/v1/models` (top-level: a model is what a user picks, not
+a sub-detail of the hub's provider records).
+
+
 ---
 
 ## Summary of the proposals
@@ -157,9 +177,11 @@ Distinct owner from class 4's harness-connections: these are the **hub-managed**
 - **RENAME**: drop the inconsistent `/hub/` prefix; one prefix `/v1/` (classes 2-7).
 - **MERGE (1 real duplicate)**: `POST /v1/harnesses/{id}/enable|disable` == the `/hub/`
   twin; keep one.
-- **MOVE**: `orphans`, `registry`, `catalog` -> the plugins class; `openapi.json` -> the
-  status class.
-- **RENAME a verb out of a path**: `model-providers/models/list` -> `model-providers/models`.
+- **MOVE**: `registry`, `catalog` -> the plugins class; `openapi.json` -> the status class;
+  `providers/models/list` -> `/v1/models` (class 10).
+- **REMOVE A ROUTE (internal, not user-facing)**: `plugins/orphans` - see class 3.
+- **RENAME a verb out of a path**: drop `list` where it is a verb (now moot for models,
+  which moved to `/v1/models`).
 - **ADD DESCRIPTIONS** (6 routes have none): harness enable/disable, `GET /sessions/{id}`,
   `sessions/{id}/approvals`, `sessions/{id}/artifacts`, `sessions/{id}/cancel`,
   `/hub/shutdown`.
