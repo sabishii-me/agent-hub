@@ -362,10 +362,14 @@ Facts (from the packed harnesses):
 3. **A virtual filesystem** (fs interposer in the adapter): possible, but fragile and fights
    the harness; not the first choice.
 
-**(o6) is the security delivery rule settled enough to implement?** The direction is decided
-(above): hub-owned paths outside the workspace, discovery off, adapter-enforced gate. What is
-left is not a design question but a per-adapter one - confirm each harness accepts the exact
-flags (pi/jouzu verified: `-e`/`--extension`, `--skill`, `-ne`/`--no-skills`; dsh already keeps
-extensions in `$DSH_HOME`), and decide whether skills are handed as a directory the agent
-cannot write, or through the `skills://` read-only protocol the hub already models (nothing
-consumes it today).
+**(o6) the security delivery rule - decided; what remains is per-adapter confirmation.**
+
+**Decided** (see ARCHITECTURE, sections 6 and 7): skills are delivered through an **adapter-side
+`node:fs` hook** that resolves a `skills://` URI to **hub content**, so the harness sees a logical
+URI and never a real path (verified: a `--require` hook intercepts `readFileSync("skills://...")`
+in an ESM Node child); extensions the agent must not touch are placed in a **hub-owned path
+outside the workspace**, with harness discovery off.
+
+Remaining (per adapter, not a design question): confirm each harness accepts the needed flags
+(pi/jouzu: `-e`/`--extension`, `--skill`, `-ne`/`--no-skills`; dsh keeps extensions in
+`$DSH_HOME`), and place the hook in the shared adapter library so it is written once.
