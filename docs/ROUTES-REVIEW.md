@@ -1,11 +1,16 @@
-# Route review (for approval)
+# Route review, and what was decided
 
-Every route in `contract/v1.json` today: method, path, what it does (from the contract),
-and a verdict. **Nothing here is changed yet** - this is the review you asked for. The
-verdicts are proposals.
+Two parts:
 
-Legend: **KEEP** (fine as is) · **RENAME** (path/naming) · **MERGE** (duplicate) · **MOVE**
-(belongs to another class) · **ADDAUTH?** (open without a token, on purpose or not).
+1. **Classes 1-10** - every route in `contract/v1.json` **today**, with what it does (from the
+   contract) and a verdict. This is a review of the current surface; it is not the target.
+2. **The decided sections** (after the classes) - what the review settled: the prefix, the
+   classes of the target surface, and the open items (o4/o5/o6). **Where a class verdict and a
+   decided section disagree, the decided section wins** (the class is the "before" picture). The
+   verdicts were brought in line where a later decision superseded them.
+
+Legend for the class tables: **KEEP** · **RENAME** · **MERGE** · **MOVE** (belongs to another
+class) · **REMOVE** (internal, not a route).
 
 A fact that decides several verdicts: a client is **always** talking to the hub, so `/v1/hub/`
 marks nothing - the prefix is present on some routes and absent on others for no rule.
