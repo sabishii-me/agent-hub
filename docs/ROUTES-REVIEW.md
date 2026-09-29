@@ -205,31 +205,20 @@ a sub-detail of the hub's provider records).
 - **plugin API scope**: plugin lifecycle, version, install/uninstall, metadata, enable/disable.
   Not extensions, not skills, not provider records.
 
-## Current state: what an extension is today (confirmed from the sources)
+## Extensions: two kinds (decided)
 
-Not a decision yet - the facts, so the plugin-ization question is answered against reality.
+There are two kinds of extension, and they are not the same thing:
 
-- An extension is **real files, not code baked into the adapter**: `extensions/<id>/` inside
-  **each harness-adapter repository** (`prts-harness-pi/extensions/agent-presets`, `plan`;
-  deepseek's `dsh-presets`, `hub-command-approval`). pi/jouzu ship them as **TypeScript**
-  (`index.ts`) and pi loads them at runtime through **jiti** (pi's
-  `dist/core/extensions/loader.js`: "loads TypeScript extension modules using jiti").
-- The adapter's **manifest declares them** (`manifest.extensions: ["agent-presets","plan"]`),
-  and the hub copies the declared ids from the plugin's own `extensions/` into the harness's
-  data dir; the adapter then places them (pi/jouzu: into `<cwd>/.pi/extensions/`; dsh: into
-  `$DSH_HOME`).
-- So today an extension is **part of the harness-adapter plugin**: its content lives in the
-  adapter's repository and ships in the adapter's artifact.
-- **Consequence:** adding, removing or changing an extension means **editing and republishing
-  the adapter plugin**. An extension is not its own publishable unit.
+1. **adapter-shipped** - aligned with the adapter's own function (an approval mode, the preset
+   mechanism; for pi/jouzu `agent-presets`/`plan`, for dsh `dsh-presets`/`hub-command-approval`).
+   This is **part of the adapter**. It stays in the adapter repository now. Later it may move
+   into an extension package, and then the **adapter declares a dependency on it**.
+2. **user-authored** - a user's own extension. This is what would be **plugin-ized** later.
 
-### Plugin-ization question (to decide)
-
-Should an extension become **its own plugin kind** - its own repository, its own manifest,
-its own artifact, mounted by the hub - instead of a directory inside the harness-adapter
-plugin? Components that would follow: a plugin kind (e.g. `extension`), a manifest describing
-which harnesses/hosts it serves, the hub's install/list/enable path for it, and the adapter
-resolving the extensions it is given from several plugin sources (not just its own repo).
+**Today there are no user extensions, so both live in the adapter.** No extension plugin kind
+is built now. (The facts: an extension here is real files - pi/jouzu TypeScript, loaded by pi
+through jiti; dsh `.js`/`.yml` - in each adapter repository's `extensions/<id>/`, declared by
+the adapter manifest, copied by the hub and placed by the adapter.)
 
 ## Skills and extensions: granularity and delivery (decided direction)
 
@@ -267,8 +256,10 @@ approval. The delivery rule that fixes both:
 4. the approval gate rests on the **adapter** (which already sees every tool call) plus an
    extension loaded from the hub-owned dir - never on a file in the workspace.
 
-The pi/jouzu adapters currently do the opposite (place extensions into `<cwd>/.pi/extensions`
-and pass `--approve`), which is the exposure. The fix is adapter-side; no harness change.
+Where the placement lives is the adapter's choice, and today pi/jouzu place extensions into
+`<cwd>/.pi/extensions` with `--approve`. Moving the placement to a hub-owned directory with
+discovery off is adapter-side; no harness change. (The adapter-shipped extensions stay part of
+the adapter - see "Extensions: two kinds" - the point here is only WHERE they are placed.)
 
 ## Open questions (the ones still real)
 
