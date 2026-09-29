@@ -37,7 +37,43 @@ UI and no harness code.
   (axum/hyper + SSE); validation is driven by the existing contract files; zip/http/queue come
   from crates. The domains are ours.
 
-## 2. The shape, and why it is cut this way
+## 2. Infrastructure is crates; the hub hand-rolls nothing (ADR-0010, carried over)
+
+Stability comes from infrastructure that is already proven, not from writing it again. This is
+the rule ADR-0010 set for the Node hub, and it holds harder in Rust: the hub's own code is the
+domains; **everything below the domains is a maintained crate.**
+
+| concern | today (hand-rolled in Node) | the crate |
+|---|---|---|
+| HTTP server, routing, SSE | hand-written `node:http` + `sseWrite` | **axum** (on **hyper**/**tokio**) + `axum::response::sse` |
+| JSON | `JSON.parse` | **serde** + **serde_json** |
+| contract validation | hand-written field checks | **jsonschema** over the existing `contract/*.json` |
+| SQLite | hand-rolled JSON files | **rusqlite** (bundled) - or **sqlx** if async is preferred |
+| HTTP client (downloads) | hand fetch loop | **reqwest** (+ **rustls**) |
+| zip (plugin artifacts) | hand-written `zip.mjs` (326 lines) | the **zip** / **async_zip** crate |
+| bounded concurrency, retry, backoff | hand-rolled 8-worker loop, no retry | **tokio::sync::Semaphore** + **backoff** / **retry** |
+| process spawn (adapter) | `child_process` | **tokio::process** |
+| filesystem walks, temp dirs | hand loops | **walkdir**, **tempfile** |
+| globs, mime, time, uuid, hex/hash | hand or ad hoc | **globset**, **mime_guess**, **time**, **uuid**, **hex**, **sha2** |
+| secrets in the OS store | hand-written `secret-store.mjs` + PowerShell | **keyring** (OS keychain), **zeroize**/**secrecy** for in-memory handling |
+| platform dirs | hand-built paths | **directories** |
+| CLI | hand argument parsing | **clap** |
+| logging / tracing | `console.log` | **tracing** + **tracing-subscriber** |
+| error types | ad-hoc objects with a `code` | **thiserror** (typed) + **anyhow** at the edges |
+| semver (plugin/host versions) | hand comparison | **semver** |
+
+**The rule, stated once:** if a piece of infrastructure has a maintained crate, the hub uses it;
+it does not write its own zip reader, its own HTTP client, its own retry, its own keychain, or
+its own glob. **Hand-written infrastructure is where the defects live** - the Node hub proved it
+(a hand-written zip parser, a hand-rolled downloader with no backoff, a hand-written HTTP/SSE
+layer that froze under two connections).
+
+**What stays ours** (it is not infrastructure, and no crate does it): the domains - plugins,
+sessions, providers, connections, harnesses, skills, extensions, humans - the `/v1` semantics,
+the hub<->adapter contract, and the plugin placement rules. The split is exactly ADR-0010:
+**infrastructure is borrowed; the business and the contract are ours.**
+
+## 3. The shape, and why it is cut this way
 
 The transport and routing are a framework's, used the way a Rust web service is: **each area is
 its own router, mounted on the app**. The entry stays tiny and a route change touches one small
@@ -72,7 +108,7 @@ agent-hub/
 |   |                             protocols it names (http, auth, catalog dialect)
 |   |- skills/                    the skills domain (top-level mechanism)
 |   |- extensions/                the extension domain: the adapter-shipped extensions, placed
-|   |                             outside the agent's workspace (see 3)
+|   |                             outside the agent's workspace (see 4)
 |   |- registry/                  the fetched registry + catalog
 |- contract/                      v1.json, adapter-v1.json, errors.json, openapi.json
 |- tests/                         the adversarial suite (drives /v1)
@@ -91,7 +127,7 @@ agent-hub/
   says who is subscribed and what changed (so no file contains `event:`/`data:` text);
 - **`adapter/` is the only crate that spawns a process and speaks stdio**.
 
-## 3. Extensions, skills, and the security boundary
+## 4. Extensions, skills, and the security boundary
 
 These are not code the hub imports; they are **resources with a placement rule**.
 
@@ -108,7 +144,7 @@ These are not code the hub imports; they are **resources with a placement rule**
 The hub's part is to **own the placement and the content**, and to hand the adapter paths - never
 to run the harness's code.
 
-## 4. Model providers are DATA (decided)
+## 5. Model providers are DATA (decided)
 
 A provider is **data**, not a module. The hub owns the function: HTTP, authentication (device-code,
 api-key, ...), catalog fetch and field mapping; a provider declares
@@ -119,7 +155,7 @@ This is what removes in-process foreign code (a provider can no longer run insid
 why Rust is possible at all. (Full table of what moves from provider to hub: ROUTES-REVIEW,
 "Model providers are DATA".)
 
-## 5. Data
+## 6. Data
 
 **A single SQLite database** (via `rusqlite`, bundled so there is no system dependency), reached
 only through `db/`. Today the state is JSON files read-modify-written, which is where "two writers"
@@ -131,7 +167,7 @@ and "half a file" come from; one database gives transactions and one writer.
   store / a vault). The database holds their path and metadata, not their bytes.
 - `db/<table>.rs` is the only place its table is named in SQL.
 
-## 6. The rules (invariants)
+## 7. The rules (invariants)
 
 1. **No blocking on a request path (ADR-0009).** I/O is async (`tokio::fs`, the db, awaited child
    processes). Blocking work (the bundled `rusqlite` calls, a synchronous fs op) runs in
@@ -154,7 +190,7 @@ and "half a file" come from; one database gives transactions and one writer.
 8. **Dependencies are built at the entry.** `main.rs` builds the `AppState` and passes it to the
    routers; a module does not reach for a mutable global.
 
-## 7. How the structure makes a change local (from the whole to the part)
+## 8. How the structure makes a change local (from the whole to the part)
 
 1. **Run the frame first.** `main.rs` + `transport/` + the mounted routers, with the current routes
    moved on **behaviour-unchanged**. The surface is proven before any domain changes.
@@ -165,13 +201,13 @@ and "half a file" come from; one database gives transactions and one writer.
 4. **The self-check holds the seam.** `main.rs` compares the mounted surface to `contract/v1.json`
    at boot, so a forgotten route is a refusal to start.
 
-## 8. What this architecture does not decide
+## 9. What this architecture does not decide
 
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
 - C - a client connecting directly to an adapter (a separate decision; re-opens ADR-0001).
 
-## 9. The order of work (architecture first, then inward)
+## 10. The order of work (architecture first, then inward)
 
 1. **the frame**: `hub/main.rs`, `crates/transport` (axum listener, bearer auth, SSE, `accepted`),
    `crates/contract` (load + self-check), `crates/events`. The existing routes are moved on
