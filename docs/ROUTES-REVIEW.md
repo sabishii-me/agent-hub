@@ -280,6 +280,40 @@ owner: there is no reason for it. The hub is loopback and a client already holds
 (from `endpoint.json`); discovery does not need to be anonymous. **Every route requires the
 token** - a contract change (the one exempt route becomes 401).
 
+**(o6-a) can the hub give the harness a virtual filesystem, so skills are never a writable
+directory?  ANALYSED - possible but fragile; the robust boundary is the tool layer.**
+
+Facts (from the packed harnesses):
+
+- The harnesses read skills through **`node:fs`** directly. pi's loader is
+  `loadSkillsFromDir`/`loadSkillFromFile` (`readdirSync`/`readFileSync`/`statSync`), and its
+  `--skill` takes a **path**; **there is no in-memory / content-injection entry**. So
+  `skills://` (the hub's read-only, versioned, no-paths protocol) **cannot be handed to a
+  harness** - the harness reads a directory, not a protocol. `skills://` stays a **client-facing
+  read view**, not a delivery to the harness.
+- pi runs as a **Node process** (`engines: node >=22.19.0`, bundled `dist/bundle/cli.js`) and
+  imports `fs`. So a virtual filesystem is *possible* by interposing `node:fs` in the adapter's
+  spawn (a `--require` hook). But it is **fragile**: pi is bundled, and any fs method the
+  interposer misses leaks to the real disk.
+- **The agent's `write` tool is NOT confined**: it accepts "relative or absolute" paths
+  (`createWriteToolDefinition`: `resolveToCwd(path, ...)`), so an absolute path outside the
+  workspace is writable. Without a boundary, the agent can locate and write a hub skill dir.
+- **pi has a tool-call interception hook** (`dist/core/extensions/wrapper.js`: "Tool call and
+  tool result interception is handled by AgentSession via agent-core hooks"; bash.js mentions
+  "extensions that intercept user_bash"). An **extension can intercept a tool call and block
+  it**. That extension can be adapter-shipped and loaded from a hub-owned path with discovery
+  off - out of the agent's reach.
+
+**So the boundary options, in order of robustness:**
+
+1. **Tool interception (recommended)**: an adapter-shipped extension loaded from a hub-owned
+   path (discovery off) intercepts `write`/`bash` and refuses anything outside the workspace;
+   skills live in a hub dir the agent then cannot write. Not a VFS - a gate the agent cannot
+   edit.
+2. **`--exclude-tools`**: blunt (removes a tool entirely); only if interception is unworkable.
+3. **A virtual filesystem** (fs interposer in the adapter): possible, but fragile and fights
+   the harness; not the first choice.
+
 **(o6) is the security delivery rule settled enough to implement?** The direction is decided
 (above): hub-owned paths outside the workspace, discovery off, adapter-enforced gate. What is
 left is not a design question but a per-adapter one - confirm each harness accepts the exact
