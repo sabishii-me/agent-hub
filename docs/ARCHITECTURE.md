@@ -107,6 +107,9 @@ agent-hub/
 |   |- humans/                    approvals and questions (a harness asking a person to decide)
 |   |- adapter/                   the hub<->adapter link: spawn, stdio JSON-RPC, the event and
 |   |                             human-wait plumbing (the only crate that spawns a process)
+|   |                             the ADAPTER-side common layer (see 6) is a separate crate/artifact
+|   |                             the adapters build on - the hub<->adapter contract, the shared
+|   |                             lifecycle, the transcript, the skills hook, the catalog probe
 |   |- providers/                 the model-provider domain: the record (data), and the hub-owned
 |   |                             protocols it names (http, auth, catalog dialect)
 |   |- skills/                    the skills domain (top-level mechanism)
@@ -190,7 +193,36 @@ This is what removes in-process foreign code (a provider can no longer run insid
 why Rust is possible at all. (Full table of what moves from provider to hub: ROUTES-REVIEW,
 "Model providers are DATA".)
 
-## 6. Data
+## 6. The adapter layer is shared, not copied
+
+Every harness adapter today re-implements the SAME logic. Measured: pi (1,676 lines) and jouzu
+(1,806) share **34 function names** (`send`, `piRequest`, `handleBusMessage`, `copyTree`,
+`placeExtension`, `resolvePi`, the transcript reader/writer, `probeModels`, ...), and their
+`history-content.cjs` files are **byte-identical**. That is the same defect as the old
+`server.mjs`: no shared seam, so the common part is copy-pasted, and a fix must be made N times.
+
+**Decided: a shared adapter layer owns the common logic; an adapter is only the harness-specific
+part.** The common layer (a Rust crate / a small binary the adapters build on, matching
+"don't hand-roll, don't copy"):
+
+- the **hub<->adapter stdio JSON-RPC** loop, framing, request/response, errors
+  (`contract/adapter-v1.json`);
+- the **session lifecycle** plumbing the contract defines (start/resume, config, prompt, abort,
+  history paging) as the shapes the hub expects;
+- the **transcript** reader/writer (identical today across adapters);
+- the **skills hook** (the `node:fs` interposer that resolves `skills://` to hub content) and the
+  extension placement RULE; the adapter supplies the harness-specific placement the harness needs;
+- the **model catalog probe** shape and the model/declaration mapping helper;
+- the common helpers (`copyTree`, JSON file IO, credential-state shape).
+
+An adapter keeps ONLY what is the harness's own: how to spawn its harness, its CLI/rpc dialect,
+its extension/preset mechanics, its auth flow specifics. The split is the same rule as the hub:
+**the contract and the lifecycle are shared; the harness's dialect is the adapter's.**
+
+This is also where the **skills hook** lives once (see 4), so it is written once, not per adapter,
+and a Rust adapter gets it from the shared layer.
+
+## 7. Data
 
 **A single SQLite database** (via `rusqlite`, bundled so there is no system dependency), reached
 only through `db/`. Today the state is JSON files read-modify-written, which is where "two writers"
@@ -202,7 +234,7 @@ and "half a file" come from; one database gives transactions and one writer.
   store / a vault). The database holds their path and metadata, not their bytes.
 - `db/<table>.rs` is the only place its table is named in SQL.
 
-## 7. Concurrency: how ADR-0009's numbers are met in Rust
+## 8. Concurrency: how ADR-0009's numbers are met in Rust
 
 ADR-0009 is a floor and a target, measured, not asserted:
 
@@ -228,7 +260,7 @@ target is not a hope: an event-driven runtime holds thousands of idle connection
 on the loop waits; in Rust the loop is the runtime's, and blocking is an explicit, checked
 boundary rather than a rule to remember.
 
-## 8. The rules (invariants)
+## 9. The rules (invariants)
 
 1. **No blocking on a request path (ADR-0009).** I/O is async (`tokio::fs`, the db, awaited child
    processes). Blocking work (the bundled `rusqlite` calls, a synchronous fs op) runs in
@@ -252,7 +284,7 @@ boundary rather than a rule to remember.
 8. **Dependencies are built at the entry.** `main.rs` builds the `AppState` and passes it to the
    routers; a module does not reach for a mutable global.
 
-## 9. How the structure makes a change local (from the whole to the part)
+## 10. How the structure makes a change local (from the whole to the part)
 
 1. **Run the frame first.** `main.rs` + `transport/` + the mounted routers, with the current routes
    moved on **behaviour-unchanged**. The surface is proven before any domain changes.
@@ -263,13 +295,13 @@ boundary rather than a rule to remember.
 4. **The self-check holds the seam.** `main.rs` compares the mounted surface to `contract/v1.json`
    at boot, so a forgotten route is a refusal to start.
 
-## 10. What this architecture does not decide
+## 11. What this architecture does not decide
 
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
 - C - a client connecting directly to an adapter (a separate decision; re-opens ADR-0001).
 
-## 11. The order of work (architecture first, then inward)
+## 12. The order of work (architecture first, then inward)
 
 1. **the frame**: `hub/main.rs`, `crates/transport` (axum listener, bearer auth, SSE, `accepted`),
    `crates/contract` (load + self-check), `crates/events`. The existing routes are moved on
