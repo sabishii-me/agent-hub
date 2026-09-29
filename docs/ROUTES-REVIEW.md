@@ -220,10 +220,22 @@ a `cwd`), so different sessions/projects can carry different skills? This is a p
 granularity decision, not derivable from the code. **Blocked on:** whether the harness
 adapters (pi, dsh) can even *do* workspace-based skills (see o2).
 
-**(o2) can the adapters do workspace-based skills?** To be checked in the adapter sources
-(pi, dsh): does the harness read skills from a per-session/per-workspace location, or only
-from one directory fixed at process start? If only the latter, workspace-based is not
-achievable without a restart-per-workspace.
+**(o2) can the adapters do workspace-based skills?  ANSWERED (adapter sources read).**
+
+- **pi** and **jouzu**: **one adapter process per session**. The harness is spawned with the
+  session's `cwd`, and their **extensions are already workspace-based** (the adapter copies the
+  extension into `cwd/.pi/extensions/`). Skills are handed as `--no-skills --skill <one dir>`
+  on the spawn argv - so a **per-session/per-workspace skills dir is achievable**: the process
+  is already per session, and the hub could hand a different dir each time. (The adapter
+  comment calls `--skill` additive, i.e. repeatable.)
+- **dsh**: **one shared process per home** (`one dsh per home`; `const shared = true`). It reads
+  skills from `DSH_AGENTS_HOME/skills/`, and `DSH_AGENTS_HOME` is fixed at spawn (env). A
+  shared process cannot carry a different skills home per session/workspace without a restart
+  per workspace. So **workspace-based is not directly achievable for dsh**.
+
+**The inconsistency this exposes:** for one plugin's shipped resources - extensions are
+**per-workspace** (installed into the session's `cwd`) while skills are a **single fixed
+directory** (per harness). Two resources of the same kind are handled at two granularities.
 
 **(o3) extensions/skills "selection" ownership.** With the three layers above: extensions'
 selection is harness-scoped (`/v1/harnesses/{id}/extensions`). If skills become
