@@ -73,26 +73,29 @@ Two owners share the word "harness", which is correct but must stay clear:
 Proposal: keep the harness-registry pair, drop the `/v1/harnesses/{id}/enable|disable` pair
 (they have no description, which is a sign they were the later add).
 
-## 5. providers - what the hub manages (its own provider plugins + records)
+## 5. model-providers - the model services the hub manages (and their plugin types)
 
-Distinct owner from class 4's harness-connections: these are the **hub-managed** providers.
+The system's word is **model provider** (a service that serves models: endpoint + api +
+credential + catalog), not a generic "provider" - that word was occupying too much. The
+plugin kind is `model-provider` (the twin of `harness-adapter`). Distinct owner from class
+4's harness-connections: these are the **hub-managed** model providers.
 
 | route | what it does | verdict |
 |---|---|---|
-| `GET /v1/hub/provider-types` | the installed hub provider plugins, as data (each imported from a plugin). | **RENAME** `/v1/providers/types` |
-| `GET /v1/hub/providers` | the providers the hub manages (one file each; endpoint, protocol, declarations). | **RENAME** `/v1/providers` |
-| `POST /v1/hub/providers` | register a provider. | **RENAME** `/v1/providers` |
-| `GET /v1/hub/providers/{id}` | read one provider by id. | **RENAME** `/v1/providers/{id}` |
-| `PATCH /v1/hub/providers/{id}` | change a provider (label, url, api, token, declarations). | **RENAME** `/v1/providers/{id}` |
-| `DELETE /v1/hub/providers/{id}` | remove a provider and its credential. | **RENAME** `/v1/providers/{id}` |
-| `POST /v1/hub/providers/{id}/logout` | drop the credential, keep the row. | **RENAME** `/v1/providers/{id}/logout` |
-| `GET /v1/hub/providers/models/list` | API 1: the hub-managed providers' catalogs, what the hub owns and can inject. Explicitly NOT the model-selection source. | **RENAME** `/v1/providers/models`; drop the `list` verb |
-| `GET /v1/hub/providers/{id}/models` | the cached catalog of ONE provider (no network). | **RENAME** `/v1/providers/{id}/models` |
-| `PATCH /v1/hub/providers/{id}/models` | replace the enabled selection. | **RENAME** `/v1/providers/{id}/models` |
-| `POST /v1/hub/providers/{id}/models/refresh` | refresh one provider's catalog (a network fetch). | **RENAME** `/v1/providers/{id}/models/refresh`; an action - see "open questions" (a) |
-| `POST /v1/hub/providers/{id}/auth` | start the provider plugin's authorization (device-code/browser). | **RENAME** `/v1/providers/{id}/auth` |
-| `GET /v1/hub/providers/{id}/auth/{op}` | the state of that authorization. | **RENAME** `/v1/providers/{id}/auth/{op}` |
-| `POST /v1/hub/providers/{id}/auth/{op}/cancel` | cancel it. | **RENAME** `/v1/providers/{id}/auth/{op}/cancel` |
+| `GET /v1/hub/provider-types` | the installed model-provider plugins, as data (each imported from a plugin). | **RENAME** `/v1/model-providers/types` |
+| `GET /v1/hub/providers` | the model providers the hub manages (one file each; endpoint, protocol, declarations). | **RENAME** `/v1/model-providers` |
+| `POST /v1/hub/providers` | register a model provider. | **RENAME** `/v1/model-providers` |
+| `GET /v1/hub/providers/{id}` | read one model provider by id. | **RENAME** `/v1/model-providers/{id}` |
+| `PATCH /v1/hub/providers/{id}` | change a model provider (label, url, api, token, declarations). | **RENAME** `/v1/model-providers/{id}` |
+| `DELETE /v1/hub/providers/{id}` | remove a model provider and its credential. | **RENAME** `/v1/model-providers/{id}` |
+| `POST /v1/hub/providers/{id}/logout` | drop the credential, keep the row. | **RENAME** `/v1/model-providers/{id}/logout` |
+| `GET /v1/hub/providers/models/list` | API 1: the hub-managed model providers' catalogs, what the hub owns and can inject. Explicitly NOT the model-selection source. | **RENAME** `/v1/model-providers/models`; drop the `list` verb |
+| `GET /v1/hub/providers/{id}/models` | the cached catalog of ONE model provider (no network). | **RENAME** `/v1/model-providers/{id}/models` |
+| `PATCH /v1/hub/providers/{id}/models` | replace the enabled selection. | **RENAME** `/v1/model-providers/{id}/models` |
+| `POST /v1/hub/providers/{id}/models/refresh` | refresh one model provider's catalog (a network fetch). | **RENAME** `/v1/model-providers/{id}/models/refresh`; an action - see "open questions" (a) |
+| `POST /v1/hub/providers/{id}/auth` | start the model-provider plugin's authorization (device-code/browser). | **RENAME** `/v1/model-providers/{id}/auth` |
+| `GET /v1/hub/providers/{id}/auth/{op}` | the state of that authorization. | **RENAME** `/v1/model-providers/{id}/auth/{op}` |
+| `POST /v1/hub/providers/{id}/auth/{op}/cancel` | cancel it. | **RENAME** `/v1/model-providers/{id}/auth/{op}/cancel` |
 
 ## 6. connections - what the hub manages
 
@@ -156,7 +159,7 @@ Distinct owner from class 4's harness-connections: these are the **hub-managed**
   twin; keep one.
 - **MOVE**: `orphans`, `registry`, `catalog` -> the plugins class; `openapi.json` -> the
   status class.
-- **RENAME a verb out of a path**: `providers/models/list` -> `providers/models`.
+- **RENAME a verb out of a path**: `model-providers/models/list` -> `model-providers/models`.
 - **ADD DESCRIPTIONS** (6 routes have none): harness enable/disable, `GET /sessions/{id}`,
   `sessions/{id}/approvals`, `sessions/{id}/artifacts`, `sessions/{id}/cancel`,
   `/hub/shutdown`.
@@ -165,7 +168,7 @@ Distinct owner from class 4's harness-connections: these are the **hub-managed**
 
 ## Open questions (need your call before I write the final route docs)
 
-**(a) Action-shaped paths.** `registry/refresh` and `providers/{id}/models/refresh` are
+**(a) Action-shaped paths.** `registry/refresh` and `model-providers/{id}/models/refresh` are
 verbs. ADR-0009 says a long action should be `202 + Location` on a resource, not a verb path.
 Options: keep `POST /v1/<resource>/refresh` (clear, common), or model it as
 `POST /v1/<resource>` (the resource refreshes itself). Your call.
