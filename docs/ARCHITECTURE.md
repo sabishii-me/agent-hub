@@ -156,13 +156,28 @@ These are not code the hub imports; they are **resources with a placement rule**
 The hub's part is to **own the placement and the content**, and to hand the adapter paths - never
 to run the harness's code.
 
-**On `skills://`.** It is **not an OS or network protocol** - it is a **logical URI** the hub parses
-(`skills://<id>/<file>`) and maps to a read-only file, served at `GET /v1/sessions/{id}/resources`
-and `POST .../resources/read` (bounded, no paths, versioned by hash). It is trivially
-implementable in Rust (string handling + percent-decode). But it is a **client-facing read view**:
-the harnesses read skills from a **directory** (`--skill <path>`, `DSH_AGENTS_HOME/skills`), not
-from a URI - so `skills://` does not deliver skills to a harness, and does not by itself stop the
-agent from writing a skill directory. The delivery rule above (hub-owned path, discovery off) does.
+**Skills are delivered through an adapter-side hook (decided; verified).** The harnesses read
+skills from the filesystem (`--skill <path>`, `DSH_AGENTS_HOME/skills`), and all three run **as
+Node** (`#!/usr/bin/env node`; pi's bundle too). The adapter owns the spawn, so it can inject a
+**`node:fs` hook** (`NODE_OPTIONS=--require <hook>`), which resolves a **`skills://` URI to
+hub-provided content** - the harness sees a logical URI, never a real path, and the content is
+hub-owned. Verified: a `--require` hook intercepts `readFileSync("skills://…")` in an ESM Node
+child and returns virtual content.
+
+This is **only skills**, not a whole sandbox; and its limits are stated:
+
+- it hooks the fs calls a skill loader uses (`readFileSync`/`readdirSync`/`statSync`; pi/jouzu/dsh
+  all read via `fs`);
+- it does **not** by itself confine `child_process` - so the **real path must never leak** (not in
+  argv, env, or `--skill`), which is what makes "the agent cannot find it" true;
+- it requires the harness to run under Node; a harness shipped as a compiled binary (SEA/bun)
+  would need a different insertion point. All current harnesses are Node.
+
+**Where the hook lives:** either in each adapter, or in **a shared adapter layer** (a Rust adapter
+common layer) that all adapters use, so the hook is written once. The hub coordinates (it owns the
+content and the `skills://` namespace); the injection is adapter-side, because the adapter owns
+the harness's spawn. The hub may be Rust throughout, since the hook is injected into the Node
+harness by the adapter, not by the hub.
 
 ## 5. Model providers are DATA (decided)
 
