@@ -15,8 +15,10 @@ Two things make Rust possible; both are decisions of this design, not accidents:
 - a **model provider** is **data**, not an in-process module (see 5), so **no plugin runs code
   inside the hub's process**.
 
-With those, **the hub itself requires nothing from Node**; Rust gives the concurrency, the
-isolation and the process model structurally instead of by discipline.
+With those, **the hub itself requires nothing from Node**. Rust is chosen for its **runtime**
+(async tasks on a multi-threaded executor, an out-of-process adapter, a spawned-blocking boundary);
+it makes blocking *visible*, but it does **not** by itself prove the concurrency numbers - those are
+measured (see 12).
 
 The decisions live in the **desktop repository's** ADR log (`sabishii-dev-agent-desktop`,
 `docs/decisions/`). The ones this file carries out:
@@ -40,8 +42,9 @@ harness adapters over a separate contract (`contract/adapter-v1.json`). It owns 
 harness code.
 
 - **Concurrent and non-blocking (ADR-0009).** One runtime serves every client, session and plugin
-  operation. In Rust this is structural: async tasks on a multi-threaded executor, and **blocking
-  work is a visible boundary** (`spawn_blocking`), not a rule someone must remember.
+  operation. The runtime is a multi-threaded async executor, and blocking work is put on a
+  **spawned blocking pool** so it is a *visible boundary* rather than a rule to remember - but
+  visibility is a mechanism, not a measurement; the numbers are a runtime gate (see 12).
 - **The contract is the interface (ADR-0011).** `contract/v1.json` and `contract/adapter-v1.json`
   are language-neutral and are what the outside depends on; everything inside - the language, the
   framework, the crate layout - is private.
@@ -294,11 +297,12 @@ the design must state, and the parts it cannot guarantee:
   bypassed). This file does not mandate a specific mechanism; it forbids claiming tamper-proof
   integrity from directory placement alone. **Unknown/missing permission must fail closed.**
 
-**Runtime acceptance for the security claim is NOT done** and is not claimed here. It requires a
-real, attributable artifact and `/v1` runs against pi/jouzu/dsh for: absolute-path write, shell/
-child, links, the reboot load chain, and management-API/approval access by an agent identity
-(ROUTES-REVIEW o6 lists the scenarios). Until those run, security is a **stated design boundary
-with open verification**, not a passing result.
+**The runtime verification of the security claim is an implementation task, not a claim here**
+(`docs/review/VERIFICATION-TASKS.md`, T2): absolute-path write, shell/child, links, the reboot load
+chain, and management-API/approval access by an agent identity, against pi/jouzu/dsh on real
+artifacts. Two of its parts can still change the design and are listed as feasibility unknowns with
+exit conditions (T2a - is an OS execution boundary reachable; T2b - does the skills hook deliver on
+each real harness).
 
 ## 8. Data
 
@@ -467,10 +471,12 @@ in review are suggestions, not an approved SLO.
 **Why Rust.** ADR-0010 requires a mature transport and forbids hand-rolled infrastructure; it does
 not name a language. ADR-0011 says the implementation is private. So Rust is a **choice**, not a
 consequence of the ADRs, and it is recorded as a choice with a reason: with the adapter
-out-of-process and providers reduced to data, nothing in the hub needs Node, and Rust gives the
-concurrency, isolation and process model the ADRs require structurally. The old transport (Hono)
-being a Node choice does **not** argue against Rust (ADR-0011), and Rust does **not** argue that
-the old choice was wrong.
+out-of-process and providers reduced to data, nothing in the hub needs Node, and Rust's runtime
+(a multi-threaded executor, a blocking pool, out-of-process I/O) is a good fit for what the ADRs
+require. **But the fit is not the fulfilment**: the ADRs' concurrency numbers are measured (12),
+and the components are proposed, not proven (below). The old transport (Hono) being a Node choice
+does **not** argue against Rust (ADR-0011), and Rust does **not** argue that the old choice was
+wrong.
 
 **The crates.** Each row in section 2 is a **proposed substitution** for a hand-rolled piece, to
 be confirmed at implementation (a maintained crate with a compatible licence and a maintained
@@ -500,6 +506,12 @@ suite that drives `/v1` is the hub's own; it is not resurrected by this docs PR.
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
 - C - a client connecting directly to an adapter (a separate decision; re-opens ADR-0001).
+
+**Stage and gates.** This is the **architecture stage**: it states decisions and boundaries. The
+runtime verification of the decisions and the feasibility unknowns is **turned into implementation
+tasks with exit conditions** in `docs/review/VERIFICATION-TASKS.md` (T1-T6), not claimed here. No
+task is a merge condition for this stage; two of them (T2a execution boundary, T2b skills hook per
+harness) can still change a route and are called out as such.
 
 ## 17. The order of work
 
