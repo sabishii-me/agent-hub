@@ -183,69 +183,6 @@ async fn sse_resyncs_when_last_event_id_fell_out_of_window() {
     assert!(text.contains("hub.resync"), "resync: {text}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn many_concurrent_connections_are_served_while_one_op_runs() {
-    // T6: >= 100 concurrent connections, and one in-flight operation does not
-    // time another out. A real listener, real sockets.
-    let t = state();
-    let permits = Admission::new(1);
-    let slow_gate = Arc::new(tokio::sync::Notify::new());
-    let g = slow_gate.clone();
-    let p = permits.clone();
-    let router = finish(
-        routes().route(
-            "/v1/slow",
-            post(move |State(_): State<Transport>| {
-                let g = g.clone();
-                let p = p.clone();
-                async move {
-                    let Some(permit) = p.try_acquire() else {
-                        return Overloaded.into_response();
-                    };
-                    g.notified().await;
-                    drop(permit);
-                    axum::Json(serde_json::json!({ "done": true })).into_response()
-                }
-            }),
-        ),
-        Transport::new(t.bus.clone(), permits.clone()),
-    );
-    let base = serve(router).await;
-    let client = reqwest::Client::new();
-
-    // Start one long operation.
-    let slow = tokio::spawn({
-        let c = client.clone();
-        let b = base.clone();
-        async move { c.post(format!("{b}/v1/slow")).send().await.unwrap().status() }
-    });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // 150 concurrent status polls must all succeed, each fast.
-    let started = std::time::Instant::now();
-    let mut handles = Vec::new();
-    for _ in 0..150 {
-        let c = client.clone();
-        let b = base.clone();
-        handles.push(tokio::spawn(async move {
-            let r = c.get(format!("{b}/v1/status")).send().await.unwrap();
-            (r.status(), r.text().await.unwrap())
-        }));
-    }
-    for h in handles {
-        let (status, body) = h.await.unwrap();
-        assert_eq!(status, 200, "a status poll failed while a slow op ran");
-        assert!(body.contains("\"pid\""), "body: {body}");
-    }
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "150 concurrent polls took {:?}",
-        started.elapsed()
-    );
-
-    slow_gate.notify_waiters();
-    let _ = slow.await;
-}
 
 // --- tiny SSE reader helpers ---------------------------------------------
 

@@ -14,9 +14,11 @@
 //!   handling that converges (replay or resync), never a silent gap.
 
 pub mod auth;
+pub mod table;
 pub mod error;
 
 pub use auth::{require_bearer, BearerToken};
+pub use table::RouteTable;
 pub use error::{DomainError, ErrorRenderer};
 
 use std::sync::Arc;
@@ -203,5 +205,3 @@ fn parse_last_event_id(headers: &HeaderMap) -> Option<u64> {
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse().ok())
 }
-
-

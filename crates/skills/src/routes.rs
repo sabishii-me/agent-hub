@@ -31,18 +31,20 @@ impl SkillsState {
     }
 }
 
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/skills", "DELETE /v1/skills/{id}", "GET /v1/skills/{id}/files/{file...}", "PUT /v1/skills/{id}/files/{file...}"]
+fn table() -> agent_hub_transport::RouteTable<SkillsState> {
+    agent_hub_transport::RouteTable::new()
+        .mount("/v1/skills", &["GET"], get(not_implemented))
+        .mount("/v1/skills/{id}", &["DELETE"], delete(not_implemented))
+        // axum spells a catch-all `{*file}`; the contract spells it `{file...}`.
+        .mount_as("/v1/skills/{id}/files/{*file}", "/v1/skills/{id}/files/{file...}", &["GET", "PUT"], get(not_implemented).put(not_implemented))
 }
 
 pub fn routes() -> Router<SkillsState> {
-    Router::new()
-        .route("/v1/skills", get(not_implemented))
-        .route("/v1/skills/{id}", delete(not_implemented))
-        .route(
-            "/v1/skills/{id}/files/{*file}",
-            get(not_implemented).put(not_implemented),
-        )
+    table().router()
+}
+
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
 async fn not_implemented(State(s): State<SkillsState>) -> Response {

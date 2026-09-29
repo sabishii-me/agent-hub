@@ -31,22 +31,27 @@ impl SessionsState {
     }
 }
 
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/sessions", "POST /v1/sessions", "GET /v1/sessions/{id}", "PATCH /v1/sessions/{id}", "DELETE /v1/sessions/{id}", "GET /v1/sessions/{id}/turns", "POST /v1/sessions/{id}/turns", "POST /v1/sessions/{id}/cancel", "POST /v1/sessions/{id}/close", "POST /v1/sessions/{id}/reopen", "POST /v1/sessions/{id}/fork"]
+fn table() -> agent_hub_transport::RouteTable<SessionsState> {
+    agent_hub_transport::RouteTable::new()
+        .mount("/v1/sessions", &["GET", "POST"], get(not_implemented).post(not_implemented))
+        .mount(
+            "/v1/sessions/{id}",
+            &["GET", "PATCH", "DELETE"],
+            get(not_implemented).patch(not_implemented).delete(not_implemented),
+        )
+        .mount("/v1/sessions/{id}/turns", &["GET", "POST"], get(not_implemented).post(not_implemented))
+        .mount("/v1/sessions/{id}/cancel", &["POST"], post(not_implemented))
+        .mount("/v1/sessions/{id}/close", &["POST"], post(not_implemented))
+        .mount("/v1/sessions/{id}/reopen", &["POST"], post(not_implemented))
+        .mount("/v1/sessions/{id}/fork", &["POST"], post(not_implemented))
 }
 
 pub fn routes() -> Router<SessionsState> {
-    Router::new()
-        .route("/v1/sessions", get(not_implemented).post(not_implemented))
-        .route(
-            "/v1/sessions/{id}",
-            get(not_implemented).patch(not_implemented).delete(not_implemented),
-        )
-        .route("/v1/sessions/{id}/turns", get(not_implemented).post(not_implemented))
-        .route("/v1/sessions/{id}/cancel", post(not_implemented))
-        .route("/v1/sessions/{id}/close", post(not_implemented))
-        .route("/v1/sessions/{id}/reopen", post(not_implemented))
-        .route("/v1/sessions/{id}/fork", post(not_implemented))
+    table().router()
+}
+
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
 /// `not_implemented` goes through the SAME error renderer as every domain, so

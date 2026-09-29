@@ -1656,7 +1656,7 @@
     {
       "method": "POST",
       "path": "/v1/model-providers",
-      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id — what that model accepts (thinking levels, window, limits) — because a provider's model list does not carry any of it. A declaration may also carry `input` — the modalities the model takes (\"text\", \"image\") — because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers). Optional immutable providerType/providerTypeVersion select an installed type. Omitted values select custom-compatible v1 for compatibility. Explicit unknown type/version is rejected before storing credentials. Endpoint requirements and configuration validation belong to the selected type: a type that accepts a caller endpoint requires url; a type that owns its endpoint supplies it and rejects overrides. Fields are the configuration.fields its descriptor declares.",
+      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id — what that model accepts (thinking levels, window, limits) — because a provider's model list does not carry any of it. A declaration may also carry `input` — the modalities the model takes (\"text\", \"image\") — because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers). Optional immutable providerType/providerTypeVersion select an installed type. Omitted values select the built-in `custom-compatible` type (an endpoint + api-key provider the hub itself speaks). This is the default type, not a compatibility read of an old record. Explicit unknown type/version is rejected before storing credentials. Endpoint requirements and configuration validation belong to the selected type: a type that accepts a caller endpoint requires url; a type that owns its endpoint supplies it and rejects overrides. Fields are the configuration.fields its descriptor declares.",
       "request": {
         "id": "string?",
         "label": "string?",
@@ -1706,7 +1706,7 @@
     {
       "method": "POST",
       "path": "/v1/model-providers/{id}/logout",
-      "description": "drop a provider's stored credential and keep the row: the provider stays registered (its catalog, its declarations, its selection) but has no token until one is supplied again. Requests that need the credential then fail as `provider_unauthorized` instead of running on something else. A provider plugin with authLogout() is asked to revoke remotely (best effort; a failed revocation is reported and never undoes the local removal).",
+      "description": "drop a provider's stored credential and keep the row: the provider stays registered (its catalog, its declarations, its selection) but has no token until one is supplied again. Requests that need the credential then fail as `provider_unauthorized` instead of running on something else. The hub owns the credential and its revocation: the token is dropped here. Any remote revocation is the hub's own step (a later specification); no plugin function is called in-process.",
       "response": {
         "provider": "object"
       }
@@ -2034,7 +2034,7 @@
     {
       "method": "GET",
       "path": "/v1/model-providers/types",
-      "description": "Installed model-provider plugins, as data: each entry was imported from a plugin's declared provider module. A provider type is data, not code the hub runs in-process; a type no plugin ships stays absent, and a record naming one stays readable but unusable. The plugin provider-module protocol is a later specification, not legacy compatibility.",
+      "description": "Installed model-provider types, as DATA: each entry is a descriptor a plugin ships (id, version, owner:'hub', display name, authMethods, configuration fields, catalog dialect). A type is data the hub reads and maps - the hub does NOT import or run plugin code in-process (ARCHITECTURE 5); the hub owns the HTTP request, the auth and the catalog fetch. A type no plugin ships stays absent, and a record naming one stays readable but unusable. There is no legacy compatibility and no plugin-provider module protocol.",
       "response": {
         "types": {
           "type": "array",
@@ -2240,7 +2240,7 @@
     {
       "method": "POST",
       "path": "/v1/model-providers/{id}/auth",
-      "description": "Start the authorization the provider plugin declares (device-code, browser, ...). The operation runs in the hub and outlives this request/caller; the caller receives the first declared step {operationId,next}. A type with no beginAuth() (or only api-key) answers 501 rather than a fabricated flow.",
+      "description": "Start the authorization the provider TYPE declares (device-code, browser, ...) as data. The operation runs in the HUB (which owns the flow) and outlives this request/caller; the caller receives the first declared step {operationId,next}. A type that declares no interactive auth method answers 501 rather than a fabricated flow. No plugin function is called in-process.",
       "response": {
         "operationId": "string",
         "next": "object"

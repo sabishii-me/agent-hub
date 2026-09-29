@@ -29,16 +29,20 @@ impl HumansState {
     }
 }
 
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/sessions/{id}/approvals", "POST /v1/sessions/{id}/approvals/{aid}", "GET /v1/sessions/{id}/questions", "POST /v1/sessions/{id}/questions/{qid}"]
+fn table() -> agent_hub_transport::RouteTable<HumansState> {
+    agent_hub_transport::RouteTable::new()
+        .mount("/v1/sessions/{id}/approvals", &["GET"], get(list_approvals))
+        .mount("/v1/sessions/{id}/approvals/{aid}", &["POST"], post(decide))
+        .mount("/v1/sessions/{id}/questions", &["GET"], get(list_questions))
+        .mount("/v1/sessions/{id}/questions/{qid}", &["POST"], post(answer))
 }
 
 pub fn routes() -> Router<HumansState> {
-    Router::new()
-        .route("/v1/sessions/{id}/approvals", get(list_approvals))
-        .route("/v1/sessions/{id}/approvals/{aid}", post(decide))
-        .route("/v1/sessions/{id}/questions", get(list_questions))
-        .route("/v1/sessions/{id}/questions/{qid}", post(answer))
+    table().router()
+}
+
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
 fn err(s: &HumansState, e: HumanError) -> Response {

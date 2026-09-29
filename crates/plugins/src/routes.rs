@@ -31,18 +31,23 @@ impl PluginsState {
     }
 }
 
-/// The routes this module mounts, as `"METHOD /path"`. The boot self-check
-/// compares this to the contract; it lives beside the `route(...)` calls it
-/// describes, not in a central hand table (TASK-048 C5).
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/plugins", "POST /v1/plugins", "GET /v1/plugins/{id}", "DELETE /v1/plugins/{id}", "POST /v1/plugins/{id}/prepare"]
+/// Build the router AND its surface from one declaration (TASK-048 C5): the
+/// `RouteTable` records each `"METHOD /path"` as it mounts, so the boot
+/// self-check's list cannot drift from the actual routes.
+fn table() -> agent_hub_transport::RouteTable<PluginsState> {
+    agent_hub_transport::RouteTable::new()
+        .mount("/v1/plugins", &["GET", "POST"], get(list).post(install))
+        .mount("/v1/plugins/{id}", &["GET", "DELETE"], get(get_one).delete(remove))
+        .mount("/v1/plugins/{id}/prepare", &["POST"], post(prepare))
 }
 
 pub fn routes() -> Router<PluginsState> {
-    Router::new()
-        .route("/v1/plugins", get(list).post(install))
-        .route("/v1/plugins/{id}", get(get_one).delete(remove))
-        .route("/v1/plugins/{id}/prepare", post(prepare))
+    table().router()
+}
+
+/// The mounted surface, from the same table the router is built from.
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
 /// The client's logical command identity (ARCHITECTURE §11, R1). A retry carries

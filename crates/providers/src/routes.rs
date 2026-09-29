@@ -1,15 +1,23 @@
-//! The `/v1/model-providers` routes, merged onto the frame's transport.
+//! The `/v1/model-providers` routes.
+//!
+//! **NOT WIRED.** The provider data model (endpoint + protocol + declarations +
+//! selection + catalog) is the decided target, but the storage here is still the
+//! earlier `{id}.json` file store, not the decided data layer (TASK-048 C2). A
+//! provider credential is also a secret with no store yet (F02). So every route
+//! answers `501 not_implemented` through the shared renderer until the target
+//! store is real - a success endpoint over the wrong model is not honest
+//! unavailability.
 
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, State};
-use axum::response::{IntoResponse, Response};
+use axum::extract::State;
+use axum::response::Response;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Router;
 
-use crate::record::ProviderRecord;
-use agent_hub_transport::ErrorRenderer;
-use crate::service::{CreateProvider, PatchProvider, ProviderError, Providers};
+use agent_hub_transport::{DomainError, ErrorRenderer};
+
+use crate::service::Providers;
 
 #[derive(Clone)]
 pub struct ProvidersState {
@@ -23,156 +31,33 @@ impl ProvidersState {
     }
 }
 
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/model-providers", "POST /v1/model-providers", "GET /v1/model-providers/{id}", "PATCH /v1/model-providers/{id}", "DELETE /v1/model-providers/{id}", "POST /v1/model-providers/{id}/logout", "GET /v1/model-providers/{id}/models", "PATCH /v1/model-providers/{id}/models", "POST /v1/model-providers/{id}/models/refresh", "GET /v1/models"]
+fn table() -> agent_hub_transport::RouteTable<ProvidersState> {
+    let m = get(not_implemented).post(not_implemented);
+    let one = get(not_implemented).patch(not_implemented).delete(not_implemented);
+    agent_hub_transport::RouteTable::new()
+        .mount("/v1/model-providers", &["GET", "POST"], m)
+        .mount("/v1/model-providers/{id}", &["GET", "PATCH", "DELETE"], one)
+        .mount("/v1/model-providers/{id}/logout", &["POST"], post(not_implemented))
+        .mount("/v1/model-providers/{id}/models", &["GET", "PATCH"], get(not_implemented).patch(not_implemented))
+        .mount("/v1/model-providers/{id}/models/refresh", &["POST"], post(not_implemented))
+        .mount("/v1/models", &["GET"], get(not_implemented))
+        .mount("/v1/model-providers/types", &["GET"], get(not_implemented))
+        .mount("/v1/model-providers/{id}/auth", &["POST"], post(not_implemented))
+        .mount("/v1/model-providers/{id}/auth/{op}", &["GET"], get(not_implemented))
+        .mount("/v1/model-providers/{id}/auth/{op}/cancel", &["POST"], post(not_implemented))
 }
 
 pub fn routes() -> Router<ProvidersState> {
-    Router::new()
-        .route("/v1/model-providers", get(list).post(create))
-        .route(
-            "/v1/model-providers/{id}",
-            get(get_one).patch(patch_one).delete(remove),
-        )
-        .route("/v1/model-providers/{id}/logout", post(logout))
-        .route("/v1/model-providers/{id}/models", get(models).patch(set_models))
-        .route("/v1/model-providers/{id}/models/refresh", post(refresh))
-        .route("/v1/models", get(list_models))
+    table().router()
 }
 
-fn err(s: &ProvidersState, e: ProviderError) -> Response {
-    s.errors.render(&e.to_domain_error())
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
-/// The provider object the routes return: **the token never leaves**.
-fn view(rec: &ProviderRecord) -> serde_json::Value {
-    let mut v = serde_json::to_value(rec).unwrap_or(serde_json::json!({}));
-    if let Some(obj) = v.as_object_mut() {
-        obj.remove("token");
-        obj.insert("tokenConfigured".into(), serde_json::json!(rec.token_configured));
-        obj.insert(
-            "providerTypeAvailable".into(),
-            serde_json::json!(rec.provider_type.is_some()),
-        );
-    }
-    v
-}
-
-async fn list(State(s): State<ProvidersState>) -> Response {
-    match s.providers.list() {
-        Ok((records, broken)) => Json(serde_json::json!({
-            "providers": records.iter().map(view).collect::<Vec<_>>(),
-            "broken": broken,
-        }))
-        .into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn create(State(s): State<ProvidersState>, Json(req): Json<CreateProvider>) -> Response {
-    match s.providers.create(req) {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn get_one(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.get(&id) {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn patch_one(
-    State(s): State<ProvidersState>,
-    AxumPath(id): AxumPath<String>,
-    Json(req): Json<PatchProvider>,
-) -> Response {
-    match s.providers.patch(&id, req) {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn remove(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.delete(&id) {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "id": id })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn logout(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.logout(&id) {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn models(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.get(&id) {
-        Ok(rec) => Json(models_body(&rec)).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-fn models_body(rec: &ProviderRecord) -> serde_json::Value {
-    serde_json::json!({
-        "providerId": rec.id,
-        "fetchedAt": rec.catalog.as_ref().and_then(|c| c.fetched_at.clone()),
-        "stale": rec.catalog_stale(),
-        "models": rec.merged_models(),
-    })
-}
-
-#[derive(serde::Deserialize)]
-struct SelectionBody {
-    #[serde(rename = "enabledModelIds")]
-    enabled_model_ids: Vec<String>,
-}
-
-async fn set_models(
-    State(s): State<ProvidersState>,
-    AxumPath(id): AxumPath<String>,
-    Json(b): Json<SelectionBody>,
-) -> Response {
-    match s.providers.set_selection(&id, b.enabled_model_ids) {
-        Ok(rec) => Json(models_body(&rec)).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-async fn refresh(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.providers.refresh(&id).await {
-        Ok(rec) => Json(models_body(&rec)).into_response(),
-        Err(e) => err(&s, e),
-    }
-}
-
-/// API 1: the core-managed catalogs, independent of any harness.
-async fn list_models(State(s): State<ProvidersState>) -> Response {
-    let (records, _) = match s.providers.list() {
-        Ok(v) => v,
-        Err(e) => return err(&s, e),
-    };
-    let mut models = Vec::new();
-    let mut catalogs = Vec::new();
-    for rec in &records {
-        for m in rec.merged_models() {
-            models.push(serde_json::json!({
-                "id": m["id"],
-                "name": m["name"],
-                "providerId": rec.id,
-                "provider": rec.label,
-                "enabled": m["enabled"],
-                "available": true,
-            }));
-        }
-        catalogs.push(serde_json::json!({
-            "providerId": rec.id,
-            "fetchedAt": rec.catalog.as_ref().and_then(|c| c.fetched_at.clone()),
-            "stale": rec.catalog_stale(),
-            "models": rec.merged_models(),
-        }));
-    }
-    Json(serde_json::json!({ "models": models, "failures": [], "catalogs": catalogs })).into_response()
+async fn not_implemented(State(s): State<ProvidersState>) -> Response {
+    s.errors.render(&DomainError::new(
+        "not_implemented",
+        "the model-provider data layer is not the decided one yet, and a credential has no secret store; the hub does not serve the old JSON store",
+    ))
 }

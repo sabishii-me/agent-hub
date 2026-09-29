@@ -23,18 +23,21 @@ impl HarnessesState {
     }
 }
 
-pub fn surface() -> &'static [&'static str] {
-    &["GET /v1/harnesses", "GET /v1/harnesses/{id}/presets", "GET /v1/harnesses/{id}/models", "GET /v1/harnesses/{id}/tools", "GET /v1/harnesses/{id}/extensions"]
+fn table() -> agent_hub_transport::RouteTable<HarnessesState> {
+    agent_hub_transport::RouteTable::new()
+        .mount("/v1/harnesses", &["GET"], get(list))
+        .mount("/v1/harnesses/{id}/presets", &["GET"], get(presets))
+        .mount("/v1/harnesses/{id}/models", &["GET"], get(models))
+        .mount("/v1/harnesses/{id}/tools", &["GET"], get(tools))
+        .mount("/v1/harnesses/{id}/extensions", &["GET"], get(extensions))
 }
 
 pub fn routes() -> Router<HarnessesState> {
-    Router::new()
-        // One roster: the thin projection (which is also the management view).
-        .route("/v1/harnesses", get(list))
-        .route("/v1/harnesses/{id}/presets", get(presets))
-        .route("/v1/harnesses/{id}/models", get(models))
-        .route("/v1/harnesses/{id}/tools", get(tools))
-        .route("/v1/harnesses/{id}/extensions", get(extensions))
+    table().router()
+}
+
+pub fn surface() -> Vec<String> {
+    table().surface()
 }
 
 fn err(s: &HarnessesState, e: HarnessError) -> Response {
