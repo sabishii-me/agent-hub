@@ -313,6 +313,102 @@ owner: there is no reason for it. The hub is loopback and a client already holds
 (from `endpoint.json`); discovery does not need to be anonymous. **Every route requires the
 token** - a contract change (the one exempt route becomes 401).
 
+## Model providers are DATA; the hub provides the function (DECIDED)
+
+Owner: **"the function must be provided by the hub; a provider can only be data."** And, on the
+same defect seen from another side: **the same login must not be re-implemented inside each
+provider.**
+
+What the installed providers do today (read from the plugins), and where each piece belongs:
+
+| today, inside the provider module | who must own it |
+|---|---|
+| HTTP client: fetch, timeout, redirect policy, size limit, JSON read | **the hub** |
+| device-code OAuth: `/device/code`, poll `/device/token`, `authorization_pending`/`slow_down`/`expired_token`/`access_denied`, link ack | **the hub** - one implementation, reused |
+| api-key handling | **the hub** |
+| catalog fetch: GET, bounded read, JSON, id/name extraction, dedupe | **the hub** (by protocol) |
+| vendor catalog dialect (`modelOfferings`, a `vnd.*` Accept header) | a **named hub catalog dialect**, selected by data |
+| vendor -> hub field mapping (thinking levels, modalities, limits) | **the hub** for standard dialects; a named hub dialect for a vendor-specific one |
+| credential id derivation (e.g. `installId` from hostname) | **the hub** (a general capability) |
+| constants: client id, gateway host, protocol version, auth method | **provider DATA** |
+| display name/labels, which protocol, config fields | **provider DATA** |
+
+So a provider record is **only data**, e.g.:
+
+```
+{ id, name, protocol: "openai-completions",
+  endpoint,
+  auth: { method: "device-code", gateway, clientId, ... },   // or { method: "api-key", ... }
+  catalog: { dialect: "openai-models" } }
+```
+
+**Why this matters (the owner's point):** if a provider can embed its own implementation, it can
+embed **a whole other ecosystem** - its own HTTP, its own login, its own protocol - and the hub
+has no boundary. The hub cannot audit it, cannot share it, cannot test it, cannot guarantee it.
+Consequences of the current shape: the same device-code flow is copied per provider; the hub
+cannot give "login" one contract (state, cancel, timeout, audit); tests cannot cover it once.
+
+**Auth is a hub protocol.** device-code, api-key, and whatever comes next are **implemented
+once in the hub**; a provider declares `auth.method` + its parameters. A vendor whose flow needs
+more than the parameters allow gets a **named hub dialect** (hub-implemented), never its own
+code. Same for the catalog dialect.
+
+**With this, a provider plugin is a data artifact**, not a module the hub `import()`s. That
+removes the in-process JS, restores the boundary, and is the precondition for the Rust question
+below.
+
+## Should the hub be Rust? (evaluated; not now, and not for the reason it looks like)
+
+The owner's question, and the honest assessment.
+
+**What the hub actually needs from Node today** (counted from the source): fs, path, os,
+crypto, zlib, url, http - all have Rust equivalents (std + crates). The transport moves to
+Hono, which is a Web-standard framework; an equivalent exists in Rust (axum/hyper + SSE). So
+the hub's own work does not require Node.
+
+**The plugin mechanism is the only real question, and it splits in two:**
+
+- **harness-adapter**: already an **out-of-process** contract (`spawn(command)`, stdio
+  JSON-RPC). The adapter's language is private (ADR-0011) - a Rust adapter is fine. **No
+  obstacle.**
+- **model-provider**: today an **in-process JS module** the hub `import()`s
+  (`manifest.provider.module`). **This is the one thing a Rust hub cannot do.**
+
+**But (o6-b) shows the in-process JS is not needed at all**: a provider is **data + a reference
+to a small shared protocol set**. Making providers data records removes the in-process JS, and
+then **the hub requires Node for nothing**.
+
+**Verdict: not now.** Rewriting the hub in Rust today would fix nothing that is broken:
+- concurrency is already satisfied (ADR-0009, measured: 0 timeouts);
+- structure is a modularisation concern, not a language one;
+- the plugin-security question (o6) is independent of the hub's language - it is about where
+  the harness's workspace boundary is;
+- the cost is a full rewrite plus redoing the plugin mechanism, for a benefit (lighter process)
+  that is not the current bottleneck.
+
+**The precondition, if it is ever wanted**: make **providers data** (o6-b), so no plugin
+requires in-process JS. That is worth doing on its own merits (isolation: a bad provider can no
+longer run inside the hub's process), and it is what would make a Rust hub possible.
+
+## Open questions (the ones still real)
+
+**(o4) DECIDED - `/v1/harnesses` is a thin, top-level projection that hides "harness is a
+plugin".** A harness is a **top-level resource** (the thing a user runs), not a view of the
+plugin list. `/v1/harnesses` stays a **thin projection** of the plugin list filtered to
+`pluginType === 'harness-adapter'`, for two reasons the owner gave: it **conveniences the UI**
+with a stable harness shape, and it **hides the internal fact that a harness is a plugin** - a
+consumer must not depend on that. So it is a projection over `/v1/plugins`, derived - never a
+second store, and consumers never see the plugin machinery through it.
+
+The **runtime answers stay per harness** at `/v1/harnesses/{id}/...`
+(models/presets/tools/auth/connections) - those are the harness speaking. And
+`/v1/harnesses/{id}/extensions` is the extension sub-resource (harness context).
+
+**(o5) DECIDED - no anonymous discovery.** `/v1/harnesses` was the only token-free route; the
+owner: there is no reason for it. The hub is loopback and a client already holds the token
+(from `endpoint.json`); discovery does not need to be anonymous. **Every route requires the
+token** - a contract change (the one exempt route becomes 401).
+
 **(o6-b) a model provider should be DATA, not code.** Owner: "why does our provider provide
 logic - isn't a provider data-driven?"
 
