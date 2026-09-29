@@ -339,15 +339,26 @@ fn build_operation(ep: &Value, path: &str) -> Result<Value, NormalizeError> {
         } else {
             normalize_fragment(resp, &format!("{path}.response"))?.schema
         };
-        op.insert(
-            "responses".into(),
+        // A long command answers `202 Accepted` + `Location` (ADR-0009, §13.2);
+        // the body names the resource and the Location header points at it.
+        let accepted = ep.get("accepted").and_then(Value::as_bool).unwrap_or(false);
+        let code = if accepted { "202" } else { "200" };
+        let desc = if accepted { "accepted" } else { "success" };
+        let mut responses = Map::new();
+        responses.insert(
+            code.into(),
             json!({
-                "200": {
-                    "description": "success",
-                    "content": { "application/json": { "schema": schema } }
-                }
+                "description": desc,
+                "content": { "application/json": { "schema": schema } }
             }),
         );
+        if accepted {
+            // The Location header is part of the 202 response.
+            responses[code]["headers"] = json!({
+                "Location": { "schema": { "type": "string" }, "description": "the resource URL" }
+            });
+        }
+        op.insert("responses".into(), Value::Object(responses));
     } else if !params.is_empty() {
         op.insert("parameters".into(), Value::Array(params));
     }

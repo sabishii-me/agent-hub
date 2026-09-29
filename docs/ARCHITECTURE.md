@@ -593,12 +593,16 @@ follows distinguishes a real, narrow component fact from a product capability.
   the pi adapter. Still unavailable: **turn / fork / compact / patch** answer `501` - they need the
   turn lifecycle, which is not built. No `active` is ever written on a row alone.
 
-  **Open design question** (recorded, not resolved here): ARCHITECTURE §11's long-operation table
-  lists `start` with a `Location`, while `contract/v1.json` and ROUTES-REVIEW keep
-  `POST /v1/sessions` as a **synchronous** create that returns `{session}` (the old hub did too).
-  This slice follows the contract (synchronous) and implements the *acceptance* half (command
-  identity). Whether create should become `202 + Location` is a contract decision to settle with
-  the owning contract, not assumed here.
+  `POST /v1/sessions` is a **long command**: the contract now says `202 Accepted` + `Location`
+  (ADR-0009 §11/§13.2), the session resource answers `starting` -> `active` / `starting_failed`
+  (`startError`), and the command identity (`Idempotency-Key`) is reserved **durably, before any
+  side effect** - the same key returns the original, the same key with a different request is
+  `idempotency_conflict`, a new key is a new command. The supported config is passed through;
+  anything this slice does not support (`modelProviderId`/`modelId`/`presetId`/`plan`/`review`/
+  `additionalDirectories`) is **refused**, never silently ignored. The start reuses the adapter's
+  own placement (`harness_env`), so a missing required extension refuses the start. close stops
+  that session's process and **confirms** it exited before writing `readonly`; reopen refuses when
+  the session is still running.
 - **providers** (now): the credential is **not part of the record** (no `token` field), so a
   secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
   Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.

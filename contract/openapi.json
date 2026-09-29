@@ -461,7 +461,7 @@
     },
     "/v1/sessions": {
       "post": {
-        "description": " A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and — worst — let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back.",
+        "description": "start a session: a LONG command. Accepts with 202 Accepted + Location once the command is durably registered; the adapter is started in the background. The status is read at the Location (GET /v1/sessions/{id}), which is `starting` until the adapter handshake and config both succeed, then `active`, or `starting_failed` with `startError`. The command identity is the `Idempotency-Key` header: the same key returns the ORIGINAL session (a retry never starts a second adapter); the same key with a different request is 409 idempotency_conflict; a new key is a new session even for the same harness.  A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and — worst — let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back.",
         "requestBody": {
           "required": true,
           "content": {
@@ -536,8 +536,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "success",
+          "202": {
+            "description": "accepted",
             "content": {
               "application/json": {
                 "schema": {
@@ -545,12 +545,25 @@
                   "properties": {
                     "session": {
                       "$ref": "#/defs/session"
+                    },
+                    "location": {
+                      "type": "string",
+                      "description": "the session resource URL; the same value is in the Location header"
                     }
                   },
                   "required": [
-                    "session"
+                    "session",
+                    "location"
                   ]
                 }
+              }
+            },
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "the resource URL"
               }
             }
           }
@@ -2438,8 +2451,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "success",
+          "202": {
+            "description": "accepted",
             "content": {
               "application/json": {
                 "schema": {
@@ -2458,6 +2471,14 @@
                     "updated"
                   ]
                 }
+              }
+            },
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "the resource URL"
               }
             }
           }
@@ -3526,10 +3547,13 @@
           },
           "status": {
             "enum": [
+              "starting",
               "active",
+              "starting_failed",
               "needs-repair",
               "readonly"
-            ]
+            ],
+            "description": "the hub's ONE verdict on this session. `starting` = accepted, the adapter is being started (a `202` Location resource is readable here); `active` = the adapter handshake and config succeeded; `starting_failed` = the start failed (read `startError`); `needs-repair` = an orphaned tail; `readonly` = closed. A client renders this and derives nothing."
           },
           "activeTurn": {
             "$ref": "#/$defs/turnState"
@@ -3615,6 +3639,13 @@
           "appliedThinkingLevel": {
             "type": "string|null",
             "description": "level the harness reported"
+          },
+          "startError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "why the last start failed; null when it did not. The resource a 202 names answers with this while/after a failed start."
           }
         }
       },

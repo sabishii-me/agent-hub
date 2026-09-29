@@ -27,11 +27,14 @@ pub struct SessionProcess {
 }
 
 impl SessionProcess {
-    /// Stop the session's process. Idempotent.
-    pub async fn stop(&mut self) {
+    /// Stop the session's process and CONFIRM it exited. Idempotent (a second
+    /// stop is a no-op success). Returns an error if the process could not be
+    /// confirmed stopped, so a caller never claims a release that did not happen.
+    pub async fn stop(&mut self) -> Result<(), StartError> {
         if let Some(bus) = self.bus.take() {
-            bus.shutdown().await;
+            bus.shutdown().await.map_err(|e| StartError::Spawn(e.to_string()))?;
         }
+        Ok(())
     }
 }
 
@@ -95,7 +98,7 @@ impl Sessions {
         let native_ref = match started.get("ref").and_then(Value::as_str) {
             Some(r) => r.to_string(),
             None => {
-                bus.shutdown().await;
+                let _ = bus.shutdown().await;
                 return Err(StartError::Protocol("the adapter did not return a native ref".into()));
             }
         };
@@ -108,7 +111,7 @@ impl Sessions {
         {
             Ok(v) => v.get("applied").cloned().unwrap_or(Value::Null),
             Err(e) => {
-                bus.shutdown().await;
+                let _ = bus.shutdown().await;
                 return Err(StartError::Protocol(format!("config/set failed: {e}")));
             }
         };
@@ -143,11 +146,20 @@ impl Sessions {
         self.running.lock().expect("running").contains_key(sid)
     }
 
-    /// Stop and drop a session's process. Idempotent.
-    pub async fn stop(&self, sid: &str) {
-        let handle = self.running.lock().expect("running").remove(sid);
-        if let Some(handle) = handle {
-            handle.lock().await.stop().await;
+    /// Stop and drop a session's process. Idempotent. Returns an error if the
+    /// process could not be confirmed stopped (the entry is kept so a retry can
+    /// try again).
+    pub async fn stop(&self, sid: &str) -> Result<(), StartError> {
+        let handle = self.running.lock().expect("running").get(sid).cloned();
+        match handle {
+            None => Ok(()),
+            Some(handle) => {
+                let mut guard = handle.lock().await;
+                guard.stop().await?;
+                drop(guard);
+                self.running.lock().expect("running").remove(sid);
+                Ok(())
+            }
         }
     }
 }

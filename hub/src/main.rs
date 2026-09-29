@@ -100,15 +100,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // its OWN adapter process with the resolved argv + plugin dir.
     let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
     let registry = adapters.clone();
-    let resolve = move |id: &str| -> Option<HarnessSpec> {
-        let h = registry.get(id).ok()?;
-        let command = h.manifest.command.clone()?;
+    let resolve = move |id: &str| -> Result<HarnessSpec, String> {
+        let h = registry.get(id).map_err(|e| e.to_string())?;
+        let command = h
+            .manifest
+            .command
+            .clone()
+            .ok_or_else(|| format!("harness `{id}` declares no command"))?;
         let runtime_argv = h.manifest.runtime_argv(&h.directory);
-        Some(HarnessSpec {
+        // Reuse the adapter's OWN placement: harness_env installs the shipped
+        // extensions by the extensions rule and refuses a missing one (R3), and
+        // returns the dirs the session must be pointed at.
+        let env = registry
+            .harness_env(&h.id, None)
+            .map_err(|e| format!("placement for `{id}` failed: {e}"))?;
+        Ok(HarnessSpec {
             id: h.id.clone(),
             command,
             plugin_dir: h.directory.clone(),
             runtime_argv,
+            harness_dir: env.harness_dir,
+            skills_dir: env.skills_dir,
+            extensions_dir: env.extensions_dir,
         })
     };
     let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir, Box::new(resolve));

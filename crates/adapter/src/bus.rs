@@ -169,9 +169,19 @@ impl AgentBus {
         })
     }
 
-    /// Terminate the adapter.
-    pub async fn shutdown(mut self) {
-        let _ = self.child.kill().await;
+    /// Terminate the adapter and **confirm** it exited. The adapter's own child
+    /// (its harness) exits when the adapter does (the adapter is responsible for
+    /// it, per the contract); the hub does not scan for processes by name.
+    pub async fn shutdown(mut self) -> Result<(), BusError> {
+        // Ask it to stop, then wait for the process to actually exit.
+        self.child.kill().await?;
+        let status = self.child.wait().await?;
         let _ = self.reader.await;
+        if status.success() || status.code().is_some() {
+            Ok(())
+        } else {
+            // Killed by a signal is still "stopped".
+            Ok(())
+        }
     }
 }

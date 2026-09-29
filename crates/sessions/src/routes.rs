@@ -1,19 +1,19 @@
 //! The `/v1/sessions` routes.
 //!
-//! Wired: create (a real adapter start), get, list, close (stop the process),
-//! reopen (restart on the stored ref), delete. NOT wired: turn, fork, compact,
-//! patch - they answer `501 not_implemented`, because they need the turn
-//! lifecycle that is not built yet.
+//! Wired: create (a **long command**: 202 + Location, command identity,
+//! background start), get, list, close, reopen, delete. Not wired: turn, fork,
+//! compact, patch, messages, stats, skills, repair, resources - `501`.
 
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
-use agent_hub_transport::{DomainError, ErrorRenderer, RouteTable};
+use agent_hub_transport::{Accepted, DomainError, ErrorRenderer, RouteTable};
 
-use crate::service::{CreateSession, SessionError, Sessions};
+use crate::service::{CreateOutcome, CreateSession, SessionError, Sessions};
 
 #[derive(Clone)]
 pub struct SessionsState {
@@ -71,23 +71,38 @@ async fn list(State(s): State<SessionsState>) -> Response {
     }
 }
 
+/// POST /v1/sessions - a LONG command. Accept (reserve the command and the
+/// `starting` session durably), answer `202 Accepted` + `Location`, and start the
+/// adapter in the background. A retry returns the ORIGINAL session.
 async fn create(
     State(s): State<SessionsState>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Json(req): Json<CreateSession>,
 ) -> Response {
-    // The client's logical command identity (ARCHITECTURE §11, R1): a retry with
-    // the same key returns the same session; an absent key is a fresh intent.
     let command_id = headers
         .get("idempotency-key")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string)
-        .filter(|s| !s.is_empty())
+        .filter(|k| !k.is_empty())
         .unwrap_or_else(|| crate::service::new_id("create"));
-    match s.sessions.create(&command_id, req).await {
-        Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
-        Err(e) => err(&s, e),
-    }
+
+    let view = match s.sessions.accept_create(&command_id, req) {
+        Ok(CreateOutcome::Accepted(view)) => {
+            // Detached start: the caller is answered 202 at once.
+            let sessions = s.sessions.clone();
+            let sid = view.id.clone();
+            tokio::spawn(async move { sessions.run_start(sid).await; });
+            view
+        }
+        Ok(CreateOutcome::Replay(view)) => {
+            // A retry: the resource already exists; answer 202 pointing at it.
+            view
+        }
+        Err(e) => return err(&s, e),
+    };
+
+    let location = format!("/v1/sessions/{}", view.id);
+    Accepted::new(location, serde_json::json!({ "session": view })).into_response()
 }
 
 async fn get_one(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
@@ -98,21 +113,24 @@ async fn get_one(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>)
 }
 
 async fn remove(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.sessions.delete(&id).await {
+    let sessions = s.sessions.clone();
+    match sessions.delete(&id).await {
         Ok(()) => Json(serde_json::json!({ "ok": true, "id": id, "exported": false })).into_response(),
         Err(e) => err(&s, e),
     }
 }
 
 async fn close(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.sessions.close(&id).await {
+    let sessions = s.sessions.clone();
+    match sessions.close(&id).await {
         Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
         Err(e) => err(&s, e),
     }
 }
 
 async fn reopen(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
-    match s.sessions.reopen(&id).await {
+    let sessions = s.sessions.clone();
+    match sessions.reopen(&id).await {
         Ok(session) => {
             Json(serde_json::json!({ "session": session, "reopened": true })).into_response()
         }
@@ -120,7 +138,6 @@ async fn reopen(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) 
     }
 }
 
-/// A route that needs the turn lifecycle, which is not built yet.
 async fn not_implemented(State(s): State<SessionsState>) -> Response {
     s.errors.render(&DomainError::new(
         "not_implemented",

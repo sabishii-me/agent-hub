@@ -27,6 +27,8 @@ pub struct SessionRow {
     /// The harness's native session ref (its own file/handle). The hub stores it
     /// to resume; it never interprets it.
     pub native_ref: Option<String>,
+    /// Why the last start failed (`starting_failed`); null otherwise.
+    pub start_error: Option<String>,
 }
 
 /// A turn record: the hub's view plus the mapping to the harness's native turn.
@@ -59,7 +61,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   deleted                INTEGER NOT NULL DEFAULT 0,
   forked_from_session    TEXT,
   forked_from_turn       TEXT,
-  native_ref             TEXT
+  native_ref             TEXT,
+  start_error            TEXT
+);
+
+-- The durable command -> result-resource association (ARCHITECTURE 11, R1):
+-- reserved BEFORE any side effect, so a retry finds the original and a restart
+-- keeps the link. `fingerprint` is the full semantic request.
+CREATE TABLE IF NOT EXISTS session_commands (
+  command_key  TEXT PRIMARY KEY,
+  fingerprint  TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  created_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -82,14 +95,19 @@ impl crate::Db {
 
     pub fn insert_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
+        Self::insert_session_tx(&conn, s)?;
+        Ok(())
+    }
+
+    fn insert_session_tx(conn: &Connection, s: &SessionRow) -> Result<(), rusqlite::Error> {
         conn.execute(
-            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.cwd, s.title,
                 s.status, s.created_at, s.updated_at, s.deleted as i64,
-                s.forked_from_session, s.forked_from_turn, s.native_ref
+                s.forked_from_session, s.forked_from_turn, s.native_ref, s.start_error
             ],
         )?;
         Ok(())
@@ -113,10 +131,11 @@ impl crate::Db {
             forked_from_session: r.get(13)?,
             forked_from_turn: r.get(14)?,
             native_ref: r.get(15)?,
+            start_error: r.get(16)?,
         })
     }
 
-    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref";
+    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, DbError> {
         let conn = self.lock();
@@ -135,11 +154,11 @@ impl crate::Db {
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, plan=?5, review=?6, title=?7, status=?8, updated_at=?9, native_ref=?10 WHERE id=?1",
+            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, plan=?5, review=?6, title=?7, status=?8, updated_at=?9, native_ref=?10, start_error=?11 WHERE id=?1",
             params![
                 s.id, s.model_provider_id, s.model_id, s.applied_model,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.title, s.status, s.updated_at,
-                s.native_ref
+                s.native_ref, s.start_error
             ],
         )?;
         Ok(())
@@ -149,6 +168,53 @@ impl crate::Db {
     pub fn mark_session_deleted(&self, id: &str) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute("UPDATE sessions SET deleted = 1 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Atomically reserve a command key for a semantic request. Returns:
+    /// `Ok(Some(sid))` when the key already maps to a session with the SAME
+    /// fingerprint (the original), `Ok(None)` when the key is free (the caller
+    /// then inserts the row + records the mapping in one transaction via
+    /// [`Db::reserve_session_command`]), `Err(())` on a fingerprint conflict.
+    pub fn lookup_session_command(
+        &self,
+        key: &str,
+        fingerprint: &str,
+    ) -> Result<Option<String>, ()> {
+        let conn = self.lock();
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT fingerprint, session_id FROM session_commands WHERE command_key = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        match row {
+            Some((fp, sid)) if fp == fingerprint => Ok(Some(sid)),
+            Some(_) => Err(()),
+            None => Ok(None),
+        }
+    }
+
+    /// Insert a `starting` session row AND its command association in one
+    /// transaction. This is the atomic reservation: the side effect (starting the
+    /// adapter) happens only after this returns.
+    pub fn reserve_session_command(
+        &self,
+        command_key: &str,
+        fingerprint: &str,
+        session: &SessionRow,
+    ) -> Result<(), DbError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        Self::insert_session_tx(&tx, session)?;
+        tx.execute(
+            "INSERT INTO session_commands (command_key, fingerprint, session_id, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![command_key, fingerprint, session.id, crate::now_utc()],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 

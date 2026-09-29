@@ -1,79 +1,37 @@
-//! The sessions domain (`ARCHITECTURE` §6): the hub's control state over sessions
-//! and turns, kept distinct from the harness's native conversation.
+//! The sessions domain (`ARCHITECTURE` §6, §11): the hub's control state over
+//! sessions, with a REAL adapter process per session.
 //!
-//! A session now owns a **real adapter process** (`runtime.rs`): `create` starts
-//! it with `session/start` + `config/set`, and reports `active` only when that
-//! really succeeded. `close` stops that session's process (the record stays,
-//! status `readonly`); `reopen` restarts on the stored native ref. TURN, FORK and
-//! COMPACT are **not wired** and answer `not_implemented`.
+//! `create` is a **long command** (§11, R1): it durably reserves the command ->
+//! session association BEFORE any side effect, answers `202 + Location`, and
+//! starts the adapter in the background. The session resource reports `starting`
+//! -> `active` / `starting_failed`, readable through GET. Close stops that
+//! session's process; reopen restarts on the stored ref. Only the config the
+//! slice supports is accepted; anything else is refused, never silently ignored.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use agent_hub_db::{now_utc, Db, SessionRow};
 use agent_hub_events::Bus;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use crate::runtime::{Sessions as Runtime, StartSpec};
-
-/// A bounded store of create command identities (ARCHITECTURE §11, R1): the same
-/// `Idempotency-Key` returns the SAME session; a different key is a new session
-/// (a second create for the same harness is NOT a retry); the same key with a
-/// different body is a conflict.
-pub struct CreateIds {
-    /// key -> (body fingerprint, session id)
-    seen: std::sync::Mutex<std::collections::HashMap<String, (String, String)>>,
-    order: std::sync::Mutex<std::collections::VecDeque<String>>,
-    capacity: usize,
-}
-
-impl CreateIds {
-    pub fn new(capacity: usize) -> Self {
-        CreateIds {
-            seen: std::sync::Mutex::new(std::collections::HashMap::new()),
-            order: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            capacity,
-        }
-    }
-
-    /// `Ok(sid)` when this key was seen before and the body matches; `Ok(None)`
-    /// when it is new (the caller runs the create and then `record`s the sid);
-    /// `Err(())` on a conflict.
-    pub fn lookup(&self, key: &str, body: &str) -> Result<Option<String>, ()> {
-        let seen = self.seen.lock().expect("ids");
-        Ok(match seen.get(key) {
-            Some((prev, sid)) if prev == body => Some(sid.clone()),
-            Some(_) => return Err(()),
-            None => None,
-        })
-    }
-
-    pub fn record(&self, key: &str, body: &str, sid: &str) {
-        let mut seen = self.seen.lock().expect("ids");
-        seen.insert(key.to_string(), (body.to_string(), sid.to_string()));
-        let mut order = self.order.lock().expect("order");
-        order.push_back(key.to_string());
-        while order.len() > self.capacity {
-            if let Some(old) = order.pop_front() {
-                seen.remove(&old);
-            }
-        }
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("session `{0}` not found")]
     NotFound(String),
-    #[error("session `{0}` is not active")]
-    NotActive(String),
     #[error("no adapter for harness `{0}`")]
     NoHarness(String),
     #[error("validation failed: {0}")]
     Validation(String),
-    #[error("the session could not be started: {0}")]
-    Start(String),
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     #[error("idempotency conflict for `{0}`")]
     Conflict(String),
+    #[error("the session could not be started: {0}")]
+    Start(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
     #[error("io: {0}")]
@@ -84,11 +42,11 @@ impl SessionError {
     pub fn code(&self) -> &'static str {
         match self {
             SessionError::NotFound(_) => "unknown_session",
-            SessionError::NotActive(_) => "session_closed",
             SessionError::NoHarness(_) => "harness_not_found",
             SessionError::Validation(_) => "validation_failed",
-            SessionError::Start(_) => "adapter_crash",
+            SessionError::Unsupported(_) => "unsupported",
             SessionError::Conflict(_) => "idempotency_conflict",
+            SessionError::Start(_) => "adapter_crash",
             SessionError::Db(_) | SessionError::Io(_) => "internal_error",
         }
     }
@@ -115,6 +73,8 @@ pub struct SessionView {
     pub cwd: Option<String>,
     pub title: Option<String>,
     pub status: String,
+    #[serde(rename = "startError")]
+    pub start_error: Option<String>,
     #[serde(rename = "nativeRef")]
     pub native_ref: Option<String>,
     #[serde(rename = "turnRunning")]
@@ -126,6 +86,9 @@ pub struct SessionView {
     pub deleted: bool,
 }
 
+/// What POST /v1/sessions accepts. This slice supports only the default config
+/// (`harnessId`, optional `cwd`); any other non-default field is REFUSED, not
+/// silently ignored (R3).
 #[derive(Debug, Deserialize)]
 pub struct CreateSession {
     #[serde(rename = "harnessId")]
@@ -138,29 +101,64 @@ pub struct CreateSession {
     pub cwd: Option<String>,
     pub plan: Option<bool>,
     pub review: Option<bool>,
+    #[serde(rename = "presetId")]
+    pub preset_id: Option<String>,
+    #[serde(rename = "additionalDirectories")]
+    pub additional_directories: Option<Vec<String>>,
 }
 
-/// A harness the sessions domain may start: its adapter argv + plugin dir + the
-/// hub-side dirs it needs. Supplied by the hub (which reads the plugin manifest);
-/// the sessions domain does not scan plugins itself.
+/// A harness the sessions domain may start.
 #[derive(Debug, Clone)]
 pub struct HarnessSpec {
     pub id: String,
     pub command: Vec<String>,
     pub plugin_dir: PathBuf,
     pub runtime_argv: Option<Vec<String>>,
+    /// The declared, hub-side asset dirs for this harness, ALREADY placed by the
+    /// adapter's own rules (the sessions domain must not re-implement placement).
+    pub harness_dir: PathBuf,
+    pub skills_dir: PathBuf,
+    pub extensions_dir: PathBuf,
 }
 
-/// The sessions domain: the durable rows plus the running adapter processes.
+/// What `create` returns: the reserved session (to be answered 202) or a replay.
+pub enum CreateOutcome {
+    /// First time: the session row exists as `starting`; the caller runs the
+    /// start in the background and answers 202 + Location.
+    Accepted(SessionView),
+    /// A retry: the original session (already started or starting).
+    Replay(SessionView),
+}
+
 pub struct Sessions {
     pub db: Db,
     bus: Bus,
     pub data_dir: PathBuf,
     runtime: Runtime,
-    /// Resolves a harness id to its adapter spec (from the plugin registry).
-    harnesses: Box<dyn Fn(&str) -> Option<HarnessSpec> + Send + Sync>,
-    /// The create command identities (R1).
-    create_ids: CreateIds,
+    harnesses: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
+    /// One lock per session: start/close/reopen on the same session never race
+    /// (R4). A lock held across the lifecycle of one session.
+    locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
+}
+
+/// A canonical, unambiguous fingerprint of the semantic request (R2). Lengths are
+/// prefixed so no field can be confused with another by concatenation.
+fn fingerprint(req: &CreateSession) -> String {
+    fn part(s: &str) -> String {
+        format!("{}:{}", s.len(), s)
+    }
+    let mut out = String::new();
+    out.push_str(&part("create"));
+    out.push_str(&part(&req.harness_id));
+    out.push_str(&part(req.model_provider_id.as_deref().unwrap_or("")));
+    out.push_str(&part(req.model_id.as_deref().unwrap_or("")));
+    out.push_str(&part(req.title.as_deref().unwrap_or("")));
+    out.push_str(&part(req.cwd.as_deref().unwrap_or("")));
+    out.push_str(&part(req.preset_id.as_deref().unwrap_or("")));
+    out.push_str(&part(match req.plan { Some(true) => "plan=1", Some(false) => "plan=0", None => "" }));
+    out.push_str(&part(match req.review { Some(true) => "review=1", Some(false) => "review=0", None => "" }));
+    out.push_str(&part(&req.additional_directories.clone().unwrap_or_default().join("\u{1f}")));
+    out
 }
 
 impl Sessions {
@@ -168,7 +166,7 @@ impl Sessions {
         db: Db,
         bus: Bus,
         data_dir: impl Into<PathBuf>,
-        harnesses: Box<dyn Fn(&str) -> Option<HarnessSpec> + Send + Sync>,
+        harnesses: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
     ) -> Self {
         Sessions {
             db,
@@ -176,47 +174,75 @@ impl Sessions {
             data_dir: data_dir.into(),
             runtime: Runtime::new(),
             harnesses,
-            create_ids: CreateIds::new(4096),
+            locks: Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    async fn lock_for(&self, sid: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.locks.lock().await;
+        locks
+            .entry(sid.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     fn harness(&self, id: &str) -> Result<HarnessSpec, SessionError> {
-        (self.harnesses)(id).ok_or_else(|| SessionError::NoHarness(id.into()))
+        (self.harnesses)(id).map_err(SessionError::NoHarness)
     }
 
-    /// Create a session AND start its real adapter. `active` is returned only
-    /// when `session/start` + `config/set` both succeeded; a failure leaves no
-    /// `active` row.
-    ///
-    /// `command_id` is the logical command identity (R1): the same id returns the
-    /// SAME session (a retry after a lost response); a different id is a new
-    /// session even for the same harness; the same id with a different body is a
-    /// conflict.
-    pub async fn create(
+    /// Accept a create command. This slice supports only the default config:
+    /// **any non-default field is refused** (R3), never silently ignored.
+    /// The command -> session association is reserved durably BEFORE any side
+    /// effect (R1/R2): a retry returns the original; a different request with the
+    /// same key is a conflict; a new key is a new command.
+    pub fn accept_create(
         &self,
         command_id: &str,
         req: CreateSession,
-    ) -> Result<SessionView, SessionError> {
+    ) -> Result<CreateOutcome, SessionError> {
         if req.harness_id.trim().is_empty() {
             return Err(SessionError::Validation("harnessId is required".into()));
         }
-        let body = format!(
-            "create:{}:{}:{}",
-            req.harness_id,
-            req.model_provider_id.clone().unwrap_or_default(),
-            req.model_id.clone().unwrap_or_default()
-        );
-        match self.create_ids.lookup(command_id, &body) {
+
+        // R1/R2: resolve the command identity FIRST. The association is keyed by
+        // the full semantic fingerprint, so the same key with ANY different body
+        // is a conflict - checked before the body's own validation, which would
+        // otherwise answer a different error and hide the conflict.
+        let fp = fingerprint(&req);
+        match self.db.lookup_session_command(command_id, &fp) {
             Ok(Some(sid)) => {
-                // A retry: return the session this command produced, not a new one.
-                return self.get(&sid);
+                let row = self
+                    .db
+                    .session(&sid)?
+                    .ok_or_else(|| SessionError::NotFound(sid.clone()))?;
+                return Ok(CreateOutcome::Replay(self.view(&row)));
             }
             Ok(None) => {}
             Err(()) => return Err(SessionError::Conflict(command_id.into())),
         }
-        let harness = self.harness(&req.harness_id)?;
+
+        // This slice supports no model/preset/plan/review yet: refuse them
+        // explicitly rather than write a state we do not apply.
+        if req.model_provider_id.is_some() || req.model_id.is_some() {
+            return Err(SessionError::Unsupported(
+                "modelProviderId/modelId are not supported yet; a session runs the harness's own default".into(),
+            ));
+        }
+        if req.preset_id.is_some() {
+            return Err(SessionError::Unsupported("presetId is not supported yet".into()));
+        }
+        if req.plan.is_some() || req.review.is_some() {
+            return Err(SessionError::Unsupported("plan/review are not supported yet".into()));
+        }
+        if req.additional_directories.as_ref().map(|d| !d.is_empty()).unwrap_or(false) {
+            return Err(SessionError::Unsupported("additionalDirectories are not supported yet".into()));
+        }
+
+        // Validate the harness exists (the start resolves it again).
+        let _harness = self.harness(&req.harness_id)?;
+
         let id = new_id("s");
-        let cwd = match req.cwd.filter(|c| !c.is_empty()) {
+        let cwd = match req.cwd.clone().filter(|c| !c.is_empty()) {
             Some(c) => c,
             None => {
                 let dir = self.data_dir.join("sessions").join(&id);
@@ -224,61 +250,88 @@ impl Sessions {
                 dir.to_string_lossy().to_string()
             }
         };
-
-        // Start the real adapter BEFORE writing an active row.
-        let spec = StartSpec {
-            sid: id.clone(),
-            harness_id: harness.id.clone(),
-            command: harness.command.clone(),
-            plugin_dir: harness.plugin_dir.clone(),
-            cwd: PathBuf::from(&cwd),
-            harness_dir: self.data_dir.join("agents").join(&req.harness_id),
-            skills_dir: self.data_dir.join("agents").join(&req.harness_id).join("skills"),
-            extensions_dir: self.data_dir.join("agents").join(&req.harness_id).join("extensions"),
-            runtime_argv: harness.runtime_argv.clone(),
-            resume: None,
-            config: self.config_payload(&id),
-        };
-        let process = self
-            .runtime
-            .start(spec)
-            .await
-            .map_err(|e| SessionError::Start(e.to_string()))?;
-
         let now = now_utc();
         let row = SessionRow {
             id: id.clone(),
             harness_id: req.harness_id.clone(),
-            model_provider_id: req.model_provider_id.clone(),
-            model_id: req.model_id.clone(),
-            applied_model: process
-                .applied
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            plan: req.plan,
-            review: req.review,
+            model_provider_id: None,
+            model_id: None,
+            applied_model: None,
+            plan: None,
+            review: None,
             cwd: Some(cwd),
             title: req.title.clone(),
-            status: "active".into(),
+            status: "starting".into(),
             created_at: now.clone(),
             updated_at: now,
             deleted: false,
             forked_from_session: None,
             forked_from_turn: None,
-            native_ref: Some(process.native_ref.clone()),
+            native_ref: None,
+            start_error: None,
         };
-        self.db.insert_session(&row)?;
-        self.create_ids.record(command_id, &body, &id);
+        // One transaction: the `starting` row and the command association.
+        self.db.reserve_session_command(command_id, &fp, &row)?;
         let view = self.view(&row);
         self.bus.publish("session.created", serde_json::json!({ "session": view }));
-        Ok(view)
+        Ok(CreateOutcome::Accepted(view))
     }
 
-    /// The `config/set` payload the hub materializes. Empty for now (no managed
-    /// provider, no preset); the handshake shape is what matters here.
-    fn config_payload(&self, _sid: &str) -> serde_json::Value {
-        serde_json::json!({})
+    /// The background half of create: start the adapter and move the session from
+    /// `starting` to `active`/`starting_failed`. Runs DETACHED (the caller already
+    /// answered 202). On any failure the started process is stopped (R4).
+    pub async fn run_start(self: Arc<Self>, sid: String) {
+        let lock = self.lock_for(&sid).await;
+        let _guard = lock.lock().await;
+        let row = match self.db.session(&sid) {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
+        let harness = match self.harness(&row.harness_id) {
+            Ok(h) => h,
+            Err(e) => return self.fail_start(&sid, &e.to_string()).await,
+        };
+        let spec = StartSpec {
+            sid: sid.clone(),
+            harness_id: harness.id.clone(),
+            command: harness.command.clone(),
+            plugin_dir: harness.plugin_dir.clone(),
+            cwd: PathBuf::from(row.cwd.clone().unwrap_or_default()),
+            harness_dir: harness.harness_dir.clone(),
+            skills_dir: harness.skills_dir.clone(),
+            extensions_dir: harness.extensions_dir.clone(),
+            runtime_argv: harness.runtime_argv.clone(),
+            resume: None,
+            config: serde_json::json!({}),
+        };
+        match self.runtime.start(spec).await {
+            Ok(process) => {
+                let mut row = row;
+                row.status = "active".into();
+                row.native_ref = Some(process.native_ref.clone());
+                row.start_error = None;
+                row.updated_at = now_utc();
+                if let Err(e) = self.db.update_session(&row) {
+                    // DB write failed AFTER the process started: stop it and mark
+                    // the failure, never leave a live process behind a broken row.
+                    let _ = self.runtime.stop(&sid).await;
+                    let _ = e;
+                    return self.fail_start(&sid, "the session row could not be persisted").await;
+                }
+                self.bus.publish("session.started", serde_json::json!({ "session": self.view(&row) }));
+            }
+            Err(e) => self.fail_start(&sid, &e.to_string()).await,
+        }
+    }
+
+    async fn fail_start(&self, sid: &str, error: &str) {
+        if let Ok(Some(mut row)) = self.db.session(sid) {
+            row.status = "starting_failed".into();
+            row.start_error = Some(error.to_string());
+            row.updated_at = now_utc();
+            let _ = self.db.update_session(&row);
+            self.bus.publish("session.start_failed", serde_json::json!({ "session": self.view(&row) }));
+        }
     }
 
     pub fn get(&self, id: &str) -> Result<SessionView, SessionError> {
@@ -290,11 +343,19 @@ impl Sessions {
         Ok(self.db.list_sessions()?.iter().map(|r| self.view(r)).collect())
     }
 
-    /// Close: stop the session's process, keep the record, status -> readonly.
-    /// Idempotent. ACP: cancel work and free resources; the session stays.
-    pub async fn close(&self, id: &str) -> Result<SessionView, SessionError> {
+    /// Close: stop the session's process and free its resources; the record stays
+    /// and the status becomes `readonly`. Serialized with start/reopen on the same
+    /// session (R4). If the process cannot be confirmed stopped, the error is
+    /// propagated and `readonly` is NOT written (R4: no claiming release).
+    pub async fn close(self: Arc<Self>, id: &str) -> Result<SessionView, SessionError> {
+        let lock = self.lock_for(id).await;
+        let _guard = lock.lock().await;
         let mut row = self.db.session(id)?.ok_or_else(|| SessionError::NotFound(id.into()))?;
-        self.runtime.stop(id).await;
+        // Stop the process; a failure is surfaced, not swallowed.
+        self.runtime
+            .stop(id)
+            .await
+            .map_err(|e| SessionError::Start(format!("the session process could not be stopped: {e}")))?;
         if row.status != "readonly" {
             row.status = "readonly".into();
             row.updated_at = now_utc();
@@ -304,9 +365,15 @@ impl Sessions {
         Ok(self.view(&row))
     }
 
-    /// Reopen: clear the status; the next start re-attaches on the stored ref.
-    pub async fn reopen(&self, id: &str) -> Result<SessionView, SessionError> {
+    /// Reopen: restart on the stored ref. Refuses a session that is still running
+    /// (never overwrite a live instance, R4); serialized on the session lock.
+    pub async fn reopen(self: Arc<Self>, id: &str) -> Result<SessionView, SessionError> {
+        let lock = self.lock_for(id).await;
+        let _guard = lock.lock().await;
         let mut row = self.db.session(id)?.ok_or_else(|| SessionError::NotFound(id.into()))?;
+        if self.runtime.is_running(id) {
+            return Err(SessionError::Validation("the session is already running".into()));
+        }
         if row.native_ref.is_none() {
             return Err(SessionError::Validation("the session has no native ref to reopen".into()));
         }
@@ -317,12 +384,12 @@ impl Sessions {
             command: harness.command.clone(),
             plugin_dir: harness.plugin_dir.clone(),
             cwd: PathBuf::from(row.cwd.clone().unwrap_or_default()),
-            harness_dir: self.data_dir.join("agents").join(&row.harness_id),
-            skills_dir: self.data_dir.join("agents").join(&row.harness_id).join("skills"),
-            extensions_dir: self.data_dir.join("agents").join(&row.harness_id).join("extensions"),
+            harness_dir: harness.harness_dir.clone(),
+            skills_dir: harness.skills_dir.clone(),
+            extensions_dir: harness.extensions_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: row.native_ref.clone(),
-            config: self.config_payload(&row.id),
+            config: serde_json::json!({}),
         };
         let process = self
             .runtime
@@ -334,22 +401,25 @@ impl Sessions {
         row.updated_at = now_utc();
         self.db.update_session(&row)?;
         let view = self.view(&row);
-        self.bus
-            .publish("session.reopened", serde_json::json!({ "session": view, "reopened": true }));
+        self.bus.publish("session.reopened", serde_json::json!({ "session": view, "reopened": true }));
         Ok(view)
     }
 
     /// Delete (soft): stop the process, mark the row deleted.
-    pub async fn delete(&self, id: &str) -> Result<(), SessionError> {
+    pub async fn delete(self: Arc<Self>, id: &str) -> Result<(), SessionError> {
+        let lock = self.lock_for(id).await;
+        let _guard = lock.lock().await;
         if self.db.session(id)?.is_none() {
             return Err(SessionError::NotFound(id.into()));
         }
-        self.runtime.stop(id).await;
+        self.runtime
+            .stop(id)
+            .await
+            .map_err(|e| SessionError::Start(e.to_string()))?;
         self.db.mark_session_deleted(id)?;
         Ok(())
     }
 
-    /// Whether the session's adapter process is currently running.
     pub fn is_running(&self, id: &str) -> bool {
         self.runtime.is_running(id)
     }
@@ -366,6 +436,7 @@ impl Sessions {
             cwd: row.cwd.clone(),
             title: row.title.clone(),
             status: row.status.clone(),
+            start_error: row.start_error.clone(),
             native_ref: row.native_ref.clone(),
             turn_running: false,
             created_at: row.created_at.clone(),
