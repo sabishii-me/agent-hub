@@ -13,8 +13,10 @@
 //! - [`sse`]: a WHATWG `text/event-stream` with `id` and `Last-Event-ID`
 //!   handling that converges (replay or resync), never a silent gap.
 
+pub mod auth;
 pub mod error;
 
+pub use auth::{require_bearer, BearerToken};
 pub use error::{DomainError, ErrorRenderer};
 
 use std::sync::Arc;
@@ -113,13 +115,13 @@ impl Transport {
     }
 }
 
-/// The transport-owned routes (`/v1/hub/status`, `/v1/hub/events`) as a
+/// The transport-owned routes (`/v1/status`, `/v1/events`) as a
 /// **stateful** builder. Domains merge their own routes onto this, then call
 /// [`finish`] with the shared [`Transport`].
 pub fn routes() -> Router<Transport> {
     Router::new()
-        .route("/v1/hub/status", get(status))
-        .route("/v1/hub/events", get(sse))
+        .route("/v1/status", get(status))
+        .route("/v1/events", get(sse))
 }
 
 /// Apply the shared state, yielding a ready [`Router`].
@@ -181,7 +183,7 @@ async fn sse(State(t): State<Transport>, headers: HeaderMap) -> Response {
                 }
             }
             CatchUp::Fresh => {
-                // The handshake: no id, no state (contract's `/v1/hub/events`).
+                // The handshake: no id, no state (contract's `/v1/events`).
                 yield Ok(frame_no_id("hub.connected", &json!({ "at": now_rfc3339() })));
             }
             CatchUp::Resync => {

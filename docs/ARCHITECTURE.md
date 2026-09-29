@@ -562,34 +562,57 @@ measured with a concurrent poll (ADR-0009), not asserted.
 
 ## 18. Implementation status
 
-This section records where the work above actually stands, so the document and the
-repository do not drift. It is a **status**, not a new decision.
+This section records where the work actually stands. It is a **status**, not a new decision.
 
-### Landed and verified (a real artifact runs; `cargo test --workspace` is green)
+**It was wrong before.** An earlier version of this section called whole domains "landed and
+verified" and pointed at component tests as if they proved the product capability. A cross-review
+(TASK-048) showed the opposite: sessions were never handed to an adapter yet answered `active` /
+`running` / `fork` success; a "concurrency" test proved a test-only route, not the product; the
+`202` install task did synchronous work off `tokio::spawn`. Those claims are **retracted**. What
+follows distinguishes a real, narrow component fact from a product capability.
 
-| step | crate | what runs | acceptance |
-|---|---|---|---|
-| T1 contract | `crates/contract` | the single normalization authority: the `contract/v1.json` DSL -> valid JSON Schema 2020-12; `emit-openapi` regenerates `contract/openapi.json` | no reproduced defect (`type:[]`, `nullable`, `type:binary`, a bare `const:manual`); every schema validates 2020-12; PATCH not over-constrained; 77 = 77 |
-| frame (T4/T6) | `crates/events`, `crates/transport` | monotonic event ids with a bounded replay window; `202 + Location`; bounded admission (`503 + Retry-After`); SSE with `id`/`Last-Event-ID` | replay + resync; 200 concurrent status polls ~40 ms, 500 ~80 ms; two heavy ops progress, a third is `503` |
-| data + recovery (T3) | `crates/db` | the plugin install/replace recovery rules over a durable `plugin_ops.step` | crash at each boundary recovers; **a real `abort()` mid-install** leaves a state the boot sweep finishes |
-| plugins | `crates/plugins` | install/remove/prepare/list over `/v1/hub/plugins`; one verdict; the command identity (R1) | real HTTP CRUD + replace; `hub.plugins.changed` on SSE |
-| sessions | `crates/sessions` | session control state + turn admission over `/v1/sessions` | turn `idempotencyKey`: a retry returns the same turn, a new key is `409 session_busy`; fork |
-| providers | `crates/providers` | providers as data: file store, CRUD, selection, a real catalog fetch | token never leaves; url/api change -> revision bump -> stale; selection survives a refresh |
+### What is a real, narrow component fact
 
-The `hub` binary mounts these domains and runs plugin recovery before serving.
+- **T1 contract normalization** (`crates/contract`): the `contract/v1.json` DSL normalizes to
+  valid JSON Schema 2020-12 and `emit-openapi` regenerates `contract/openapi.json`. This is a
+  property of the normalizer over the contract file; it does not depend on any domain.
+- **T3 recovery rules** (`crates/db`): the install/replace step spine and its boot sweep recover
+  across a crashed writer. This is a property of the data layer over real files.
+- **The event bus** (`crates/events`): monotonic ids, a bounded replay window, and resync.
+- **The transport primitives** (`crates/transport`): `Accepted` (`202 + Location`), bounded
+  admission (`503 + Retry-After`), and SSE framing. These are mechanisms, not product behaviour.
 
-### Not yet implemented (the §17 order continues)
+### What is NOT a product capability (and is currently dishonest if it says so)
 
-- **adapter** domain: the out-of-process lifecycle, the shared adapter library, and the
-  baseline (preset/approval/plan/review).
-- **connections / harnesses / skills / extensions / humans**.
-- The T2a / T2b feasibility unknowns (an OS execution boundary; the skills hook on each real
-  harness) are **not resolved**; they need a real harness artifact and are tracked in
-  `docs/review/VERIFICATION-TASKS.md`.
+- **sessions**: a session is **not** handed to a harness. `create` inserts a row; `admit_turn`
+  ignores its content; `fork` writes a row. There is **no execution boundary** behind
+  `active`/`running`/`fork`. These must be made **honestly unavailable** until an adapter is
+  wired (see the rework in progress).
+- **providers**: the token is written **in plaintext** to a JSON file; there is no secret store.
+  Until the credential path is real, a provider must not accept a secret.
+- **the served binary**: there is **no inbound authentication**, so the binary must not be run
+  as a product against real data or credentials.
+- **adapter / harnesses / skills / extensions / humans**: adapter plugins can be spoken to over
+  the bus at the protocol level, but nothing product-level is wired through them; the skills and
+  extensions models here follow the **pre-decision** contract (see
+  `docs/review/ROUTE-SURFACE-DEVIATION.md`).
 
-### Verified how
+### What was fake and is being removed
 
-Every landed row is exercised by tests that run the real thing (a real listener, real
-sockets, real SQLite files, a real `abort()`, a real upstream HTTP server), not by a
-DOM/string assertion. The concurrency row is a measured number, frozen in
-`crates/transport/tests/concurrency.rs`.
+- component tests that drive a **fake adapter** or a **test-only route** and are described as
+  product acceptance (retracted above; the tests stay as component tests, not product evidence);
+- a "concurrency" number that counted **status requests**, not concurrent idle connections;
+- an install task that is `tokio::spawn`ed but runs synchronous fs/SQLite work.
+
+### Order of work now
+
+1. Correct `contract/v1.json` to the **decided** surface (`ROUTES-REVIEW.md` decided sections),
+   because the contract is the interface (ADR-0011) and it currently encodes the "before" surface.
+2. Make every unconnected capability **honestly unavailable** (no `active`/`running`/`fork`
+   success without an adapter; no plaintext secret accepted; no unauthenticated mutators served
+   as a product).
+3. Retract unsupported wording (this section and the READMEs).
+4. Only then continue, one **real** product capability at a time, end to end.
+
+The T2a / T2b feasibility unknowns (an OS execution boundary; the skills hook per harness) are
+still unresolved and tracked in `docs/review/VERIFICATION-TASKS.md`.

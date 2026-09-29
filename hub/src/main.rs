@@ -21,7 +21,7 @@ use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
 use agent_hub_sessions::Sessions;
 use agent_hub_providers::routes::{routes as provider_routes, ProvidersState};
 use agent_hub_providers::{ProviderStore, Providers};
-use agent_hub_transport::{finish, routes, Admission, ErrorRenderer, Transport};
+use agent_hub_transport::{finish, require_bearer, routes, Admission, BearerToken, ErrorRenderer, Transport};
 
 mod selfcheck;
 
@@ -64,20 +64,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     selfcheck::check_error_codes(&declared_codes, &error_table)
         .map_err(|e| format!("self-check failed: {e}"))?;
 
-    // The surface check (ARCHITECTURE 13.4): report which contract routes the hub
-    // does not mount yet. Not every route is implemented (ARCHITECTURE 18), so
-    // this is a report at boot, not a refusal.
-    if let Ok(contract_v1) = std::fs::read_to_string(contract_dir.join("v1.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .ok_or(())
-    {
-        let mounted = selfcheck::mounted_surface();
-        match selfcheck::check_surface(&mounted, &contract_v1) {
-            Ok(()) => tracing::info!("the mounted surface matches contract/v1.json"),
-            Err(report) => tracing::warn!(%report, "surface self-check"),
-        }
-    }
+    // The surface check (ARCHITECTURE 13.4): serving a route the contract does
+    // NOT declare is a refusal to start; a contract route not mounted yet is
+    // unfinished work (reported by check_surface, not fatal).
+    let contract_raw = std::fs::read_to_string(contract_dir.join("v1.json"))
+        .map_err(|e| format!("read contract/v1.json: {e}"))?;
+    let contract_v1: serde_json::Value = serde_json::from_str(&contract_raw)
+        .map_err(|e| format!("parse contract/v1.json: {e}"))?;
+    let mounted = selfcheck::mounted_surface();
+    selfcheck::check_surface(&mounted, &contract_v1)
+        .map_err(|e| format!("self-check failed: {e}"))?;
     let errors = ErrorRenderer::new(error_table);
 
     // The data layer and the plugins domain. Recovery runs before serving.
@@ -115,6 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Humans: approvals and questions.
     let human_state = HumansState::shared(Humans::new(bus.clone()), errors.clone());
 
+    // Every route requires the bearer token (o5: no anonymous discovery).
+    let bearer = BearerToken::from_env_or_generate();
+
     // One axum app: the transport surface plus the domain routes.
     let app = finish(routes(), transport)
         .merge(plugin_routes().with_state(plugin_state))
@@ -124,9 +123,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(skill_routes().with_state(skill_state))
         .merge(human_routes().with_state(human_state));
 
+    // The bearer guard wraps the whole app: a missing or wrong token is 401.
+    let app = app.layer(axum::middleware::from_fn_with_state(bearer.clone(), require_bearer));
+
     let addr = std::env::var("AGENT_HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local = listener.local_addr()?;
+
+    // endpoint.json: the URL and bearer a client reads. Discovery is NOT
+    // anonymous (o5), so the token is required on every route; the file is how a
+    // conforming client learns it.
+    let endpoint = serde_json::json!({
+        "url": format!("http://{local}"),
+        "token": bearer.0,
+        "pid": std::process::id(),
+    });
+    std::fs::write(
+        data_dir.join("endpoint.json"),
+        serde_json::to_string_pretty(&endpoint).unwrap(),
+    )
+    .map_err(|e| format!("write endpoint.json: {e}"))?;
+
     tracing::info!(%local, data_dir = %data_dir.display(), "agent-hub listening");
     println!("{local}");
 

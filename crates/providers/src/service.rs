@@ -14,6 +14,10 @@ pub enum ProviderError {
     Validation(String),
     #[error("catalog: {0}")]
     Catalog(#[from] catalog::CatalogError),
+    /// A credential was supplied but there is no OS secret store to keep it, so
+    /// it is refused rather than written in plaintext (TASK-048 F02).
+    #[error("this hub has no secret store; a credential is not accepted and must not be stored in plaintext")]
+    NoSecretStore,
 }
 
 impl ProviderError {
@@ -26,6 +30,7 @@ impl ProviderError {
             ProviderError::Store(StoreError::Io(_)) => "internal_error",
             ProviderError::Validation(_) => "validation_failed",
             ProviderError::Catalog(_) => "provider_catalog_failed",
+            ProviderError::NoSecretStore => "not_implemented",
         }
     }
 
@@ -34,13 +39,16 @@ impl ProviderError {
     }
 }
 
-/// What POST /v1/hub/providers accepts.
+/// What POST /v1/model-providers accepts.
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct CreateProvider {
     pub id: Option<String>,
     pub label: Option<String>,
     pub url: Option<String>,
     pub api: Option<String>,
+    /// A token is NOT accepted until an OS secret store exists (TASK-048 F02):
+    /// accepting one would write a plaintext secret to a file. Refused, not
+    /// silently dropped.
     pub token: Option<String>,
     pub declarations: Option<std::collections::BTreeMap<String, crate::record::Declaration>>,
     #[serde(rename = "providerType")]
@@ -49,12 +57,13 @@ pub struct CreateProvider {
     pub provider_type_version: Option<u32>,
 }
 
-/// What PATCH /v1/hub/providers/{id} accepts (all optional).
+/// What PATCH /v1/model-providers/{id} accepts (all optional).
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct PatchProvider {
     pub label: Option<Option<String>>,
     pub url: Option<Option<String>>,
     pub api: Option<Option<String>>,
+    /// Refused until a secret store exists (see `CreateProvider::token`).
     pub token: Option<Option<String>>,
     pub declarations: Option<std::collections::BTreeMap<String, crate::record::Declaration>>,
 }
@@ -77,13 +86,16 @@ impl Providers {
     }
 
     pub fn create(&self, req: CreateProvider) -> Result<ProviderRecord, ProviderError> {
+        if req.token.is_some() {
+            return Err(ProviderError::NoSecretStore);
+        }
         let id = req.id.unwrap_or_else(|| new_id("prov"));
         let record = ProviderRecord {
             id,
             label: req.label,
             url: req.url,
             api: req.api,
-            token: req.token,
+            token_configured: false,
             provider_type: req.provider_type,
             provider_type_version: req.provider_type_version,
             declarations: req.declarations.unwrap_or_default(),
@@ -116,11 +128,8 @@ impl Providers {
             }
             rec.api = v;
         }
-        if let Some(v) = req.token {
-            if rec.token != v {
-                bump = true;
-            }
-            rec.token = v;
+        if req.token.is_some() {
+            return Err(ProviderError::NoSecretStore);
         }
         if let Some(v) = req.declarations {
             rec.declarations = v;
@@ -138,13 +147,11 @@ impl Providers {
     }
 
     /// Drop the stored credential and keep the row.
+    /// Drop the stored credential and keep the row. There is no plaintext
+    /// credential here (no secret store yet), so this is a no-op on the record;
+    /// it exists for the contract shape. It never invents a token change.
     pub fn logout(&self, id: &str) -> Result<ProviderRecord, ProviderError> {
-        let mut rec = self.store.get(id)?;
-        if rec.token.is_some() {
-            rec.token = None;
-            rec.revision += 1;
-        }
-        self.store.save(&rec)?;
+        let rec = self.store.get(id)?;
         Ok(rec)
     }
 
@@ -178,7 +185,8 @@ impl Providers {
             .url
             .clone()
             .ok_or_else(|| ProviderError::Validation("this provider has no url".into()))?;
-        let models = catalog::fetch(rec.api.as_deref(), &url, rec.token.as_deref()).await?;
+        // No credential: the catalog fetch is unauthenticated until a secret store exists.
+        let models = catalog::fetch(rec.api.as_deref(), &url, None).await?;
 
         let previous_enabled = rec.enabled_model_ids.clone();
         let previous_models = rec.catalog.as_ref().map(|c| c.models.clone()).unwrap_or_default();

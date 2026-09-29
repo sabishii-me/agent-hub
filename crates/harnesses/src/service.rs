@@ -73,7 +73,7 @@ impl Harnesses {
             .collect()
     }
 
-    /// The management view (`GET /v1/hub/harnesses`): the same registry plus the
+    /// The management view (`GET /v1/harnesses`): the same registry plus the
     /// installed extensions a harness ships.
     pub fn management(&self) -> Value {
         let harnesses: Vec<Value> = self
@@ -129,6 +129,19 @@ impl Harnesses {
             .map_err(HarnessError::Adapter)?;
         // The adapter's own answer already carries harnessId/known/list.
         Ok(reply)
+    }
+
+    /// The extension ids this harness may be given (the plugin's shipped set),
+    /// harness-scoped (a bare id is meaningless across harnesses).
+    pub fn extensions(&self, id: &str) -> Result<Value, HarnessError> {
+        let h = self.adapters.get(id).map_err(HarnessError::Adapter)?;
+        let ids: Vec<String> = h
+            .manifest
+            .shipped_extensions(&h.directory)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        Ok(json!({ "harnessId": id, "available": ids }))
     }
 
     pub async fn presets(&self, id: &str) -> Result<Value, HarnessError> {

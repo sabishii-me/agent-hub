@@ -1,4 +1,4 @@
-//! The `/v1/hub/skills` routes.
+//! The `/v1/skills` routes.
 
 use std::sync::Arc;
 
@@ -26,9 +26,9 @@ impl SkillsState {
 
 pub fn routes() -> Router<SkillsState> {
     Router::new()
-        .route("/v1/hub/skills", get(list))
-        .route("/v1/hub/skills/{id}", delete(remove))
-        .route("/v1/hub/skills/{id}/files/{*file}", get(read_file).put(write_file))
+        .route("/v1/skills", get(list))
+        .route("/v1/skills/{id}", delete(remove))
+        .route("/v1/skills/{id}/files/{*file}", get(read_file).put(write_file))
 }
 
 fn err(s: &SkillsState, e: SkillError) -> Response {

@@ -39,7 +39,7 @@ impl Manifest {
     }
 }
 
-/// The contract's `plugin` object (GET /v1/hub/plugins items).
+/// The contract's `plugin` object (GET /v1/plugins items).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginView {
     pub id: String,

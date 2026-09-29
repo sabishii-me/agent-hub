@@ -140,6 +140,16 @@ impl Plugins {
         Ok(views)
     }
 
+    /// Read one plugin (the resource a `202 Location` names).
+    pub fn get(&self, id: &str) -> Result<PluginView, PluginError> {
+        // A hub-installed plugin has a row; a deployment directory does not.
+        match self.db.plugin(id)? {
+            Some(row) => Ok(self.view(id, row)),
+            None if self.has_dir(id) => Ok(self.view(id, self.row_for_dir(id))),
+            None => Err(PluginError::NotFound(id.into())),
+        }
+    }
+
     fn row_for_dir(&self, id: &str) -> PluginRow {
         PluginRow {
             id: id.into(),

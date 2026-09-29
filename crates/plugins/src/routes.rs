@@ -1,4 +1,4 @@
-//! The `/v1/hub/plugins` routes, merged onto the frame's transport.
+//! The `/v1/plugins` routes, merged onto the frame's transport.
 //!
 //! A long operation (install, remove) is **detached**: the route answers
 //! `202 Accepted` + `Location` at once and the work runs on a task
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -33,9 +33,9 @@ impl PluginsState {
 
 pub fn routes() -> Router<PluginsState> {
     Router::new()
-        .route("/v1/hub/plugins", get(list).post(install))
-        .route("/v1/hub/plugins/{id}", delete(remove))
-        .route("/v1/hub/plugins/{id}/prepare", post(prepare))
+        .route("/v1/plugins", get(list).post(install))
+        .route("/v1/plugins/{id}", get(get_one).delete(remove))
+        .route("/v1/plugins/{id}/prepare", post(prepare))
 }
 
 /// The client's logical command identity (ARCHITECTURE §11, R1). A retry carries
@@ -97,7 +97,7 @@ struct InstallSource {
     url: String,
 }
 
-/// POST /v1/hub/plugins (long): `202 Accepted` + `Location`; the install runs
+/// POST /v1/plugins (long): `202 Accepted` + `Location`; the install runs
 /// detached and its progress is the `hub.plugins.changed` stream.
 async fn install(
     State(s): State<PluginsState>,
@@ -114,19 +114,33 @@ async fn install(
         }
         Ok(crate::service::InstallIntent::Proceed { id }) => {
             let plugins = s.plugins.clone();
-            let location = format!("/v1/hub/plugins/{id}");
-            let errors = s.errors.clone();
+            let location = format!("/v1/plugins/{id}");
+            // The install does synchronous fs + SQLite work; it MUST run on the
+            // blocking pool, not on the async runtime (TASK-048 F06).
             Accepted::detached(
                 location,
                 serde_json::json!({ "pluginId": id, "state": "installing" }),
                 async move {
-                    if let Err(e) = plugins.finish_install(&id, &source) {
-                        tracing::error!(error = %e, "detached install failed");
+                    let id2 = id.clone();
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        plugins.finish_install(&id2, &source)
+                    })
+                    .await;
+                    match outcome {
+                        Ok(Err(e)) => tracing::error!(error = %e, "detached install failed"),
+                        Err(e) => tracing::error!(error = %e, "install task panicked"),
+                        Ok(Ok(())) => {}
                     }
-                    let _ = errors; // the failure is reported on the event stream
                 },
             )
         }
+        Err(e) => s.errors.render(&e.to_domain_error()),
+    }
+}
+
+async fn get_one(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) -> Response {
+    match s.plugins.get(&id) {
+        Ok(view) => Json(serde_json::json!({ "plugin": view })).into_response_ok(),
         Err(e) => s.errors.render(&e.to_domain_error()),
     }
 }
@@ -143,14 +157,17 @@ async fn remove(
         }
         Ok(crate::service::RemoveIntent::Proceed) => {
             let plugins = s.plugins.clone();
-            let location = format!("/v1/hub/plugins/{id}");
+            let location = format!("/v1/plugins/{id}");
             let id2 = id.clone();
             Accepted::detached(
                 location,
                 serde_json::json!({ "id": id, "state": "removing" }),
                 async move {
-                    if let Err(e) = plugins.finish_remove(&id2) {
-                        tracing::error!(error = %e, "detached remove failed");
+                    let outcome = tokio::task::spawn_blocking(move || plugins.finish_remove(&id2)).await;
+                    match outcome {
+                        Ok(Err(e)) => tracing::error!(error = %e, "detached remove failed"),
+                        Err(e) => tracing::error!(error = %e, "remove task panicked"),
+                        Ok(Ok(())) => {}
                     }
                 },
             )

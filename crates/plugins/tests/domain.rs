@@ -88,13 +88,13 @@ async fn install_list_replace_remove_over_http() {
 
     // Install: a long operation is 202 + Location, not a held 200.
     let r = client
-        .post(format!("{base}/v1/hub/plugins"))
+        .post(format!("{base}/v1/plugins"))
         .json(&body)
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 202, "install should be accepted, not held");
-    assert_eq!(r.headers()["location"], "/v1/hub/plugins/alpha");
+    assert_eq!(r.headers()["location"], "/v1/plugins/alpha");
     // The work is detached; wait for the resource to become ready.
     let plugin = wait_for_plugin(&client, &base, "alpha").await;
     assert_eq!(plugin["state"], "ready");
@@ -102,7 +102,7 @@ async fn install_list_replace_remove_over_http() {
 
     // List shows it.
     let list: serde_json::Value = client
-        .get(format!("{base}/v1/hub/plugins"))
+        .get(format!("{base}/v1/plugins"))
         .send()
         .await
         .unwrap()
@@ -115,7 +115,7 @@ async fn install_list_replace_remove_over_http() {
     // Replace with a new version: still 202; wait for the new manifest.
     let src2 = plugin_src(&dir, "alpha", "2.0.0");
     let r = client
-        .post(format!("{base}/v1/hub/plugins"))
+        .post(format!("{base}/v1/plugins"))
         .json(&serde_json::json!({ "source": { "url": src2.to_string_lossy() } }))
         .send()
         .await
@@ -125,7 +125,7 @@ async fn install_list_replace_remove_over_http() {
 
     // Remove: 202, then the directory goes.
     let r = client
-        .delete(format!("{base}/v1/hub/plugins/alpha"))
+        .delete(format!("{base}/v1/plugins/alpha"))
         .send()
         .await
         .unwrap();
@@ -133,7 +133,7 @@ async fn install_list_replace_remove_over_http() {
     wait_for_gone(&root, "alpha").await;
 
     let list: serde_json::Value = client
-        .get(format!("{base}/v1/hub/plugins"))
+        .get(format!("{base}/v1/plugins"))
         .send()
         .await
         .unwrap()
@@ -159,7 +159,7 @@ async fn installing_an_invalid_manifest_is_refused() {
     fs::write(bad.join("manifest.json"), r#"{"id":"bad","pluginType":"nonsense"}"#).unwrap();
 
     let r = reqwest::Client::new()
-        .post(format!("{base}/v1/hub/plugins"))
+        .post(format!("{base}/v1/plugins"))
         .json(&serde_json::json!({ "source": { "url": bad.to_string_lossy() } }))
         .send()
         .await
@@ -171,11 +171,11 @@ async fn installing_an_invalid_manifest_is_refused() {
     assert_eq!(body["error"], "plugin_archive_invalid");
 }
 
-/// Poll GET /v1/hub/plugins until `id` is ready; return its view.
+/// Poll GET /v1/plugins until `id` is ready; return its view.
 async fn wait_for_plugin(client: &reqwest::Client, base: &str, id: &str) -> serde_json::Value {
     for _ in 0..100 {
         let list: serde_json::Value = client
-            .get(format!("{base}/v1/hub/plugins"))
+            .get(format!("{base}/v1/plugins"))
             .send()
             .await
             .unwrap()
@@ -235,7 +235,7 @@ async fn state_change_is_announced_on_the_event_stream() {
     let mut stream: std::pin::Pin<Box<dyn futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>> =
         Box::pin(
             client
-                .get(format!("{base}/v1/hub/events"))
+                .get(format!("{base}/v1/events"))
                 .send()
                 .await
                 .unwrap()
@@ -248,7 +248,7 @@ async fn state_change_is_announced_on_the_event_stream() {
     // Install: a hub.plugins.changed frame must arrive.
     let src = plugin_src(&dir, "beta", "1.0.0");
     client
-        .post(format!("{base}/v1/hub/plugins"))
+        .post(format!("{base}/v1/plugins"))
         .json(&serde_json::json!({ "source": { "url": src.to_string_lossy() } }))
         .send()
         .await

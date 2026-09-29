@@ -9,7 +9,7 @@ registry, plus the capability-gated runtime answers routed to the adapter.
 - `GET /v1/harnesses/{id}/{presets|models|tools}` - routed to the adapter, gated on the
   harness **declaring** the capability. An undeclared capability is `known: false` - the rule
   the contract states twice: **never a faked empty list**.
-- `GET /v1/hub/harnesses` - the management view.
+- `GET /v1/harnesses` - the management view.
 - enable/disable change the registry, and the projection shows it.
 
 ## Tests

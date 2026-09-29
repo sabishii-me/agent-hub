@@ -67,21 +67,21 @@ async fn crud_lifecycle() {
 
     // Create.
     let r = client
-        .post(format!("{base}/v1/hub/providers"))
-        .json(&serde_json::json!({ "id": "acme", "label": "Acme", "url": "https://api.acme.test", "api": "openai-completions", "token": "sk-secret" }))
+        .post(format!("{base}/v1/model-providers"))
+        .json(&serde_json::json!({ "id": "acme", "label": "Acme", "url": "https://api.acme.test", "api": "openai-completions" }))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
     let created: serde_json::Value = r.json().await.unwrap();
     assert_eq!(created["provider"]["id"], "acme");
-    assert_eq!(created["provider"]["tokenConfigured"], true);
-    // The token itself never appears.
-    assert!(created["provider"].get("token").is_none(), "token leaked");
+    // No secret store: a token is refused, and none is ever present.
+    assert_eq!(created["provider"]["tokenConfigured"], false);
+    assert!(created["provider"].get("token").is_none(), "no token field may exist");
 
     // Duplicate id refused.
     let r = client
-        .post(format!("{base}/v1/hub/providers"))
+        .post(format!("{base}/v1/model-providers"))
         .json(&serde_json::json!({ "id": "acme", "url": "x" }))
         .send()
         .await
@@ -90,7 +90,7 @@ async fn crud_lifecycle() {
 
     // List.
     let list: serde_json::Value = client
-        .get(format!("{base}/v1/hub/providers"))
+        .get(format!("{base}/v1/model-providers"))
         .send()
         .await
         .unwrap()
@@ -99,9 +99,9 @@ async fn crud_lifecycle() {
         .unwrap();
     assert_eq!(list["providers"].as_array().unwrap().len(), 1);
 
-    // Logout keeps the row but drops the credential.
+    // Logout keeps the row; there is no plaintext credential to drop.
     let r = client
-        .post(format!("{base}/v1/hub/providers/acme/logout"))
+        .post(format!("{base}/v1/model-providers/acme/logout"))
         .send()
         .await
         .unwrap();
@@ -110,13 +110,13 @@ async fn crud_lifecycle() {
 
     // Delete.
     let r = client
-        .delete(format!("{base}/v1/hub/providers/acme"))
+        .delete(format!("{base}/v1/model-providers/acme"))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
     let list: serde_json::Value = client
-        .get(format!("{base}/v1/hub/providers"))
+        .get(format!("{base}/v1/model-providers"))
         .send()
         .await
         .unwrap()
@@ -136,7 +136,7 @@ async fn changing_url_or_api_bumps_revision_and_marks_catalog_stale() {
     .await;
 
     client
-        .post(format!("{base}/v1/hub/providers"))
+        .post(format!("{base}/v1/model-providers"))
         .json(&serde_json::json!({ "id": "p", "url": upstream, "api": "openai-completions" }))
         .send()
         .await
@@ -144,7 +144,7 @@ async fn changing_url_or_api_bumps_revision_and_marks_catalog_stale() {
 
     // Refresh: the catalog is now present and fresh.
     let r: serde_json::Value = client
-        .post(format!("{base}/v1/hub/providers/p/models/refresh"))
+        .post(format!("{base}/v1/model-providers/p/models/refresh"))
         .send()
         .await
         .unwrap()
@@ -158,7 +158,7 @@ async fn changing_url_or_api_bumps_revision_and_marks_catalog_stale() {
 
     // Change the api -> revision bump -> stale.
     let r: serde_json::Value = client
-        .patch(format!("{base}/v1/hub/providers/p"))
+        .patch(format!("{base}/v1/model-providers/p"))
         .json(&serde_json::json!({ "api": "anthropic-messages" }))
         .send()
         .await
@@ -168,7 +168,7 @@ async fn changing_url_or_api_bumps_revision_and_marks_catalog_stale() {
         .unwrap();
     let _ = r;
     let r: serde_json::Value = client
-        .get(format!("{base}/v1/hub/providers/p/models"))
+        .get(format!("{base}/v1/model-providers/p/models"))
         .send()
         .await
         .unwrap()
@@ -188,20 +188,20 @@ async fn selection_is_stored_and_validated() {
     .await;
 
     client
-        .post(format!("{base}/v1/hub/providers"))
+        .post(format!("{base}/v1/model-providers"))
         .json(&serde_json::json!({ "id": "p", "url": upstream }))
         .send()
         .await
         .unwrap();
     client
-        .post(format!("{base}/v1/hub/providers/p/models/refresh"))
+        .post(format!("{base}/v1/model-providers/p/models/refresh"))
         .send()
         .await
         .unwrap();
 
     // Select a subset.
     let r: serde_json::Value = client
-        .patch(format!("{base}/v1/hub/providers/p/models"))
+        .patch(format!("{base}/v1/model-providers/p/models"))
         .json(&serde_json::json!({ "enabledModelIds": ["m1", "m3"] }))
         .send()
         .await
@@ -220,7 +220,7 @@ async fn selection_is_stored_and_validated() {
 
     // An unknown id is refused.
     let r = client
-        .patch(format!("{base}/v1/hub/providers/p/models"))
+        .patch(format!("{base}/v1/model-providers/p/models"))
         .json(&serde_json::json!({ "enabledModelIds": ["nope"] }))
         .send()
         .await
@@ -229,12 +229,12 @@ async fn selection_is_stored_and_validated() {
 
     // The selection survives a refresh (it lives on the provider).
     client
-        .post(format!("{base}/v1/hub/providers/p/models/refresh"))
+        .post(format!("{base}/v1/model-providers/p/models/refresh"))
         .send()
         .await
         .unwrap();
     let r: serde_json::Value = client
-        .get(format!("{base}/v1/hub/providers/p/models"))
+        .get(format!("{base}/v1/model-providers/p/models"))
         .send()
         .await
         .unwrap()
@@ -257,7 +257,7 @@ async fn a_corrupt_provider_file_is_reported_not_dropped() {
     std::fs::write(dir.join("bad.json"), "{ not json").unwrap();
     let base = serve_providers(dir).await;
     let list: serde_json::Value = reqwest::Client::new()
-        .get(format!("{base}/v1/hub/providers"))
+        .get(format!("{base}/v1/model-providers"))
         .send()
         .await
         .unwrap()

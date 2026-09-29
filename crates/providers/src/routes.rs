@@ -1,4 +1,4 @@
-//! The `/v1/hub/providers` routes, merged onto the frame's transport.
+//! The `/v1/model-providers` routes, merged onto the frame's transport.
 
 use std::sync::Arc;
 
@@ -25,15 +25,15 @@ impl ProvidersState {
 
 pub fn routes() -> Router<ProvidersState> {
     Router::new()
-        .route("/v1/hub/providers", get(list).post(create))
+        .route("/v1/model-providers", get(list).post(create))
         .route(
-            "/v1/hub/providers/{id}",
+            "/v1/model-providers/{id}",
             get(get_one).patch(patch_one).delete(remove),
         )
-        .route("/v1/hub/providers/{id}/logout", post(logout))
-        .route("/v1/hub/providers/{id}/models", get(models).patch(set_models))
-        .route("/v1/hub/providers/{id}/models/refresh", post(refresh))
-        .route("/v1/hub/providers/models/list", get(list_models))
+        .route("/v1/model-providers/{id}/logout", post(logout))
+        .route("/v1/model-providers/{id}/models", get(models).patch(set_models))
+        .route("/v1/model-providers/{id}/models/refresh", post(refresh))
+        .route("/v1/models", get(list_models))
 }
 
 fn err(s: &ProvidersState, e: ProviderError) -> Response {
@@ -45,7 +45,7 @@ fn view(rec: &ProviderRecord) -> serde_json::Value {
     let mut v = serde_json::to_value(rec).unwrap_or(serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
         obj.remove("token");
-        obj.insert("tokenConfigured".into(), serde_json::json!(rec.token.is_some()));
+        obj.insert("tokenConfigured".into(), serde_json::json!(rec.token_configured));
         obj.insert(
             "providerTypeAvailable".into(),
             serde_json::json!(rec.provider_type.is_some()),

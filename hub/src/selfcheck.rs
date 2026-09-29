@@ -32,16 +32,17 @@ pub fn check_error_codes(declared: &[&str], table: &agent_hub_contract::ErrorTab
 /// the surface check has a list to compare (ARCHITECTURE 13.4).
 pub fn mounted_surface() -> BTreeSet<String> {
     [
-        "GET /v1/hub/status",
-        "GET /v1/hub/events",
-        // plugins
-        "GET /v1/hub/plugins",
-        "POST /v1/hub/plugins",
-        "DELETE /v1/hub/plugins/{id}",
-        "POST /v1/hub/plugins/{id}/prepare",
-        // sessions
-        "POST /v1/sessions",
+        // transport
+        "GET /v1/status",
+        "GET /v1/events",
+        // plugins (only the routes this build actually mounts)
+        "GET /v1/plugins",
+        "POST /v1/plugins",
+        "DELETE /v1/plugins/{id}",
+        "POST /v1/plugins/{id}/prepare",
+        // sessions (all answer 501 until wired; the paths are mounted)
         "GET /v1/sessions",
+        "POST /v1/sessions",
         "GET /v1/sessions/{id}",
         "PATCH /v1/sessions/{id}",
         "DELETE /v1/sessions/{id}",
@@ -51,32 +52,32 @@ pub fn mounted_surface() -> BTreeSet<String> {
         "POST /v1/sessions/{id}/close",
         "POST /v1/sessions/{id}/reopen",
         "POST /v1/sessions/{id}/fork",
-        // providers
-        "GET /v1/hub/providers",
-        "POST /v1/hub/providers",
-        "GET /v1/hub/providers/{id}",
-        "PATCH /v1/hub/providers/{id}",
-        "DELETE /v1/hub/providers/{id}",
-        "POST /v1/hub/providers/{id}/logout",
-        "GET /v1/hub/providers/{id}/models",
-        "PATCH /v1/hub/providers/{id}/models",
-        "POST /v1/hub/providers/{id}/models/refresh",
-        "GET /v1/hub/providers/models/list",
+        // model providers
+        "GET /v1/model-providers",
+        "POST /v1/model-providers",
+        "GET /v1/model-providers/{id}",
+        "PATCH /v1/model-providers/{id}",
+        "DELETE /v1/model-providers/{id}",
+        "POST /v1/model-providers/{id}/logout",
+        "GET /v1/model-providers/{id}/models",
+        "PATCH /v1/model-providers/{id}/models",
+        "POST /v1/model-providers/{id}/models/refresh",
+        "GET /v1/models",
         // harnesses
         "GET /v1/harnesses",
         "GET /v1/harnesses/{id}/presets",
         "GET /v1/harnesses/{id}/models",
         "GET /v1/harnesses/{id}/tools",
-        "POST /v1/harnesses/{id}/enable",
-        "POST /v1/harnesses/{id}/disable",
-        "GET /v1/hub/harnesses",
-        "POST /v1/hub/harnesses/{id}/enable",
-        "POST /v1/hub/harnesses/{id}/disable",
         // skills
-        "GET /v1/hub/skills",
-        "DELETE /v1/hub/skills/{id}",
-        "PUT /v1/hub/skills/{id}/files/{file...}",
-        "GET /v1/hub/skills/{id}/files/{file...}",
+        "GET /v1/skills",
+        "DELETE /v1/skills/{id}",
+        "PUT /v1/skills/{id}/files/{file...}",
+        "GET /v1/skills/{id}/files/{file...}",
+        // humans
+        "GET /v1/sessions/{id}/approvals",
+        "POST /v1/sessions/{id}/approvals/{aid}",
+        "GET /v1/sessions/{id}/questions",
+        "POST /v1/sessions/{id}/questions/{qid}",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -89,19 +90,29 @@ pub fn check_surface(mounted: &BTreeSet<String>, contract: &serde_json::Value) -
     let mut expected: BTreeSet<String> = BTreeSet::new();
     if let Some(endpoints) = contract.get("endpoints").and_then(|v| v.as_array()) {
         for e in endpoints {
-            if let (Some(m), Some(p)) = (e.get("method").and_then(|v| v.as_str()), e.get("path").and_then(|v| v.as_str())) {
+            if let (Some(m), Some(p)) = (
+                e.get("method").and_then(|v| v.as_str()),
+                e.get("path").and_then(|v| v.as_str()),
+            ) {
                 expected.insert(format!("{} {}", m.to_uppercase(), p));
             }
         }
     }
-    let missing: Vec<&String> = expected.difference(mounted).collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        // Not every contract route is implemented yet (ARCHITECTURE 18); the
-        // self-check reports what is missing rather than failing boot.
-        Err(format!("{} contract routes are not mounted yet", missing.len()))
+    // The dangerous direction is serving a route the contract does NOT declare:
+    // that is a refusal to start. A contract route not mounted yet is unfinished
+    // work (ARCHITECTURE 18), reported but not fatal.
+    let extra: Vec<&String> = mounted.difference(&expected).collect();
+    if !extra.is_empty() {
+        return Err(format!(
+            "these mounted routes are NOT in contract/v1.json: {}",
+            extra.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        ));
     }
+    let missing = expected.difference(mounted).count();
+    if missing > 0 {
+        tracing::info!(missing, "contract routes not mounted yet");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

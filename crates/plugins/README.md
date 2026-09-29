@@ -12,8 +12,8 @@ listing, wired to the frame.
   conflicts; a new key is a new intent.
 - `service.rs` - the lifecycle over `agent-hub-db`; every transition publishes
   `hub.plugins.changed`.
-- `routes.rs` - `GET/POST /v1/hub/plugins`, `DELETE /v1/hub/plugins/{id}`,
-  `POST /v1/hub/plugins/{id}/prepare`.
+- `routes.rs` - `GET/POST /v1/plugins`, `DELETE /v1/plugins/{id}`,
+  `POST /v1/plugins/{id}/prepare`.
 
 Runtime prepare is delegated to the adapter (a later domain); without one it reports the
 runtime not-ready rather than faking it.

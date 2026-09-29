@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 pub enum ExtensionError {
     #[error("unknown extension id `{0}`; available: {1}")]
     Unknown(String, String),
+    #[error("extension `{0}` is declared but its source directory is missing: {1}")]
+    SourceMissing(String, String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -24,6 +26,7 @@ impl ExtensionError {
     pub fn code(&self) -> &'static str {
         match self {
             ExtensionError::Unknown(_, _) => "validation_failed",
+            ExtensionError::SourceMissing(_, _) => "runtime_unavailable",
             ExtensionError::Io(_) => "internal_error",
         }
     }
@@ -64,13 +67,14 @@ pub fn install_for_harness(
     std::fs::create_dir_all(&target)?;
     for want in selected {
         let src = &shipped.iter().find(|(id, _)| id == want).unwrap().1;
-        if src.exists() {
-            copy_tree(src, &target.join(want))?;
-        } else {
-            // A declared id with no directory: install an empty marker so the
-            // harness's placement is honest rather than silently absent.
-            std::fs::create_dir_all(target.join(want))?;
+        if !src.exists() {
+            // The source directory does not exist: this is a MISSING trust
+            // component, not an installed one. An empty marker (an earlier
+            // version) would make a missing approval extension look installed
+            // (TASK-048 F07). Fail loudly; never fabricate a placement.
+            return Err(ExtensionError::SourceMissing(want.clone(), src.display().to_string()));
         }
+        copy_tree(src, &target.join(want))?;
     }
     Ok(target)
 }

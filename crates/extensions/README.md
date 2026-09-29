@@ -13,7 +13,7 @@ it.
   available list** - the contract's rule.
 - The plugin's shipped ids come from `AdapterManifest::shipped_extensions` (the
   `extensions/` directories plus the manifest's declared ids); the union is what
-  `GET /v1/hub/harnesses` reports as `availableExtensions`.
+  `GET /v1/harnesses` reports as `availableExtensions`.
 
 Placement is the hub's; it is **not** an authorization boundary - it keeps the agent from editing
 a trust-bearing extension through its workspace; it does not confine a same-principal agent.

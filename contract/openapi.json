@@ -2465,6 +2465,29 @@
       }
     },
     "/v1/plugins/{id}": {
+      "get": {
+        "description": "read one plugin by id: the resource a 202 Location names. Its state (installing/removing/preparing/ready/absent/failed) is the outcome of a long install/remove command.",
+        "responses": {
+          "200": {
+            "description": "success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "plugin": {
+                      "$ref": "#/defs/plugin"
+                    }
+                  },
+                  "required": [
+                    "plugin"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "description": "remove a plugin the HUB installed, and nothing else. A directory a deployment put on the search path is read-only to the hub (409, naming the directory), and a harness with open sessions is refused rather than yanked out from under them (409 `plugin_in_use`, naming the sessions). The plugin's record goes with it; the harness row keeps its configuration and reads as missing until something with that id is installed again. Sessions are never deleted by this: a plugin is code, a session is history.",
         "responses": {

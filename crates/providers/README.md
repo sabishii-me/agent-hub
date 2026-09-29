@@ -1,25 +1,19 @@
 # agent-hub-providers
 
-The providers domain (`ARCHITECTURE` §5): a model provider is **data**.
+Model providers are **data**: one JSON file per provider (`model-providers/<id>.json`) holding the
+endpoint, protocol, per-model declarations, the selection and the cached catalog. The hub owns the
+HTTP request, the auth, the catalog fetch and the field mapping; no plugin runs in-process.
 
-One provider is one JSON file in the hub's data dir (`providers/<id>.json`): the endpoint,
-the wire protocol, the per-model declarations, the selection, and the cached catalog. The
-hub owns the HTTP request, the auth, the catalog fetch and the field mapping; **no plugin
-runs code inside the hub's process**.
+**No credential is accepted yet.** A token is a secret and belongs in an OS secret store; this
+record has **no `token` field at all**, so a secret cannot be persisted here by construction
+(TASK-048 F02). Until a secret store exists, the API refuses a credential (`not_implemented`) and
+the catalog fetch is unauthenticated.
 
-- `record.rs` - the stored shape, plus the merge of catalog facts and declarations.
-- `store.rs` - the file store; a malformed file is reported in `broken`, never dropped.
-- `catalog.rs` - the fetch and the dialect mapping (openai-completions / anthropic-messages
-  / custom-compatible); a failure keeps the previous catalog.
-- `service.rs` - CRUD, the selection, and the refresh rules: first refresh enables new
-  models, later refreshes preserve the choice and enable genuinely new ones, removed models
-  are retained as unavailable. Changing url/api/credential **bumps the revision**, so the
-  catalog reports `stale` until refreshed.
-- `routes.rs` - the `/v1/hub/providers` surface; **the token never leaves** (only
-  `tokenConfigured`).
+- `GET/POST /v1/model-providers`, `GET/PATCH/DELETE /v1/model-providers/{id}`, `.../logout`.
+- `GET/PATCH /v1/model-providers/{id}/models`, `POST .../models/refresh`.
+- `GET /v1/models` - the models the hub manages (top-level; not a provider sub-detail).
 
 ## Tests
 
 `cargo test -p agent-hub-providers` runs CRUD, revision staleness, selection validation and
-survival across a refresh, a corrupt file reported, and a **real catalog fetch** against a
-local upstream.
+survival across a refresh, a corrupt file reported, and a catalog fetch against a local upstream.

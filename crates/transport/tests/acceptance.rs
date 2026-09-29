@@ -125,7 +125,7 @@ async fn sse_delivers_and_replays_by_last_event_id() {
     // Subscribe first, then publish; the open stream receives the change.
     let mut stream: ByteStream = Box::pin(
         client
-            .get(format!("{base}/v1/hub/events"))
+            .get(format!("{base}/v1/events"))
             .send()
             .await
             .unwrap()
@@ -143,7 +143,7 @@ async fn sse_delivers_and_replays_by_last_event_id() {
     // Reconnect with Last-Event-ID: the change is replayed.
     let mut replay: ByteStream = Box::pin(
         client
-            .get(format!("{base}/v1/hub/events"))
+            .get(format!("{base}/v1/events"))
             .header("last-event-id", "0")
             .send()
             .await
@@ -165,7 +165,7 @@ async fn sse_resyncs_when_last_event_id_fell_out_of_window() {
 
     let mut stream: ByteStream = Box::pin(
         reqwest::Client::new()
-            .get(format!("{base}/v1/hub/events"))
+            .get(format!("{base}/v1/events"))
             .header("last-event-id", "1")
             .send()
             .await
@@ -221,7 +221,7 @@ async fn many_concurrent_connections_are_served_while_one_op_runs() {
         let c = client.clone();
         let b = base.clone();
         handles.push(tokio::spawn(async move {
-            let r = c.get(format!("{b}/v1/hub/status")).send().await.unwrap();
+            let r = c.get(format!("{b}/v1/status")).send().await.unwrap();
             (r.status(), r.text().await.unwrap())
         }));
     }

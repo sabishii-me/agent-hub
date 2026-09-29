@@ -46,14 +46,14 @@ async fn write_list_read_delete_over_http() {
 
     // Write two files of a skill.
     let r = client
-        .put(format!("{base}/v1/hub/skills/deploy/files/SKILL.md"))
+        .put(format!("{base}/v1/skills/deploy/files/SKILL.md"))
         .json(&serde_json::json!({ "content": "# Deploy\n" }))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
     client
-        .put(format!("{base}/v1/hub/skills/deploy/files/scripts/run.sh"))
+        .put(format!("{base}/v1/skills/deploy/files/scripts/run.sh"))
         .json(&serde_json::json!({ "content": "echo hi\n" }))
         .send()
         .await
@@ -61,7 +61,7 @@ async fn write_list_read_delete_over_http() {
 
     // List.
     let list: serde_json::Value = client
-        .get(format!("{base}/v1/hub/skills"))
+        .get(format!("{base}/v1/skills"))
         .send()
         .await
         .unwrap()
@@ -74,7 +74,7 @@ async fn write_list_read_delete_over_http() {
 
     // Read one file back.
     let got: serde_json::Value = client
-        .get(format!("{base}/v1/hub/skills/deploy/files/SKILL.md"))
+        .get(format!("{base}/v1/skills/deploy/files/SKILL.md"))
         .send()
         .await
         .unwrap()
@@ -85,13 +85,13 @@ async fn write_list_read_delete_over_http() {
 
     // Delete.
     let r = client
-        .delete(format!("{base}/v1/hub/skills/deploy"))
+        .delete(format!("{base}/v1/skills/deploy"))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
     let list: serde_json::Value = client
-        .get(format!("{base}/v1/hub/skills"))
+        .get(format!("{base}/v1/skills"))
         .send()
         .await
         .unwrap()
@@ -107,7 +107,7 @@ async fn traversal_is_refused() {
     let client = reqwest::Client::new();
     // A `..` segment must be an invalid input, not a read outside the root.
     let r = client
-        .put(format!("{base}/v1/hub/skills/x/files/../../../../etc/evil"))
+        .put(format!("{base}/v1/skills/x/files/../../../../etc/evil"))
         .json(&serde_json::json!({ "content": "x" }))
         .send()
         .await
@@ -119,7 +119,7 @@ async fn traversal_is_refused() {
 async fn reading_a_missing_skill_is_a_contract_code() {
     let base = serve(tmp("missing")).await;
     let r = reqwest::Client::new()
-        .get(format!("{base}/v1/hub/skills/nope/files/SKILL.md"))
+        .get(format!("{base}/v1/skills/nope/files/SKILL.md"))
         .send()
         .await
         .unwrap();

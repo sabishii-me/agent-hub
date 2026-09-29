@@ -173,15 +173,17 @@ async fn management_lists_the_extensions_a_plugin_ships() {
     install_fake_with_extensions(&root, "fake", &["models"], &["plan", "agent-presets"]);
     let base = serve(state(root, tmp("extmgmt-data"))).await;
 
+    // Extensions are harness-scoped now (a bare id is meaningless across
+    // harnesses): /v1/harnesses/{id}/extensions.
     let m: serde_json::Value = reqwest::Client::new()
-        .get(format!("{base}/v1/hub/harnesses"))
+        .get(format!("{base}/v1/harnesses/fake/extensions"))
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    let ext: Vec<String> = m["availableExtensions"]
+    let ext: Vec<String> = m["available"]
         .as_array()
         .unwrap()
         .iter()
@@ -191,25 +193,5 @@ async fn management_lists_the_extensions_a_plugin_ships() {
     assert!(ext.contains(&"agent-presets".to_string()), "{ext:?}");
 }
 
-#[tokio::test]
-async fn enable_disable_reflects_in_the_projection() {
-    let root = tmp("enable");
-    install_fake(&root, "fake", &["models"]);
-    let base = serve(state(root, tmp("enable-data"))).await;
-    let client = reqwest::Client::new();
-
-    client
-        .post(format!("{base}/v1/harnesses/fake/disable"))
-        .send()
-        .await
-        .unwrap();
-    let list: serde_json::Value = client
-        .get(format!("{base}/v1/harnesses"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(list["harnesses"][0]["status"], "disabled");
-}
+// enable/disable moved to the plugin lifecycle (/v1/plugins/{id}/enable|disable);
+// there is no harness enable/disable route to test here.

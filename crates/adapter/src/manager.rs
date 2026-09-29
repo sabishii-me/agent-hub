@@ -112,10 +112,13 @@ impl Adapters {
         let _ = std::fs::create_dir_all(&extensions_dir);
         if let Ok(harness) = self.get(id) {
             for e in harness.manifest.shipped_extensions(&harness.directory) {
+                // Only a real directory is installed; a declared id with no
+                // directory is skipped, never replaced by an empty marker that
+                // would look installed (TASK-048 F07).
                 if e.dir.exists() {
                     let _ = copy_tree(&e.dir, &extensions_dir.join(&e.id));
                 } else {
-                    let _ = std::fs::create_dir_all(extensions_dir.join(&e.id));
+                    tracing::warn!(id = %e.id, "declared extension has no directory; not installed");
                 }
             }
         }

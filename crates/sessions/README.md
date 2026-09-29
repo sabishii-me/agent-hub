@@ -1,20 +1,9 @@
 # agent-hub-sessions
 
-The sessions domain (`ARCHITECTURE` §6): the hub's **control state** over sessions and
-turns, wired to the frame. The hub owns session identity, the requested/applied model and
-modes, the working directory, the status, and the **admission** of a turn; the harness owns
-the conversation.
+**Not wired.** A session is not handed to an adapter yet, so there is no execution boundary behind
+`active` / `running` / `fork`. An earlier version answered those successes against a database row
+alone (TASK-048 F01); that was a fake success. Every `/v1/sessions` route now answers
+`501 not_implemented` until the adapter boundary is real.
 
-## Turn identity (ARCHITECTURE §11, R1)
-
-A turn carries a logical command identity (`idempotencyKey`, contract-mandated):
-
-- a retry with the **same** key returns the **same** turn - a lost `202` never starts a
-  second turn;
-- a **different** key while a turn runs is refused `409 session_busy`, not queued;
-- closing is not deleting; a fork records the source session and the turn it forked after.
-
-## Tests
-
-`cargo test -p agent-hub-sessions` runs the HTTP lifecycle (create/get/patch/close/reopen/
-delete), the turn-idempotency rules, fork, and validation.
+The control-state types and the command-identity rules (a turn's `idempotencyKey`) remain as
+groundwork; they are used once a session is genuinely started.
