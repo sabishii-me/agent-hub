@@ -12,8 +12,10 @@ two things that would have blocked it were removed by decision:
 - the **model provider** stops being an in-process JS module and becomes **data** (see ROUTES-REVIEW,
   "Model providers are DATA"), so **no plugin requires the hub to load foreign code in its process**.
 
-With those, nothing in the hub requires Node, and Rust gives the concurrency, the isolation and
-the process model structurally instead of by discipline.
+With those, **the hub itself requires nothing from Node**; Rust gives the concurrency, the
+isolation and the process model structurally instead of by discipline. (The harnesses and their
+adapters are still Node - but they are separate processes the hub drives, not code the hub runs;
+their language is private, so one of them may become Rust without touching the hub.)
 
 The decisions live in the desktop repository's ADR log (ADR-0001, 0009, 0010, 0011); this file is
 how they are carried out here. Where this file and the code disagree today, the code is behind and
@@ -47,15 +49,15 @@ domains; **everything below the domains is a maintained crate.**
 |---|---|---|
 | HTTP server, routing, SSE | hand-written `node:http` + `sseWrite` | **axum** (on **hyper**/**tokio**) + `axum::response::sse` |
 | JSON | `JSON.parse` | **serde** + **serde_json** |
-| contract validation | hand-written field checks | **jsonschema** over the existing `contract/*.json` |
-| SQLite | hand-rolled JSON files | **rusqlite** (bundled) - or **sqlx** if async is preferred |
+| contract validation | hand-written field checks | **jsonschema** over the **`endpoints[].request`/`.response` fragments** in `contract/*.json` (they use JSON-Schema vocabulary and `$ref` to `defs`; the top-level file is the hub's own route table, not a schema document) |
+| SQLite | hand-rolled JSON files | **rusqlite** (bundled SQLite; blocking, run in `spawn_blocking`) |
 | HTTP client (downloads) | hand fetch loop | **reqwest** (+ **rustls**) |
 | zip (plugin artifacts) | hand-written `zip.mjs` (326 lines) | the **zip** / **async_zip** crate |
 | bounded concurrency, retry, backoff | hand-rolled 8-worker loop, no retry | **tokio::sync::Semaphore** + **backoff** / **retry** |
 | process spawn (adapter) | `child_process` | **tokio::process** |
 | filesystem walks, temp dirs | hand loops | **walkdir**, **tempfile** |
 | globs, mime, time, uuid, hex/hash | hand or ad hoc | **globset**, **mime_guess**, **time**, **uuid**, **hex**, **sha2** |
-| secrets in the OS store | hand-written `secret-store.mjs` + PowerShell | **keyring** (OS keychain), **zeroize**/**secrecy** for in-memory handling |
+| secrets in the OS store | hand-written `secret-store.mjs` + PowerShell | **keyring** (OS keychain) - this settles ADR-0010's "to be evaluated" (keytar-style OS keychain vs the PowerShell path) in favour of the OS keychain; **zeroize**/**secrecy** for in-memory handling |
 | platform dirs | hand-built paths | **directories** |
 | CLI | hand argument parsing | **clap** |
 | logging / tracing | `console.log` | **tracing** + **tracing-subscriber** |
@@ -101,14 +103,17 @@ agent-hub/
 |   |                             metadata, enable/disable; the plugin registry
 |   |- harnesses/                 the harness domain: the top-level projection; each harness's
 |   |                             runtime answers (models/presets/tools/auth/connections)
-|   |- sessions/                  the session domain: lifecycle, turns, approvals, questions
+|   |- sessions/                  the session domain: lifecycle, turns
+|   |- humans/                    approvals and questions (a harness asking a person to decide)
 |   |- adapter/                   the hub<->adapter link: spawn, stdio JSON-RPC, the event and
 |   |                             human-wait plumbing (the only crate that spawns a process)
 |   |- providers/                 the model-provider domain: the record (data), and the hub-owned
 |   |                             protocols it names (http, auth, catalog dialect)
 |   |- skills/                    the skills domain (top-level mechanism)
-|   |- extensions/                the extension domain: the adapter-shipped extensions, placed
-|   |                             outside the agent's workspace (see 4)
+|   |- extensions/                the extension domain: the hub's side of extensions - which ids a
+|   |                             plugin ships, and the placement RULE (hub-owned path, discovery
+|   |                             off). The adapter does the placement; this crate owns the rule
+|   |                             and the content, never the harness (see 4)
 |   |- registry/                  the fetched registry + catalog
 |- contract/                      v1.json, adapter-v1.json, errors.json, openapi.json
 |- tests/                         the adversarial suite (drives /v1)
@@ -131,15 +136,22 @@ agent-hub/
 
 These are not code the hub imports; they are **resources with a placement rule**.
 
-- **Extensions** are two kinds (see ROUTES-REVIEW): **adapter-shipped** (part of the adapter, now)
-  and **user-authored** (plugin-ized later). The adapter places them for its harness.
-- **Skills** are a top-level hub mechanism; the content comes from a plugin, and they are handed
-  to a harness the same way.
+- **Extensions** are two kinds (see ROUTES-REVIEW): **adapter-shipped** (part of the adapter - an
+  approval mode, the preset mechanism - kept in the adapter repo now) and **user-authored**
+  (plugin-ized later). The adapter places them for its harness.
+- **Skills** are a top-level hub mechanism (across harnesses, no harness id context). The content
+  **comes from a plugin** (adapter-shipped today, since there are no user plugins yet), and the
+  hub hands it to a harness the way extensions are handed.
 - **The delivery rule (security).** The agent must not be able to rewrite a skill or edit a
   trust-bearing extension (today it can edit the gating extension in its workspace and bypass
   approval). The rule: **place them in a hub-owned directory outside the agent's workspace, and
-  launch the harness with discovery off and explicit paths**; the gate rests on the adapter, which
-  sees every tool call and cannot be edited by the agent.
+  launch the harness with discovery off and explicit paths**.
+- **The gate is the adapter's, per adapter.** The approval DECISION already flows through the
+  adapter to the hub; what must not be editable is the GATING. Each adapter implements the gate
+  its harness allows (pi/jouzu: a tool-call interception extension loaded from the hub-owned path,
+  out of the agent's reach; dsh: its own mechanism). The hub gives the adapter what to gate; the
+  adapter enforces it, and nothing the agent can write changes it. (Per-adapter flags are recorded
+  in ROUTES-REVIEW, o6.)
 
 The hub's part is to **own the placement and the content**, and to hand the adapter paths - never
 to run the harness's code.
@@ -173,9 +185,10 @@ and "half a file" come from; one database gives transactions and one writer.
    processes). Blocking work (the bundled `rusqlite` calls, a synchronous fs op) runs in
    `spawn_blocking`; a blocking call on the async path is a defect, and the type system makes it
    visible.
-2. **A long operation is one command.** A long route calls `accepted(state, location, work)` from
-   `transport/`, which answers `202 Accepted` + `Location` (RFC 9110 15.3.3/10.2.2) and runs `work`
-   as a detached task. It never holds the connection.
+2. **A long operation is one command.** A long route calls `accepted(location, work)` from
+   `transport/`, which answers `202 Accepted` + `Location` (RFC 9110 15.3.3/10.2.2) and hands `work`
+   to the runtime as a detached task (a plain `tokio::spawn`; it needs no shared state). It never
+   holds the connection.
 3. **The resource is the only truth.** State is read through the GET routes. No "operation" object,
    no job id, no second store of progress. A detached task mutates the resource and emits an event;
    it never writes a result to the connection it left.
