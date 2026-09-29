@@ -205,6 +205,32 @@ a sub-detail of the hub's provider records).
 - **plugin API scope**: plugin lifecycle, version, install/uninstall, metadata, enable/disable.
   Not extensions, not skills, not provider records.
 
+## Current state: what an extension is today (confirmed from the sources)
+
+Not a decision yet - the facts, so the plugin-ization question is answered against reality.
+
+- An extension is **real files, not code baked into the adapter**: `extensions/<id>/` inside
+  **each harness-adapter repository** (`prts-harness-pi/extensions/agent-presets`, `plan`;
+  deepseek's `dsh-presets`, `hub-command-approval`). pi/jouzu ship them as **TypeScript**
+  (`index.ts`) and pi loads them at runtime through **jiti** (pi's
+  `dist/core/extensions/loader.js`: "loads TypeScript extension modules using jiti").
+- The adapter's **manifest declares them** (`manifest.extensions: ["agent-presets","plan"]`),
+  and the hub copies the declared ids from the plugin's own `extensions/` into the harness's
+  data dir; the adapter then places them (pi/jouzu: into `<cwd>/.pi/extensions/`; dsh: into
+  `$DSH_HOME`).
+- So today an extension is **part of the harness-adapter plugin**: its content lives in the
+  adapter's repository and ships in the adapter's artifact.
+- **Consequence:** adding, removing or changing an extension means **editing and republishing
+  the adapter plugin**. An extension is not its own publishable unit.
+
+### Plugin-ization question (to decide)
+
+Should an extension become **its own plugin kind** - its own repository, its own manifest,
+its own artifact, mounted by the hub - instead of a directory inside the harness-adapter
+plugin? Components that would follow: a plugin kind (e.g. `extension`), a manifest describing
+which harnesses/hosts it serves, the hub's install/list/enable path for it, and the adapter
+resolving the extensions it is given from several plugin sources (not just its own repo).
+
 ## Skills and extensions: granularity and delivery (decided direction)
 
 **Decision: extensions and skills must support MORE THAN ONE granularity, not be pinned to
