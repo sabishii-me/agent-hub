@@ -261,58 +261,6 @@ Where the placement lives is the adapter's choice, and today pi/jouzu place exte
 discovery off is adapter-side; no harness change. (The adapter-shipped extensions stay part of
 the adapter - see "Extensions: two kinds" - the point here is only WHERE they are placed.)
 
-## Should the hub be Rust? (evaluated; not now, and not for the reason it looks like)
-
-The owner's question, and the honest assessment.
-
-**What the hub actually needs from Node today** (counted from the source): fs, path, os,
-crypto, zlib, url, http - all have Rust equivalents (std + crates). The transport moves to
-Hono, which is a Web-standard framework; an equivalent exists in Rust (axum/hyper + SSE). So
-the hub's own work does not require Node.
-
-**The plugin mechanism is the only real question, and it splits in two:**
-
-- **harness-adapter**: already an **out-of-process** contract (`spawn(command)`, stdio
-  JSON-RPC). The adapter's language is private (ADR-0011) - a Rust adapter is fine. **No
-  obstacle.**
-- **model-provider**: today an **in-process JS module** the hub `import()`s
-  (`manifest.provider.module`). **This is the one thing a Rust hub cannot do.**
-
-**But (o6-b) shows the in-process JS is not needed at all**: a provider is **data + a reference
-to a small shared protocol set**. Making providers data records removes the in-process JS, and
-then **the hub requires Node for nothing**.
-
-**Verdict: not now.** Rewriting the hub in Rust today would fix nothing that is broken:
-- concurrency is already satisfied (ADR-0009, measured: 0 timeouts);
-- structure is a modularisation concern, not a language one;
-- the plugin-security question (o6) is independent of the hub's language - it is about where
-  the harness's workspace boundary is;
-- the cost is a full rewrite plus redoing the plugin mechanism, for a benefit (lighter process)
-  that is not the current bottleneck.
-
-**The precondition, if it is ever wanted**: make **providers data** (o6-b), so no plugin
-requires in-process JS. That is worth doing on its own merits (isolation: a bad provider can no
-longer run inside the hub's process), and it is what would make a Rust hub possible.
-
-## Open questions (the ones still real)
-
-**(o4) DECIDED - `/v1/harnesses` is a thin, top-level projection that hides "harness is a
-plugin".** A harness is a **top-level resource** (the thing a user runs), not a view of the
-plugin list. `/v1/harnesses` stays a **thin projection** of the plugin list filtered to
-`pluginType === 'harness-adapter'`, for two reasons the owner gave: it **conveniences the UI**
-with a stable harness shape, and it **hides the internal fact that a harness is a plugin** - a
-consumer must not depend on that. So it is a projection over `/v1/plugins`, derived - never a
-second store, and consumers never see the plugin machinery through it.
-
-The **runtime answers stay per harness** at `/v1/harnesses/{id}/...`
-(models/presets/tools/auth/connections) - those are the harness speaking. And
-`/v1/harnesses/{id}/extensions` is the extension sub-resource (harness context).
-
-**(o5) DECIDED - no anonymous discovery.** `/v1/harnesses` was the only token-free route; the
-owner: there is no reason for it. The hub is loopback and a client already holds the token
-(from `endpoint.json`); discovery does not need to be anonymous. **Every route requires the
-token** - a contract change (the one exempt route becomes 401).
-
 ## Model providers are DATA; the hub provides the function (DECIDED)
 
 Owner: **"the function must be provided by the hub; a provider can only be data."** And, on the
@@ -342,99 +290,30 @@ So a provider record is **only data**, e.g.:
   catalog: { dialect: "openai-models" } }
 ```
 
-**Why this matters (the owner's point):** if a provider can embed its own implementation, it can
-embed **a whole other ecosystem** - its own HTTP, its own login, its own protocol - and the hub
-has no boundary. The hub cannot audit it, cannot share it, cannot test it, cannot guarantee it.
-Consequences of the current shape: the same device-code flow is copied per provider; the hub
-cannot give "login" one contract (state, cancel, timeout, audit); tests cannot cover it once.
+**Why this matters:** if a provider can embed its own implementation, it can embed **a whole
+other ecosystem** - its own HTTP, its own login, its own protocol - and the hub has no boundary.
+It cannot audit it, share it, test it once, or guarantee it. Today the same device-code flow is
+copied per provider; the hub cannot give "login" one contract (state, cancel, timeout, audit).
 
-**Auth is a hub protocol.** device-code, api-key, and whatever comes next are **implemented
-once in the hub**; a provider declares `auth.method` + its parameters. A vendor whose flow needs
-more than the parameters allow gets a **named hub dialect** (hub-implemented), never its own
-code. Same for the catalog dialect.
+**Auth is a hub protocol.** device-code, api-key, and whatever comes next are implemented **once
+in the hub**; a provider declares `auth.method` + parameters. A vendor whose flow needs more gets
+a **named hub dialect** (hub-implemented), never its own code. Same for the catalog dialect.
 
-**With this, a provider plugin is a data artifact**, not a module the hub `import()`s. That
-removes the in-process JS, restores the boundary, and is the precondition for the Rust question
-below.
-
-## Should the hub be Rust? (evaluated; not now, and not for the reason it looks like)
-
-The owner's question, and the honest assessment.
-
-**What the hub actually needs from Node today** (counted from the source): fs, path, os,
-crypto, zlib, url, http - all have Rust equivalents (std + crates). The transport moves to
-Hono, which is a Web-standard framework; an equivalent exists in Rust (axum/hyper + SSE). So
-the hub's own work does not require Node.
-
-**The plugin mechanism is the only real question, and it splits in two:**
-
-- **harness-adapter**: already an **out-of-process** contract (`spawn(command)`, stdio
-  JSON-RPC). The adapter's language is private (ADR-0011) - a Rust adapter is fine. **No
-  obstacle.**
-- **model-provider**: today an **in-process JS module** the hub `import()`s
-  (`manifest.provider.module`). **This is the one thing a Rust hub cannot do.**
-
-**But (o6-b) shows the in-process JS is not needed at all**: a provider is **data + a reference
-to a small shared protocol set**. Making providers data records removes the in-process JS, and
-then **the hub requires Node for nothing**.
-
-**Verdict: not now.** Rewriting the hub in Rust today would fix nothing that is broken:
-- concurrency is already satisfied (ADR-0009, measured: 0 timeouts);
-- structure is a modularisation concern, not a language one;
-- the plugin-security question (o6) is independent of the hub's language - it is about where
-  the harness's workspace boundary is;
-- the cost is a full rewrite plus redoing the plugin mechanism, for a benefit (lighter process)
-  that is not the current bottleneck.
-
-**The precondition, if it is ever wanted**: make **providers data** (o6-b), so no plugin
-requires in-process JS. That is worth doing on its own merits (isolation: a bad provider can no
-longer run inside the hub's process), and it is what would make a Rust hub possible.
-
-## Open questions (the ones still real)
+**With this, a provider plugin is a data artifact**, not a module the hub runs. That removes
+in-process foreign code and is the precondition for the Rust hub.
 
 **(o4) DECIDED - `/v1/harnesses` is a thin, top-level projection that hides "harness is a
 plugin".** A harness is a **top-level resource** (the thing a user runs), not a view of the
 plugin list. `/v1/harnesses` stays a **thin projection** of the plugin list filtered to
 `pluginType === 'harness-adapter'`, for two reasons the owner gave: it **conveniences the UI**
-with a stable harness shape, and it **hides the internal fact that a harness is a plugin** - a
-consumer must not depend on that. So it is a projection over `/v1/plugins`, derived - never a
-second store, and consumers never see the plugin machinery through it.
-
-The **runtime answers stay per harness** at `/v1/harnesses/{id}/...`
-(models/presets/tools/auth/connections) - those are the harness speaking. And
-`/v1/harnesses/{id}/extensions` is the extension sub-resource (harness context).
+with a stable harness shape, and it **hides the internal fact that a harness is a plugin**. It is
+derived from `/v1/plugins`, never a second store. The **runtime answers stay per harness** at
+`/v1/harnesses/{id}/...` (models/presets/tools/auth/connections), and
+`/v1/harnesses/{id}/extensions` is the extension sub-resource.
 
 **(o5) DECIDED - no anonymous discovery.** `/v1/harnesses` was the only token-free route; the
-owner: there is no reason for it. The hub is loopback and a client already holds the token
-(from `endpoint.json`); discovery does not need to be anonymous. **Every route requires the
-token** - a contract change (the one exempt route becomes 401).
-
-**(o6-b) a model provider should be DATA, not code.** Owner: "why does our provider provide
-logic - isn't a provider data-driven?"
-
-Facts (read the installed provider plugins):
-
-- `model-provider-deepseek/provider.mjs` is: `descriptor` (data), `endpoint` (data:
-  `{url:'https://api.deepseek.com', api:'openai-completions'}`), a `configure()` that mostly
-  **validates** and a `fetchCatalog()` that **delegates** to `provider-compatible/provider.mjs`.
-  `shisa` is the same shape (endpoint + device-code params). The real logic lives in ONE shared
-  generic module (`compatible`).
-- The "API protocol" is a **small closed set**: the `compatible` provider's field enum is
-  `['openai-completions','openai-responses','anthropic-messages']`; auth is `api-key` or a
-  device-code flow.
-
-So a provider is really **data** - endpoint, which protocol, display name/labels, auth method,
-config fields, catalog-refresh flag - **plus a reference to one of a few shared protocols**.
-The per-provider JS module exists only because the hub `import()`s it **in-process**; that is
-an implementation artifact, not a requirement.
-
-**Consequence:** model providers should be **data records** that name a hub-owned protocol (a
-small set the hub implements), not code modules the hub imports. Then:
-
-- no in-process JS in the hub - a bad provider cannot run code inside the hub's process;
-- the plugin artifact is **data** (a manifest), language-independent;
-- with the harness-adapter already an out-of-process stdio contract, **nothing in the hub
-  requires Node** - which is the precondition for a Rust hub (see the Rust evaluation).
+owner: there is no reason for it. The hub is loopback and a client already holds the token (from
+`endpoint.json`). **Every route requires the token** - a contract change.
 
 **(o6-a) can the hub give the harness a virtual filesystem, so skills are never a writable
 directory?  ANALYSED - possible but fragile; the robust boundary is the tool layer.**
@@ -477,7 +356,3 @@ flags (pi/jouzu verified: `-e`/`--extension`, `--skill`, `-ne`/`--no-skills`; ds
 extensions in `$DSH_HOME`), and decide whether skills are handed as a directory the agent
 cannot write, or through the `skills://` read-only protocol the hub already models (nothing
 consumes it today).
-
-**(o5) anonymous discovery.** `/v1/harnesses` is today the only token-free route. Once it
-becomes the management view (o4), does it stay token-free, or does it require the token like
-everything else (discovery on loopback needs no anonymity)? A contract change either way.
