@@ -584,10 +584,12 @@ follows distinguishes a real, narrow component fact from a product capability.
 
 ### What is NOT a product capability (and is currently dishonest if it says so)
 
-- **sessions**: a session is **not** handed to a harness. `create` inserts a row; `admit_turn`
-  ignores its content; `fork` writes a row. There is **no execution boundary** behind
-  `active`/`running`/`fork`. These must be made **honestly unavailable** until an adapter is
-  wired (see the rework in progress).
+- **sessions** (now): a session **owns a real adapter process** (`crates/sessions/src/runtime.rs`).
+  `create` runs `session/start` + `config/set` against a real adapter and reports `active` **only**
+  when both succeeded; the native `ref` is a real file. `close` stops that session's process
+  (record stays, status `readonly`); `reopen` re-attaches on the stored ref. Verified live against
+  the pi adapter. Still unavailable: **turn / fork / compact / patch** answer `501` - they need the
+  turn lifecycle, which is not built. No `active` is ever written on a row alone.
 - **providers** (now): the credential is **not part of the record** (no `token` field), so a
   secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
   Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.

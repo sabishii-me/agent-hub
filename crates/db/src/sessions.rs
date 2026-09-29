@@ -24,6 +24,9 @@ pub struct SessionRow {
     pub deleted: bool,
     pub forked_from_session: Option<String>,
     pub forked_from_turn: Option<String>,
+    /// The harness's native session ref (its own file/handle). The hub stores it
+    /// to resume; it never interprets it.
+    pub native_ref: Option<String>,
 }
 
 /// A turn record: the hub's view plus the mapping to the harness's native turn.
@@ -55,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   updated_at             TEXT NOT NULL,
   deleted                INTEGER NOT NULL DEFAULT 0,
   forked_from_session    TEXT,
-  forked_from_turn       TEXT
+  forked_from_turn       TEXT,
+  native_ref             TEXT
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -79,13 +83,13 @@ impl crate::Db {
     pub fn insert_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.cwd, s.title,
                 s.status, s.created_at, s.updated_at, s.deleted as i64,
-                s.forked_from_session, s.forked_from_turn
+                s.forked_from_session, s.forked_from_turn, s.native_ref
             ],
         )?;
         Ok(())
@@ -108,10 +112,11 @@ impl crate::Db {
             deleted: r.get::<_, i64>(12)? != 0,
             forked_from_session: r.get(13)?,
             forked_from_turn: r.get(14)?,
+            native_ref: r.get(15)?,
         })
     }
 
-    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn";
+    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref";
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, DbError> {
         let conn = self.lock();
@@ -130,10 +135,11 @@ impl crate::Db {
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, plan=?5, review=?6, title=?7, status=?8, updated_at=?9 WHERE id=?1",
+            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, plan=?5, review=?6, title=?7, status=?8, updated_at=?9, native_ref=?10 WHERE id=?1",
             params![
                 s.id, s.model_provider_id, s.model_id, s.applied_model,
-                s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.title, s.status, s.updated_at
+                s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.title, s.status, s.updated_at,
+                s.native_ref
             ],
         )?;
         Ok(())

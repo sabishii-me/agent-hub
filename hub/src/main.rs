@@ -18,7 +18,7 @@ use agent_hub_skills::Skills;
 use agent_hub_humans::routes::{routes as human_routes, HumansState};
 use agent_hub_humans::Humans;
 use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
-use agent_hub_sessions::Sessions;
+use agent_hub_sessions::{HarnessSpec, Sessions};
 use agent_hub_providers::routes::{routes as provider_routes, ProvidersState};
 use agent_hub_providers::{ProviderStore, Providers};
 use agent_hub_transport::{finish, require_bearer, routes, Admission, BearerToken, ErrorRenderer, Transport};
@@ -90,19 +90,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plugins = Plugins::new(db, &plugins_root, bus.clone());
     let plugin_state = PluginsState::new(plugins, transport.clone(), errors.clone());
 
-    // A second connection for the sessions domain (each domain owns its handle).
+    // Harnesses first: the adapter registry is where a session resolves the
+    // adapter argv and plugin dir it must start.
+    let adapters = std::sync::Arc::new(Adapters::new(vec![plugins_root.clone()], &data_dir, bus.clone()));
+    adapters.scan();
+    let harness_state = HarnessesState::new(Harnesses::new(adapters.clone()), errors.clone());
+
+    // Sessions: a session resolves its harness through the registry and starts
+    // its OWN adapter process with the resolved argv + plugin dir.
     let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
-    let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir);
+    let registry = adapters.clone();
+    let resolve = move |id: &str| -> Option<HarnessSpec> {
+        let h = registry.get(id).ok()?;
+        let command = h.manifest.command.clone()?;
+        let runtime_argv = h.manifest.runtime_argv(&h.directory);
+        Some(HarnessSpec {
+            id: h.id.clone(),
+            command,
+            plugin_dir: h.directory.clone(),
+            runtime_argv,
+        })
+    };
+    let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir, Box::new(resolve));
     let session_state = SessionsState::new(sessions, errors.clone());
 
     // Providers: one JSON file per provider under the data dir.
     let providers = Providers::new(ProviderStore::new(data_dir.join("providers")));
     let provider_state = ProvidersState::new(providers, errors.clone());
-
-    // Harnesses: the adapter registry projected as the harness roster.
-    let adapters = std::sync::Arc::new(Adapters::new(vec![plugins_root.clone()], &data_dir, bus.clone()));
-    adapters.scan();
-    let harness_state = HarnessesState::new(Harnesses::new(adapters), errors.clone());
 
     // Skills: the hub stores the bytes and installs the effective set per harness.
     let skills = Skills::new(&data_dir);
