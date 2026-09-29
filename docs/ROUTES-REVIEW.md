@@ -253,6 +253,14 @@ registry row (enabled/extensions/skills) with the harness's own runtime answers
 left of the registry row, and does `GET /v1/harnesses` still exist (or is "which harnesses"
 just `GET /v1/plugins?type=harness-adapter`)? Pending the above.
 
+**(o6) the agent must not be able to rewrite its skills.** A skill today is a mutable
+directory on disk, and the harness is pointed at the installed copy
+(`<DATA_DIR>/agents/<harnessId>/skills`). If the harness process can write there, the agent can
+edit its own skills - the hub stops being the single source of truth (ADR-0001) and a session
+silently changes what later sessions read. The question: how do we hand skills to the harness
+**read-only**, or hand a copy it cannot write back to the store? (This interacts with o1: a
+per-session/per-workspace install is one more copy, and the same write-protection question.)
+
 **(o5) anonymous discovery.** `/v1/harnesses` is today the only token-free route. Once it
 becomes the management view (o4), does it stay token-free, or does it require the token like
 everything else (discovery on loopback needs no anonymity)? A contract change either way.
