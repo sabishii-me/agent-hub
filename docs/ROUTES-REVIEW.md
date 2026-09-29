@@ -12,6 +12,12 @@ Two parts:
 Legend for the class tables: **KEEP** · **RENAME** · **MERGE** · **MOVE** (belongs to another
 class) · **REMOVE** (internal, not a route).
 
+**Cross-review note.** A third-party cross-review of PR #12 (TASK-037–047) accepted the direction
+and required six groups of design revisions (G1 security claim, G2 recovery, G3 schema
+normalization, G4 async resources, G5 adapter/skills/session boundaries, G6 traceability). Those
+are applied in ARCHITECTURE (sections 7, 9, 10, 11, 12, 14) and in o6 below. **Design gaps are
+stated as gaps; runtime acceptance is listed as a gate, not as a result.**
+
 A fact that decides several verdicts: a client is **always** talking to the hub, so `/v1/hub/`
 marks nothing - the prefix is present on some routes and absent on others for no rule.
 
@@ -326,7 +332,9 @@ derived from `/v1/plugins`, never a second store. The **runtime answers stay per
 
 **(o5) DECIDED - no anonymous discovery.** `/v1/harnesses` was the only token-free route; the
 owner: there is no reason for it. The hub is loopback and a client already holds the token (from
-`endpoint.json`). **Every route requires the token** - a contract change.
+`endpoint.json`). **Every route requires the token** - a contract change. Note: this is **part of
+the trust boundary, not a replacement for one** (see o6): a bearer proves possession, and the
+design must say whether an agent can obtain it.
 
 **(o6-a) can the hub give the harness a virtual filesystem, so skills are never a writable
 directory?  ANALYSED - possible but fragile; the robust boundary is the tool layer.**
@@ -362,14 +370,30 @@ Facts (from the packed harnesses):
 3. **A virtual filesystem** (fs interposer in the adapter): possible, but fragile and fights
    the harness; not the first choice.
 
-**(o6) the security delivery rule - decided; what remains is per-adapter confirmation.**
+**(o6) the security delivery - a VERIFICATION-GATED mechanism, not an approved implementation.**
 
-**Decided** (see ARCHITECTURE, sections 6 and 7): skills are delivered through an **adapter-side
-`node:fs` hook** that resolves a `skills://` URI to **hub content**, so the harness sees a logical
-URI and never a real path (verified: a `--require` hook intercepts `readFileSync("skills://...")`
-in an ESM Node child); extensions the agent must not touch are placed in a **hub-owned path
-outside the workspace**, with harness discovery off.
+A cross-review (TASK-038/043/037) confirmed the earlier "placement proves tamper-proof" claim as a
+**design gap**, not a demonstrated bypass. The revised position (full statement: ARCHITECTURE §7):
 
-Remaining (per adapter, not a design question): confirm each harness accepts the needed flags
-(pi/jouzu: `-e`/`--extension`, `--skill`, `-ne`/`--no-skills`; dsh keeps extensions in
-`$DSH_HOME`), and place the hook in the shared adapter library so it is written once.
+- **Placement lowers accidental loading and path exposure; it is not an authorization boundary.**
+- The **skills hook** (an adapter-side `node:fs` hook resolving `skills://` to hub content) is a
+  **candidate delivery mechanism**. A local `--require`/`readFileSync` probe is a mechanism check,
+  **not** the acceptance: the delivery must handle the **directory loader, relative resources, the
+  effective set, and reload**, on real pi/jouzu/dsh artifacts. It requires Node (or another
+  insertion point for a compiled harness).
+- **Extensions** that must not be edited are placed in a **hub-owned path with discovery off** -
+  again a placement, not a permission boundary.
+- **The trust boundary includes the management surface**: the bearer lives in `endpoint.json` on
+  loopback, and the design must state whether an agent can read it; a bearer proves possession, not
+  identity. **Requiring the token on every route (o5) is part of the boundary, not a substitute.**
+- **The preconditions and the non-guarantees are stated in ARCHITECTURE §7**: OS principal/
+  permissions, which tools each harness enables (read from `/v1/harnesses/{id}/tools`, never
+  assumed), and the fact that `write`/`child_process` are not confined by the hook.
+- **Runtime acceptance is NOT done** and is not claimed. Scenarios to run on real artifacts
+  (absolute-path write, shell/child, links, reboot load chain, management/approval access by an
+  agent identity) are listed in o6-a; until then this is an open verification gate.
+
+What remains decided: base delivery is via the adapter-side hook with the hub-owned path and
+discovery off; the per-adapter flags (pi/jouzu: `-e`/`--extension`, `--skill`, `-ne`/`--no-skills`;
+dsh: `$DSH_HOME`) still need real-artifact confirmation, and the hook is written once in the
+shared adapter library.

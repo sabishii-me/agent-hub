@@ -64,7 +64,7 @@ old code hand-rolled are named:
 |---|---|---|
 | HTTP server, routing, SSE | hand-written `node:http` + `sseWrite` | **axum** (on **hyper**/**tokio**) + `axum::response::sse` |
 | JSON | `JSON.parse` | **serde** + **serde_json** |
-| contract validation | hand-written field checks | **jsonschema** over the `endpoints[].request`/`.response` fragments in `contract/*.json` (JSON-Schema vocabulary + `$ref` to `defs`; the top-level file is agent-hub's own route table, not a schema document) |
+| contract validation | hand-written field checks | **jsonschema**, but **only after the normalization in 8b** - the current `endpoints[].request`/`.response` fragments are a compact DSL, **not** valid JSON Schema, and must not be handed to `jsonschema` as-is |
 | SQLite | hand-rolled JSON files | **rusqlite** (bundled SQLite; blocking, run in `spawn_blocking`) |
 | HTTP client (downloads) | hand fetch loop | **reqwest** (+ **rustls**) |
 | zip (plugin artifacts) | a 326-line hand-written `zip.mjs` | the **zip** / **async_zip** crate |
@@ -209,14 +209,39 @@ owns. Read from `pi-adapter.cjs`:
 | `credentialState`, login handling | the **harness** has its own login (pi `auth check`/`print-api-key`; jouzu `/login`; dsh auth) | the adapter **translates** the hub's auth contract to the harness's login; it does not re-implement login |
 | `probeModels` (an HTTP GET /models) | **agent-hub** (the provider catalog is the hub's) | **hub** |
 | `scanModels`/`managedModels`/`modelDecl`/`configThinkingLevels`/provider injection | the **harness** has model adapters (pi `list-models`, jouzu catalogs, dsh models); the **hub** holds the provider record | **harness + hub; the adapter translates** |
-| `ensureTranscript`/`load`/`save`/`append` | **agent-hub** (ADR-0001: the hub is the session truth) | **hub** - an adapter keeps no second session store |
+| `ensureTranscript`/`load`/`save`/`append` | the **hub** owns session/turn control state; the harness owns its **native conversation** | the hub's control state and the harness's native history are **different objects**; an adapter keeps **no duplicate control state** but **may** keep what the harness requires (native history passthrough and the ID/ref mapping that cannot be lost - ADR-0001 forbids a *competing* state, it does not forbid the harness's own) |
 | `copyTree`/`readJsonFile` | - | the **shared adapter library** (4), not copied |
 
 **So:** an adapter = the harness's dialect **plus** the baseline capabilities, built on the shared
-library. It never keeps a second copy of session state, and it never re-implements the harness's
-login or model adapters.
+library. It never keeps a **competing** copy of session/turn control state, and never re-implements
+the harness's login or model adapters. But ADR-0001 ("the hub owns control state") must **not** be
+read as "delete every adapter-side mapping": the native conversation and the ID/ref mapping that
+the harness needs are **not** hub control state and must not be removed by that reasoning
+(TASK-037 F01, TASK-042 F01/F02).
 
-## 7. Extensions, skills, and the security boundary
+### What the shared layer must and must not do (G5)
+
+- **Session/turn control state vs native conversation** are distinguished; the hub holds the
+  former, the harness the latter, and the mapping between them is explicit.
+- **The skills hook is a verification-gated delivery**, not "only flags left": a local
+  `readFileSync` probe is not the acceptance. The delivery must handle the **directory loader**,
+  **relative resources**, the **effective set** and **reload**, on real artifacts (TASK-043 F01).
+- **Workspace/session layering**: the design states how the **effective set** is composed
+  (workspace inherited + session-private) and **when it is applied**; exact field names land in
+  the contract later (TASK-043 F02).
+- **The shared library is a reuse layer, not a mandate**: it shares the protocol and the lifecycle
+  shapes and the baseline mechanics; it does **not** mean a conforming adapter must depend on it,
+  and an adapter that implements the baseline itself is not excluded for having a private
+  implementation (TASK-037 F09, TASK-044 F01/F04).
+- **The Rust/Node bridge and the two-platform delivery** is a **deferred gate**: a choice with a
+  reason, or explicitly deferred - the docs PR does not have to ship the full ABI/binary
+  (TASK-044 F02).
+- **"Switch preset anytime" vs the current idle-only contract** is a **requirement ambiguity**
+  (P2) for the owner to define the allowed window; it is not claimed that today's is wedged
+  (TASK-042 F04).
+- **Kept constraints**: native history, fork source isolation, and "abort ACK != stopped" stay.
+
+## 7. Extensions, skills, and the security model
 
 These are resources with a placement rule, not code the hub imports.
 
@@ -225,16 +250,55 @@ These are resources with a placement rule, not code the hub imports.
   places them for its harness.
 - **Skills** are a top-level hub mechanism; the content comes from a plugin, and the hub hands it
   to a harness the way extensions are handed.
-- **The delivery rule (security).** The agent must not be able to rewrite a skill or edit a
-  trust-bearing extension (it can edit the gating extension in its workspace and bypass approval).
-  The rule: **place them in a hub-owned directory outside the agent's workspace, and launch the
-  harness with discovery off and explicit paths**.
 - **Skills through a hook.** All current harnesses run as Node; the adapter owns the spawn, so it
   injects a **`node:fs` hook** (`NODE_OPTIONS=--require <hook>`) that resolves a **`skills://` URI
-  to hub content** - the harness sees a logical URI, never a real path. Verified: a `--require`
-  hook intercepts `readFileSync("skills://…")` in an ESM Node child. It is **only skills**, not a
-  sandbox, and because it does not confine `child_process`, **the real path must never leak** (not
-  in argv, env or `--skill`). Requires the harness to run under Node (all current ones do).
+  to hub content** - the harness sees a logical URI, not a real path. (A local `--require` hook was
+  shown able to intercept `readFileSync("skills://…")` in an ESM Node child; that is a mechanism
+  probe, **not** the delivery acceptance - see below.) The mechanism is a **verification-gated
+  delivery**, not an approved implementation: it must cover the directory loader, relative
+  resources, the effective set and reload, on real artifacts (ROUTES-REVIEW o6). Requires the
+  harness to run under Node; a compiled-binary harness would need a different insertion point.
+
+### Security: what placement does and does NOT guarantee (G1)
+
+**Placement is not an authorization boundary, and this file must not claim it is.** Putting an
+extension or skill in a *hub-owned* directory and turning discovery off reduces *accidental
+loading and path exposure*; it does **not**, by itself, prove a malicious agent cannot modify a
+skill or a trust-bearing extension. A cross-review confirmed this as a **design gap** (TASK-038
+F01/F02, TASK-043 F03, TASK-037 F08) - **not** as a demonstrated bypass.
+
+The gap is that no **execution/permission boundary** is defined. The following are preconditions
+the design must state, and the parts it cannot guarantee:
+
+- **What is protected**: plugin-provided **skills** and **adapter-shipped trust-bearing
+  extensions** (and their **source copies, the loader/hook, and the reboot load chain** - not just
+  the currently-loaded copy).
+- **Precondition (must be defined, not assumed)**: the OS identity/permissions of the hub, the
+  adapter, the harness and its child processes (UID/SID, ACLs, read-only mounts). "Hub-owned" is a
+  logical owner, **not** a proven OS access difference; if the harness runs as the same principal
+  with write access to a path, moving the directory does not remove that access.
+- **The hook is not a sandbox.** It intercepts the `fs` calls a skill loader uses; it does **not**
+  confine `child_process`/shell/native code. So with a same-principal, shell-capable agent, path
+  hiding alone is insufficient - `write` accepting absolute paths is on the record
+  (ROUTES-REVIEW). Which tools each harness actually enables is read from
+  `GET /v1/harnesses/{id}/tools`, never assumed.
+- **Management trust boundary**: the management surface answers approvals and mutates plugins and
+  skills. `endpoint.json` carries the bearer on loopback; loopback is **not** inter-principal
+  isolation, and the design does not yet define that an agent cannot read the token. A bearer only
+  proves possession, not that the holder is the trusted human. **Every route requiring the token
+  (ROUTES-REVIEW o5) is part of the trust boundary, not a substitute for one.**
+- **Not guaranteed**: that a same-principal, unconstrained agent cannot alter a resource between
+  reboots. The valid options are to (a) **narrow the claim** - say plainly this reduces accidental
+  loading and exposure, and rely on the tool/adapter gate, or (b) **define a real execution
+  boundary** (a distinct principal, OS read-only enforcement, or a tool policy that cannot be
+  bypassed). This file does not mandate a specific mechanism; it forbids claiming tamper-proof
+  integrity from directory placement alone. **Unknown/missing permission must fail closed.**
+
+**Runtime acceptance for the security claim is NOT done** and is not claimed here. It requires a
+real, attributable artifact and `/v1` runs against pi/jouzu/dsh for: absolute-path write, shell/
+child, links, the reboot load chain, and management-API/approval access by an agent identity
+(ROUTES-REVIEW o6 lists the scenarios). Until those run, security is a **stated design boundary
+with open verification**, not a passing result.
 
 ## 8. Data
 
@@ -251,33 +315,145 @@ file" came from; one database gives transactions and one writer.
   marker. There is no migration from anything (see the top) and no compatibility with any old
   format.
 
-## 9. Concurrency: how ADR-0009's numbers are met in Rust
+## 9. The contract is a DSL; validation needs one normalization authority (G3)
+
+`contract/v1.json` is agent-hub's own route table with a **compact DSL**: `endpoints[].request` /
+`.response` fragments use JSON-Schema vocabulary plus `$ref: "#/defs/…"`, but they are **not**
+valid JSON Schema documents. A cross-review independently regenerated the OpenAPI projection at
+the fixed SHA and confirmed real semantic/legality defects in it - **not** an outdated artifact
+and **not** broken refs (TASK-039 F01/F02/F03, TASK-037 F03):
+
+- a PATCH session's **optional** fields project as **all required**;
+- 4 places emit `type: []`; `string[]|null?` loses the array branch;
+- 12 places keep `nullable: true`, which does **not** carry JSON-Schema-2020-12 null semantics;
+- 1 place writes `type: "binary"` into an `application/json` schema;
+- `'manual'|string?` collapses to `const: manual`.
+
+**Decision (design boundary):** there is **one normalization authority** from the source DSL to a
+standard JSON Schema, and every generated artifact (OpenAPI), every server-side validator and the
+serde types derive from **that same normalization** or are checked against it. The DSL's grammar
+(required/nullable/extension rules), the full `$ref` registry, and the handling of unknown
+keywords/tokens are declared; validation does not "guess" two languages by keywords.
+
+**The existing projection is not a trustworthy validation base** - it must be regenerated from the
+normalization and verified (positive and negative samples) before `jsonschema` or serde consume
+it. The old projection's defects are the **owning repository's to fix** (they are not introduced
+by this PR): this section states the boundary and the gate, and does not fix the old projection
+here. Running a Rust validator against real `/v1` requests (accept/reject) is a later verification.
+
+## 10. Plugin install/replace: recovery rules, not "a transaction" (G2)
+
+An install or replace touches two stores that are **not** one transaction: the plugin's directory
+tree (rename moves) and the database row. A cross-review confirmed the recovery rules are a
+**design gap** (TASK-041 F01/F02/F03, TASK-037 F06) - **not** a demonstrated data loss.
+
+"Two renames plus a boot sweep" and "SQLite gives atomicity" do **not** answer what a crash leaves.
+The design must state, for the operation, **what is kept, advanced or rolled back** at each
+boundary:
+
+| boundary (a crash between these) | on restart: |
+|---|---|
+| before any move | nothing to do; the old plugin is intact |
+| after `old -> outgoing`, before `staging -> target` | the old copy is the only complete one: restore it, drop the staging dir |
+| after `staging -> target`, before the DB commit | the new copy is in place but uncommitted: either finish the commit (the new copy is complete) or roll back to `outgoing`; the state must say which |
+| after the DB commit, before deleting `outgoing` | the replacement is done; the leftover `outgoing` is transient and swept |
+| rollback itself failed | keep **both** copies and a record that says so; the state is "not usable, recovery copy retained", never a silent half-state |
+| recovery interrupted again | restart resumes from the recorded state, not from scratch |
+
+Rules that follow:
+
+- **Recovery runs before garbage collection**, and GC's basis is **rebuildability and references**
+  (is this content reconstructible; does any row/session reference it) - **not** a directory name
+  prefix. A "transient" directory may be the only recovery copy.
+- **The same plugin's prepare/delete/replace must not let an older completion contaminate a newer
+  instance** (a late completion belongs to the instance it started for).
+- An explicit **"unusable but with a recovery copy retained"** terminal state is allowed; not
+  every failure must auto-recover to `ready`.
+- **Kill and power-loss are separate cases.** Power loss additionally needs file/dir durability and
+  the SQLite journal-mode argument on each platform.
+
+The **algorithm is the implementer's choice**; what is not allowed is writing "SQLite transaction"
+or "roll back on failure" in place of these rules. Runtime acceptance (real `/v1` + disk evidence
+across kill vs power-loss, Windows file-locking, disk-full) is **not done**.
+
+## 11. Long operations: acceptance, result ownership, recovery, SSE convergence (G4)
+
+`202 + spawn + GET` says where to look, not what a command guarantees. A cross-review confirmed
+this as a **design gap** (TASK-040 F01/F02/F03, TASK-042 F02/F03, TASK-045 F03, cross TASK-046 F03)
+- **not** a requirement to add a generic "job".
+
+**No generic job object.** What is required is that the **resource** honestly answers: was the
+command **accepted**, is it **in progress**, did it **fail**, and is the result **unknown** - and
+whether a stale runner can still submit a result. For the representative operations, the design
+must give a semantics table:
+
+| operation | acceptance point | what `Location` names | result/error readability | same-resource conflict | lost-response retry | restart | cancel |
+|---|---|---|---|---|---|---|---|
+| install / remove (plugin) | after validity, before the work | the plugin row | state `installing`/`removing` -> `ready`/`absent`/`failed`+detail | a second command on the same plugin is refused or joins | ids `=` the command (idempotent by target) | recovery per 8a | stops the work, state says so |
+| start / fork / compact (session) | after validity | the session | session `status`/`activeTurn` | `session_busy` while running | idempotent by session+kind | re-attach or explicit failed | per the operation |
+| turn | on admit | the session's `activeTurn` | turn state + events | refused while a turn runs | never silently replay an unknown turn | resync on reconnect | adapter cancel ACK != stopped |
+| auth flow | on start | the auth sub-operation | `pending/approved/failed/expired/cancelled` | one flow per provider | re-read the operation | sub-operation survives a restart | cancel |
+
+Rules:
+
+- **Never silently replay an unknown side effect.** If a `202` is lost and the client retries, the
+  command is identified by its **target** (idempotent by target for these operations); a turn is an
+  exception - an unknown turn is **not** replayed.
+- **Unknown/interrupted terminal states are allowed**; exactly-once is not claimed. A late
+  completion from an old runner must not be accepted as the result of a newer instance (this is
+  the same rule as 8a).
+- **`Location` and the result must be explainable after they expire** - a deleted resource may
+  return `404`, but the contract must say whether the result is retained or expired, and why.
+- **"No operation object" means no generic job**; existing sub-resources (an auth operation) stay.
+
+**SSE convergence.** WHATWG framing does not solve delivery. The contract must state, and the
+implementation must converge on: read-after-subscribe (subscribe, then re-read the resource),
+beginning-GET/subscribe window (no change lost between the initial read and the subscription),
+slow-subscriber overflow (bounded channel; drop policy), an **expired/invalid `Last-Event-ID`**
+(server cannot say what was missed -> client re-reads), restart, and a change arriving during the
+resync. The old wording ("draw the event's state directly" vs "re-read") is a real conflict and
+**re-read is the target**: an event says *when to re-read*, the resource says what is true.
+
+Runtime acceptance (real `/v1` crash/restart/concurrency scenarios) is **not done**.
+
+## 12. Concurrency: how ADR-0009's numbers are met in Rust
 
 ADR-0009 is a floor and a target, measured, not asserted: **>= 100 concurrent connections** and no
 in-flight operation times another out; **thousands of idle connections**; two heavyweight
 operations at once without starving each other.
 
-| requirement | mechanism |
+**These are mechanisms, not proof.** A cross-review (TASK-046 F01-F04, TASK-037 F02/F07/F10,
+TASK-044 F03) correctly requires the wording to be limited to what a mechanism gives, with the
+numbers as **measured later**, not asserted:
+
+| requirement | mechanism (what it gives - and does not) |
 |---|---|
-| thousands of idle connections | **tokio multi-thread runtime**, one async task per connection; an idle connection is a parked task - no thread, no buffer. axum/hyper handle keep-alive and back-pressure. |
-| no request path blocks the loop | handlers are `async`; the only blocking work (bundled `rusqlite`, some fs) goes to **`spawn_blocking`**. A blocking call on the async path is a defect the type system makes visible. |
-| a long operation does not hold a connection | it is **detached** (`accepted(location, work)` -> `tokio::spawn`); the work mutates the resource and emits an event; the client is answered `202` at once. |
-| two heavyweight operations do not starve each other | each is a task among tasks; **bounded** parts (downloads) sit behind a **`tokio::sync::Semaphore`**, so one install cannot exhaust the pool. |
-| SSE to many subscribers | the bus broadcasts; a slow subscriber is bounded (bounded channel / drop policy), so one client cannot stall the loop for the rest. |
+| thousands of idle connections | **tokio multi-thread runtime**, one async task per connection; an idle connection is a parked task, **not** a dedicated thread. This is the ordinary result for an event-driven server; it is still to be **measured**, not guaranteed by the runtime. |
+| no request path blocks the loop | handlers are `async`; the only blocking work (bundled `rusqlite`, some fs) goes to **`spawn_blocking`**. The type system makes a *synchronous* call visible, but it does **not** by itself prove the loop never blocks - review and measurement do. |
+| a long operation does not hold a connection | it is **detached** (`accepted(location, work)` -> `tokio::spawn`); the client is answered `202` at once. |
+| bounded acceptance, not only bounded execution | **there must be a bound on how many commands are ACCEPTED**, not just how many run: an explicit budget per operation class, active vs waiting counted separately, fair scheduling by operation/resource, and short reads/cancel still served. A `Semaphore` bounds concurrency; it does **not** by itself promise fair progress. |
+| two heavyweight operations do not starve each other | each is a task; bounded parts (downloads) sit behind a `Semaphore`. Fairness is a **policy to define and verify**, not a property the primitive grants. |
+| DB locks do not span long work | `rusqlite` access is short and inside `spawn_blocking`; a DB lock is **never** held across a long operation. The lock policy and the mix of install/remove with session writes are to be stated and measured. |
+| SSE to many subscribers | the bus broadcasts; a slow subscriber is bounded (bounded channel / drop policy), so one client cannot stall the loop. The exact bound is a chosen number, frozen at implementation. |
+| overload/disconnect/cancel/exit | documented behaviour for: stdio/SSE overload, a disconnect mid-operation, cancel, and process exit while work is pending (which child processes are reaped, by whom). |
 
 The measurement is the concurrent-poll method that reproduced the freeze in the old code, turned
-into the acceptance test.
+into the acceptance test. **ADR-0009's numbers (>= 100 connections, thousands idle, two heavy
+operations) are a runtime gate, not yet run.** The minute/second/connection-count numbers proposed
+in review are suggestions, not an approved SLO.
 
-## 10. The rules (invariants)
+## 13. The rules (invariants)
 
 1. **No blocking on a request path (ADR-0009).** I/O is async; blocking work runs in
    `spawn_blocking`.
 2. **A long operation is one command.** A long route calls `accepted(location, work)` from
    `transport/`, which answers `202 Accepted` + `Location` (RFC 9110 15.3.3/10.2.2) and runs `work`
    detached. It never holds the connection.
-3. **The resource is the only truth.** State is read through the GET routes. No "operation"
-   object, no job id, no second store of progress. A detached task mutates the resource and emits
-   an event.
+3. **The resource is the only truth.** State is read through the GET routes. There is **no
+   generic "job" object** and no second store of progress; a command's outcome is the resource's
+   own state (see 11 for the acceptance/result/unknown semantics, and the allowed case of an
+   **unknown or interrupted terminal state**). A detached task mutates the resource and emits an
+   event. A sub-resource that is itself a real resource (an auth flow) is not a "job".
 4. **No compatibility, no migration, no legacy.** A fresh program; nothing reads an old format.
 5. **A crate calls only the crates it declares.** The workspace enforces it.
 6. **Only `adapter/` spawns a process and speaks stdio.**
@@ -286,7 +462,29 @@ into the acceptance test.
 8. **Dependencies are built at the entry.** `main.rs` builds the `AppState` and passes it to the
    routers; no module reaches for a mutable global.
 
-## 11. How the structure makes a change local
+## 14. Traceability of the decisions (G6)
+
+**Why Rust.** ADR-0010 requires a mature transport and forbids hand-rolled infrastructure; it does
+not name a language. ADR-0011 says the implementation is private. So Rust is a **choice**, not a
+consequence of the ADRs, and it is recorded as a choice with a reason: with the adapter
+out-of-process and providers reduced to data, nothing in the hub needs Node, and Rust gives the
+concurrency, isolation and process model the ADRs require structurally. The old transport (Hono)
+being a Node choice does **not** argue against Rust (ADR-0011), and Rust does **not** argue that
+the old choice was wrong.
+
+**The crates.** Each row in section 2 is a **proposed substitution** for a hand-rolled piece, to
+be confirmed at implementation (a maintained crate with a compatible licence and a maintained
+release), not an accepted ADR. Where a crate is a platform choice with alternatives (a keychain
+library, a SQLite binding, a TLS backend), the alternative is named and the reason recorded at
+implementation time.
+
+**Test policy scope.** This repository's testing policy governs **this** repository. A finding
+that this PR "does not restore the hub's test suite" is a **cross-document policy conflict**
+(TASK-037 F10) for the owners to settle: a reviewer cannot lift a local restriction, and this
+repository's rule is **not** pushed onto another repository as a permanent ban. The adversarial
+suite that drives `/v1` is the hub's own; it is not resurrected by this docs PR.
+
+## 15. How the structure makes a change local
 
 1. **Build the frame first.** `hub/` + `crates/transport` + `crates/contract` + `crates/events`,
    with the routers mounted. The surface is proven against `contract/v1.json` before any domain.
@@ -297,13 +495,13 @@ into the acceptance test.
 4. **The self-check holds the seam.** `main.rs` compares the mounted surface to `contract/v1.json`
    at boot, so a forgotten route is a refusal to start.
 
-## 12. What this architecture does not decide
+## 16. What this architecture does not decide
 
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
 - C - a client connecting directly to an adapter (a separate decision; re-opens ADR-0001).
 
-## 13. The order of work
+## 17. The order of work
 
 1. **the frame**: `hub/`, `crates/transport`, `crates/contract`, `crates/events`.
 2. **the data layer**: `crates/db` + the schema.
