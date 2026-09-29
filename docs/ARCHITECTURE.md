@@ -38,6 +38,10 @@ UI and no harness code.
 - **Mature infrastructure, our business logic (ADR-0010).** The transport is a proven framework
   (axum/hyper + SSE); validation is driven by the existing contract files; zip/http/queue come
   from crates. The domains are ours.
+- **PRTS capabilities are baseline.** Presets, per-command approval, plan/review and the rest
+  are **the hub's baseline capabilities for every harness** - defined and owned by the hub, not
+  optional and not per-adapter. A harness that lacks one is given it through the hub's extension
+  mechanism; the adapter only places what the hub hands it (see 6).
 
 ## 2. Infrastructure is crates; the hub hand-rolls nothing (ADR-0010, carried over)
 
@@ -193,7 +197,43 @@ This is what removes in-process foreign code (a provider can no longer run insid
 why Rust is possible at all. (Full table of what moves from provider to hub: ROUTES-REVIEW,
 "Model providers are DATA".)
 
-## 6. The adapter layer is shared, not copied
+## 6. The adapter boundary: the adapter TRANSLATES; it does not implement
+
+The adapter exists to **translate** between the hub's contract and one harness's dialect. It has
+drifted: it now implements whole features that belong to the harness (which already has them) or
+to the hub (which owns them). Read from `pi-adapter.cjs`:
+
+| in the adapter today | who already owns it | verdict |
+|---|---|---|
+| `send`/`piRequest`/`handleBusMessage`/`handlePiMessage` | - | **adapter** (this is the translation) |
+| `resolvePi`/`startPi` (spawn, argv, cwd) | - | **adapter** (the harness's dialect) |
+| `credentialState`, `auth print-api-key`-style handling | **the harness** - pi has `auth check`/`auth print-api-key`/`auth print-bearer-token`; jouzu has `/login`; dsh has auth | **hub protocol + harness login; the adapter only translates** - it does not re-implement |
+| `probeModels` (an HTTP GET /models + parse) | the **hub** (provider catalog is the hub's, decided) | **hub** |
+| `scanModels`/`managedModels`/`modelDecl`/`configThinkingLevels`/`buildInjectedDir`/`applyInjectedProvider` | the **harness** has model adapters (pi `list-models`/providers, jouzu catalogs, dsh models); the **hub** holds the provider record (data) | **harness + hub; the adapter translates** |
+| `ensureTranscript`/`load`/`save`/`append`/`transcriptPath` | the **hub** (ADR-0001: the hub is the session truth) | **hub** - the adapter must not keep a second session store |
+| `listShippedPresets`/`writeActivePreset`/`installAgentPresetsExt`/`planCommand`/`reviewCommand` | **the hub** - these are **PRTS baseline capabilities**, defined by the hub for every harness | **hub**; the adapter only PLACES the extension the harness needs |
+| `copyTree`/`readJsonFile` | - | **shared adapter layer** (not copied per adapter) |
+
+**Decided boundary:**
+
+1. **The adapter translates only.** hub<->harness protocol dialect, plus the harness-specific
+   PLACEMENT of what the hub hands it. It implements no feature the harness already has and none
+   the hub owns.
+2. **Login/credentials**: the harness has its own login; the hub's auth is data + a protocol; the
+   adapter translates the hub's auth contract to the harness's login. No per-adapter auth.
+3. **Models/providers**: the harness has model adapters; the hub holds the provider record as
+   data; the adapter translates. Provider catalog fetch (HTTP) is the hub's.
+4. **Session state**: the hub is the session truth (ADR-0001). The adapter keeps **no** second
+   transcript store.
+5. **PRTS capabilities (preset/plan/review) are hub baseline capabilities**: the hub defines them
+   for every harness; the adapter places the harness's extension for them. The capability is not
+   the adapter's and is not optional per harness.
+
+The shared common part (protocol loop, framing, the transcript SHAPE the hub expects, the catalog
+probe shape, the helpers, the skills hook) lives in the **shared adapter layer** (next section),
+written once.
+
+## 7. The adapter layer is shared, not copied
 
 Every harness adapter today re-implements the SAME logic. Measured: pi (1,676 lines) and jouzu
 (1,806) share **34 function names** (`send`, `piRequest`, `handleBusMessage`, `copyTree`,
@@ -222,7 +262,7 @@ its extension/preset mechanics, its auth flow specifics. The split is the same r
 This is also where the **skills hook** lives once (see 4), so it is written once, not per adapter,
 and a Rust adapter gets it from the shared layer.
 
-## 7. Data
+## 8. Data
 
 **A single SQLite database** (via `rusqlite`, bundled so there is no system dependency), reached
 only through `db/`. Today the state is JSON files read-modify-written, which is where "two writers"
@@ -234,7 +274,7 @@ and "half a file" come from; one database gives transactions and one writer.
   store / a vault). The database holds their path and metadata, not their bytes.
 - `db/<table>.rs` is the only place its table is named in SQL.
 
-## 8. Concurrency: how ADR-0009's numbers are met in Rust
+## 9. Concurrency: how ADR-0009's numbers are met in Rust
 
 ADR-0009 is a floor and a target, measured, not asserted:
 
@@ -260,7 +300,7 @@ target is not a hope: an event-driven runtime holds thousands of idle connection
 on the loop waits; in Rust the loop is the runtime's, and blocking is an explicit, checked
 boundary rather than a rule to remember.
 
-## 9. The rules (invariants)
+## 10. The rules (invariants)
 
 1. **No blocking on a request path (ADR-0009).** I/O is async (`tokio::fs`, the db, awaited child
    processes). Blocking work (the bundled `rusqlite` calls, a synchronous fs op) runs in
@@ -284,7 +324,7 @@ boundary rather than a rule to remember.
 8. **Dependencies are built at the entry.** `main.rs` builds the `AppState` and passes it to the
    routers; a module does not reach for a mutable global.
 
-## 10. How the structure makes a change local (from the whole to the part)
+## 11. How the structure makes a change local (from the whole to the part)
 
 1. **Run the frame first.** `main.rs` + `transport/` + the mounted routers, with the current routes
    moved on **behaviour-unchanged**. The surface is proven before any domain changes.
@@ -295,13 +335,13 @@ boundary rather than a rule to remember.
 4. **The self-check holds the seam.** `main.rs` compares the mounted surface to `contract/v1.json`
    at boot, so a forgotten route is a refusal to start.
 
-## 11. What this architecture does not decide
+## 12. What this architecture does not decide
 
 - The exact response bodies (they are `contract/v1.json`, settled with the code).
 - The adapter's stdio topology (the hub<->adapter contract; unchanged).
 - C - a client connecting directly to an adapter (a separate decision; re-opens ADR-0001).
 
-## 12. The order of work (architecture first, then inward)
+## 13. The order of work (architecture first, then inward)
 
 1. **the frame**: `hub/main.rs`, `crates/transport` (axum listener, bearer auth, SSE, `accepted`),
    `crates/contract` (load + self-check), `crates/events`. The existing routes are moved on
