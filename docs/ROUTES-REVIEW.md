@@ -12,11 +12,14 @@ marks nothing - the prefix is present on some routes and absent on others for no
 
 ---
 
-## 1. discovery - open, no token
+## 1. discovery - the harness roster
+
+(Today this route is the only token-free one. **Decided: no anonymous discovery** - see o5;
+and the roster is a thin top-level projection - see o4.)
 
 | route | what it does | verdict |
 |---|---|---|
-| `GET /v1/harnesses` | the harnesses this hub has registered (a plugin present is registered on first sight, with its capabilities and status). **The one route that answers without a token**; `GET /v1/hub/harnesses` is the management view of the same registry. | **KEEP**, but see class 4 (the two views should be one class) |
+| `GET /v1/harnesses` | the harnesses this hub has registered. **Today the only token-free route** (decided against: o5). `GET /v1/hub/harnesses` is the management view of the same registry; **decided: one route** (o4). | **KEEP as a thin top-level projection** (o4); **requires the token** (o5) |
 
 ## 2. status - the process itself
 
@@ -37,7 +40,7 @@ marks nothing - the prefix is present on some routes and absent on others for no
 | `DELETE /v1/hub/plugins/{id}` | remove a plugin the HUB installed (refuses a deployment's tree, and a harness with open sessions). | **RENAME** `/v1/plugins/{id}` |
 | `POST /v1/hub/plugins/{id}/prepare` | ask the adapter to materialise the runtime its manifest pins (idempotent). | **RENAME** `/v1/plugins/{id}/prepare` |
 | `GET /v1/hub/plugins/{id}/icon/{variant}` | one variant (light/dark) of a plugin's own icon. | **RENAME** `/v1/plugins/{id}/icon/{variant}` |
-| `POST /v1/hub/registry/refresh` | read the configured registry URL and write it where the hub reads the catalog; the ONLY way the URL is contacted. | **RENAME**; `refresh` is an action, not a resource - see "open questions" (a). |
+| `POST /v1/hub/registry/refresh` | read the configured registry URL and write it where the hub reads the catalog; the ONLY way the URL is contacted. | **RENAME** (move into the plugins class); the verb `refresh` is fine (decided: actions may be verbs) |
 | `GET /v1/hub/catalog` | the plugin catalog the hub was shipped with (the registry file restating where each plugin's releases are). | **RENAME** to say it is the registry cache, and place it by plugins |
 
 **REMOVE (not a route):** `GET/DELETE /v1/hub/orphans`. Leftover manifestless directories are an
@@ -55,12 +58,12 @@ Two owners share the word "harness", which is correct but must stay clear:
 
 | route | what it does | verdict |
 |---|---|---|
-| `GET /v1/hub/harnesses` | the hub's harness registry: per harness, whether it is enabled and which extensions/skills are installed. | **RENAME** `/v1/harnesses/registry`? see "open questions" (b) |
-| `PATCH /v1/hub/harnesses/{id}` | change what the hub installs for one harness: `extensions`, `skills`. | **RENAME** likewise |
-| `POST /v1/hub/harnesses/{id}/enable` | enable a registered harness. | **KEEP one of the two** - see MERGE below |
-| `POST /v1/hub/harnesses/{id}/disable` | disable a registered harness (session create/turns refused 409). | **KEEP one of the two** |
-| `POST /v1/harnesses/{id}/enable` | identical (the contract calls the `/hub/` one "the hub twin of" this). | **MERGE** with the `/hub/` one -> delete this |
-| `POST /v1/harnesses/{id}/disable` | identical. | **MERGE** -> delete this |
+| `GET /v1/hub/harnesses` | the hub's harness registry view. | **RENAME** `/v1/harnesses`; folded into the thin top-level projection (o4) |
+| `PATCH /v1/hub/harnesses/{id}` | change what the hub installs for one harness. | **MOVE**: `enabled` -> plugin lifecycle; `extensions`/`skills` -> their own mechanisms (see the decided sections) |
+| `POST /v1/hub/harnesses/{id}/enable` | enable a registered harness. | **MOVE to plugin lifecycle** (`/v1/plugins/{id}/enable`) |
+| `POST /v1/hub/harnesses/{id}/disable` | disable a registered harness (session create/turns refused 409). | **MOVE to plugin lifecycle** (`/v1/plugins/{id}/disable`) |
+| `POST /v1/harnesses/{id}/enable` | identical (the contract calls the `/hub/` one "the hub twin of" this). | **DELETE** (enable/disable is plugin lifecycle) |
+| `POST /v1/harnesses/{id}/disable` | identical. | **DELETE** (enable/disable is plugin lifecycle) |
 | `GET /v1/harnesses/{id}/models` | the models THIS HARNESS CAN RUN: its own catalog plus every hub-managed provider it can reach. The authoritative source for model selection. | **KEEP** |
 | `GET /v1/harnesses/{id}/presets` | the harness's preset roster (opaque ids), capability-gated. | **KEEP** |
 | `GET /v1/harnesses/{id}/tools` | the tool catalog, capability-gated. | **KEEP** |
@@ -73,10 +76,11 @@ Two owners share the word "harness", which is correct but must stay clear:
 | `POST /v1/harnesses/{id}/connections/validate` | ask the harness to validate a draft (may probe; persists nothing). | **KEEP** |
 | `DELETE /v1/harnesses/{id}/connections/{cid}` | delete one; the harness drops its credential too. | **KEEP** |
 
-**MERGE (the one real duplicate):** `POST /v1/harnesses/{id}/enable|disable` and
-`POST /v1/hub/harnesses/{id}/enable|disable` are the same action, same auth. Keep one.
-Proposal: keep the harness-registry pair, drop the `/v1/harnesses/{id}/enable|disable` pair
-(they have no description, which is a sign they were the later add).
+**enable/disable - one mechanism, not two (and not on harnesses).** There are four routes today
+(`POST /v1/harnesses/{id}/enable|disable` and `/v1/hub/harnesses/{id}/enable|disable`); the
+contract even calls one "the hub twin of" the other. **Decided:** enabling/disabling is the
+**plugin lifecycle** (`POST /v1/plugins/{id}/enable|disable`); a harness is a plugin, so it is
+covered there like every other plugin. All four harness routes go.
 
 ## 5. model-providers - the model services the hub manages (and their plugin types)
 
@@ -97,7 +101,7 @@ plugin kind is `model-provider` (the twin of `harness-adapter`). Distinct owner 
 | `GET /v1/hub/providers/models/list` | API 1: the models the HUB manages (across its model providers) - what the hub owns and can inject. Explicitly NOT the model-selection source and does NOT include a harness's own models. | **MOVE** to its own class -> `/v1/models` (see class 10) |
 | `GET /v1/hub/providers/{id}/models` | the cached catalog of ONE model provider (no network). | **RENAME** `/v1/model-providers/{id}/models` |
 | `PATCH /v1/hub/providers/{id}/models` | replace the enabled selection. | **RENAME** `/v1/model-providers/{id}/models` |
-| `POST /v1/hub/providers/{id}/models/refresh` | refresh one model provider's catalog (a network fetch). | **RENAME** `/v1/model-providers/{id}/models/refresh`; an action - see "open questions" (a) |
+| `POST /v1/hub/providers/{id}/models/refresh` | refresh one model provider's catalog (a network fetch). | **RENAME** `/v1/model-providers/{id}/models/refresh` (a verb is fine) |
 | `POST /v1/hub/providers/{id}/auth` | start the model-provider plugin's authorization (device-code/browser). | **RENAME** `/v1/model-providers/{id}/auth` |
 | `GET /v1/hub/providers/{id}/auth/{op}` | the state of that authorization. | **RENAME** `/v1/model-providers/{id}/auth/{op}` |
 | `POST /v1/hub/providers/{id}/auth/{op}/cancel` | cancel it. | **RENAME** `/v1/model-providers/{id}/auth/{op}/cancel` |
