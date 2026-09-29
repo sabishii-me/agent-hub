@@ -1,8 +1,10 @@
 # agent-hub's architecture (Rust)
 
-This is **agent-hub**, rewritten from scratch in Rust. There is **no migration and no legacy**:
-the previous Node `server.mjs` monolith failed badly, and nothing of it is carried over - not a
-line, not a format, not a compatibility path. The old file is deleted; this is a new program.
+This is the **target** for agent-hub, rewritten from scratch in Rust (*what follows describes the
+target, not a claim that this commit has already deleted the old implementation*). There is **no
+migration and no legacy**: the previous Node `server.mjs` monolith failed badly, and nothing of it
+is carried over - not a line, not a format, not a compatibility path. The old file is to be
+deleted; this is a new program.
 
 The problem it removes: one 4,748-line file held every domain, so a change to one domain could not
 be made correctly (long routes were missed because there was no boundary to see them against). A
@@ -67,7 +69,7 @@ old code hand-rolled are named:
 |---|---|---|
 | HTTP server, routing, SSE | hand-written `node:http` + `sseWrite` | **axum** (on **hyper**/**tokio**) + `axum::response::sse` |
 | JSON | `JSON.parse` | **serde** + **serde_json** |
-| contract validation | hand-written field checks | **jsonschema**, but **only after the normalization in 8b** - the current `endpoints[].request`/`.response` fragments are a compact DSL, **not** valid JSON Schema, and must not be handed to `jsonschema` as-is |
+| contract validation | hand-written field checks | **jsonschema**, but **only after the normalization in 9** - the current `endpoints[].request`/`.response` fragments are a compact DSL, **not** valid JSON Schema, and must not be handed to `jsonschema` as-is |
 | SQLite | hand-rolled JSON files | **rusqlite** (bundled SQLite; blocking, run in `spawn_blocking`) |
 | HTTP client (downloads) | hand fetch loop | **reqwest** (+ **rustls**) |
 | zip (plugin artifacts) | a 326-line hand-written `zip.mjs` | the **zip** / **async_zip** crate |
@@ -358,7 +360,7 @@ boundary:
 | boundary (a crash between these) | on restart: |
 |---|---|
 | before any move | nothing to do; the old plugin is intact |
-| after `old -> outgoing`, before `staging -> target` | the old copy is the only complete one: restore it, drop the staging dir |
+| after `old -> outgoing`, before `staging -> target` | the old copy is the **last committed/activatable** version: restore it, drop the staging dir (a `staging` tree may itself be complete, but it is not the committed version) |
 | after `staging -> target`, before the DB commit | the new copy is in place but uncommitted: either finish the commit (the new copy is complete) or roll back to `outgoing`; the state must say which |
 | after the DB commit, before deleting `outgoing` | the replacement is done; the leftover `outgoing` is transient and swept |
 | rollback itself failed | keep **both** copies and a record that says so; the state is "not usable, recovery copy retained", never a silent half-state |
@@ -388,24 +390,56 @@ this as a **design gap** (TASK-040 F01/F02/F03, TASK-042 F02/F03, TASK-045 F03, 
 
 **No generic job object.** What is required is that the **resource** honestly answers: was the
 command **accepted**, is it **in progress**, did it **fail**, and is the result **unknown** - and
-whether a stale runner can still submit a result. For the representative operations, the design
-must give a semantics table:
+whether a stale runner can still submit a result.
 
-| operation | acceptance point | what `Location` names | result/error readability | same-resource conflict | lost-response retry | restart | cancel |
+### Command identity is not resource identity (R1)
+
+A resource can receive **several different legitimate commands in a row**: fork source S twice (C1,
+then a new C2), install P@v1 then upgrade P@v2, run two turns. **A resource identity (the plugin id,
+the session id) does not identify a command** - so "idempotent by target / by session+kind" is
+wrong: it conflates a retry with a new intent, which either swallows the second legitimate command
+or re-runs a retry. The two identities are separate:
+
+- **resource identity** (`{id}`) locates a resource and **serializes conflicting commands** on it
+  (one at a time, or a stated conflict rule). It does **not** identify an intent.
+- **logical command identity** identifies **one intent and its retries**, across the response the
+  client did not receive. It is carried on the request (an `idempotencyKey`, a client-reserved
+  resource id, a resource `revision`/conditional command, or an equivalent) - the exact field is
+  settled in the contract.
+
+The rule set:
+
+1. **Same command identity + same semantic request** (a retry): return / point at the **original**
+   command's resource result; do **not** execute twice.
+2. **Same command identity + different parameters**: an explicit **conflict** (never silently apply
+   the new parameters under the old identity).
+3. **A new intent uses a new identity** - even if target, kind and parameters are identical (a
+   second fork of the same source is a new command, not a retry).
+4. **For start/fork, the identity must be able to relate to the reserved result resource even when
+   the first response is lost** - the server may mint the id, but the association must be derivable
+   from the command identity, not only from a target the client has never seen.
+5. **Acceptance completes only when the command association and the queryable resource state are
+   durably recorded** (or there is an explicit recoverable basis). An unknown external side effect
+   is never silently replayed.
+6. **The association survives restart for a stated retention window**; after it expires, the
+   contract states whether a repeat is a new command, refused, or unknown - exactly-once is **not**
+   promised beyond the window.
+
+This does not require a generic job, a public generation, a distributed transaction, or a permanent
+log - only that the four cases above are distinguishable.
+
+The semantics table:
+
+| operation | acceptance point | what `Location` names | result/error readability | same-resource conflict | retry vs new | restart | cancel |
 |---|---|---|---|---|---|---|---|
-| install / remove (plugin) | after validity, before the work | the plugin row | state `installing`/`removing` -> `ready`/`absent`/`failed`+detail | a second command on the same plugin is refused or joins | ids `=` the command (idempotent by target) | recovery per 8a | stops the work, state says so |
-| start / fork / compact (session) | after validity | the session | session `status`/`activeTurn` | `session_busy` while running | idempotent by session+kind | re-attach or explicit failed | per the operation |
-| turn | on admit | the session's `activeTurn` | turn state + events | refused while a turn runs | never silently replay an unknown turn | resync on reconnect | adapter cancel ACK != stopped |
-| auth flow | on start | the auth sub-operation | `pending/approved/failed/expired/cancelled` | one flow per provider | re-read the operation | sub-operation survives a restart | cancel |
+| install / remove (plugin) | after validity; association recorded | the plugin row | state `installing`/`removing` -> `ready`/`absent`/`failed`+detail | a conflicting command on the same plugin is refused or joined (resource identity) | by **command identity**: same+same returns the original; same+different conflicts; new identity = new intent (install v1 then v2) | recovery per 10 | stops the work, state says so |
+| start / fork / compact (session) | after validity; association recorded | the created/affected session | session `status`/`activeTurn` | `session_busy` while running | by **command identity**: a second fork of the same source is a **new** command | re-attach or explicit failed | per the operation |
+| turn | on admit; association recorded | the session's `activeTurn` | turn state + events | refused while a turn runs | an unknown turn is **not** replayed; a deliberate second turn is a new command | resync on reconnect | adapter cancel ACK != stopped |
+| auth flow | on start | the auth sub-operation | `pending/approved/failed/expired/cancelled` | one flow per provider | by **command identity** | sub-operation survives a restart | cancel |
 
-Rules:
-
-- **Never silently replay an unknown side effect.** If a `202` is lost and the client retries, the
-  command is identified by its **target** (idempotent by target for these operations); a turn is an
-  exception - an unknown turn is **not** replayed.
-- **Unknown/interrupted terminal states are allowed**; exactly-once is not claimed. A late
-  completion from an old runner must not be accepted as the result of a newer instance (this is
-  the same rule as 8a).
+- **Unknown/interrupted terminal states are allowed**; exactly-once beyond the retention window is
+  not claimed. A late completion from an old runner must not be accepted as the result of a newer
+  instance (same rule as 10).
 - **`Location` and the result must be explainable after they expire** - a deleted resource may
   return `404`, but the contract must say whether the result is retained or expired, and why.
 - **"No operation object" means no generic job**; existing sub-resources (an auth operation) stay.
@@ -433,7 +467,7 @@ numbers as **measured later**, not asserted:
 | requirement | mechanism (what it gives - and does not) |
 |---|---|
 | thousands of idle connections | **tokio multi-thread runtime**, one async task per connection; an idle connection is a parked task, **not** a dedicated thread. This is the ordinary result for an event-driven server; it is still to be **measured**, not guaranteed by the runtime. |
-| no request path blocks the loop | handlers are `async`; the only blocking work (bundled `rusqlite`, some fs) goes to **`spawn_blocking`**. The type system makes a *synchronous* call visible, but it does **not** by itself prove the loop never blocks - review and measurement do. |
+| no request path blocks the loop | handlers are `async`; the only blocking work (bundled `rusqlite`, some fs) goes to **`spawn_blocking`**. Treating "no blocking call on the async path" as an **explicit blocking boundary is a code-review convention**, not something the type system proves; review and measurement decide. |
 | a long operation does not hold a connection | it is **detached** (`accepted(location, work)` -> `tokio::spawn`); the client is answered `202` at once. |
 | bounded acceptance, not only bounded execution | **there must be a bound on how many commands are ACCEPTED**, not just how many run: an explicit budget per operation class, active vs waiting counted separately, fair scheduling by operation/resource, and short reads/cancel still served. A `Semaphore` bounds concurrency; it does **not** by itself promise fair progress. |
 | two heavyweight operations do not starve each other | each is a task; bounded parts (downloads) sit behind a `Semaphore`. Fairness is a **policy to define and verify**, not a property the primitive grants. |

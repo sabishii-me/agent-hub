@@ -61,12 +61,15 @@ change the architecture if it fails) and its exit condition.
 ## T4 — Long operations: acceptance, result ownership, SSE convergence (G4)
 - **What**: semantics table in ARCHITECTURE 11.
 - **Minimal implementation**: the resource answers accepted/in-progress/failed/unknown through GET;
-  the command is idempotent by target (a turn is not replayed); SSE has subscribe-then-read, a
-  bounded subscriber, and a rule for an expired `Last-Event-ID`.
+  **a logical command identity distinguishes a retry from a new intent** (ARCHITECTURE 11, R1) -
+  same identity+request returns the original, same identity+different request conflicts, a new
+  identity is a new command even for the same target; a turn is not replayed; SSE has
+  subscribe-then-read, a bounded subscriber, and a rule for an expired `Last-Event-ID`.
 - **Exit condition**: for install/remove, start/fork/compact, turn and auth: a lost `202` retried
-  does not double-apply; a restart leaves a state a client can interpret; an unknown terminal state
-  is readable; SSE does not lose the last change across a drop/overflow/restart. **Affects the
-  route: no** (semantics are decided).
+  does not double-apply **while a deliberate second command on the same target still executes** (a
+  second fork, an install then an upgrade); a restart leaves a state a client can interpret; an
+  unknown terminal state is readable; SSE does not lose the last change across a
+  drop/overflow/restart. **Affects the route: no** (the identity model is decided; this proves it).
 
 ## T5 — Adapter / skills / session boundaries (G5)
 - **What**: the shared adapter library (written once), baseline implemented by the adapter, native
@@ -101,7 +104,7 @@ change the architecture if it fails) and its exit condition.
 | T3 recovery | no | implement the stated rules |
 | T4 async/SSE semantics | no | implement the stated semantics |
 | T5 adapter boundary / bridge | no (bridge is a deferred gate) | pick or defer the bridge |
-| T6 numbers | no | tune budgets; the architecture stands |
+| T6 numbers | no | first adjust within the stated bounds; if a bound cannot meet the constraint, submit an explicit design change (do not assume the architecture cannot change) |
 
 **None of these is a merge condition for the architecture stage.** They are the implementation
 stage's tasks; the architecture states the design and the exit conditions, and does not claim the

@@ -264,20 +264,20 @@ selection is **layered** - workspace and session - and the adapter resolves the 
 then hands the harness explicit paths with discovery off. Today the hub is pinned to the
 coarsest (one set per harness); that is the thing to remove.
 
-**SECURITY (the delivery rule).** The agent must not be able to rewrite its skills, and must
-not be able to reach (edit) its extensions - today it can edit the gating extension and bypass
-approval. The delivery rule that fixes both:
+**SECURITY (the delivery rule) - superseded by o6.** This section first claimed that placing
+extensions/skills in a hub-owned directory and turning discovery off would make the agent unable
+to rewrite them. **That guarantee is not valid** and is replaced by o6 below (and ARCHITECTURE §7):
+placement **reduces accidental loading and path exposure; it is not an authorization boundary**.
+What holds as a design rule is only the placement itself:
 
 1. place extensions and skills in a **hub-owned directory outside the agent's workspace**;
 2. launch the harness with **discovery off** and explicit paths (pi/jouzu: `-ne -e <path> ...`,
-   `--no-skills --skill <path>`; dsh: already outside);
-3. the agent can then neither add nor edit a trust-bearing extension, nor write a skill;
-4. the approval gate rests on the **adapter** (which already sees every tool call) plus an
-   extension loaded from the hub-owned dir - never on a file in the workspace.
+   `--no-skills --skill <path>`; dsh: already outside).
 
-Where the placement lives is the adapter's choice, and today pi/jouzu place extensions into
-`<cwd>/.pi/extensions` with `--approve`. Moving the placement to a hub-owned directory with
-discovery off is adapter-side; no harness change. (The adapter-shipped extensions stay part of
+Whether a trust-bearing extension or a skill can be **changed** by the agent is a separate,
+unresolved matter (OS principal/permissions, tool confinement) - see o6 / ARCHITECTURE §7 and the
+security task (VERIFICATION-TASKS T2). Placement is the adapter's choice; today pi/jouzu place into
+`<cwd>/.pi/extensions` with `--approve`. (The adapter-shipped extensions stay part of
 the adapter - see "Extensions: two kinds" - the point here is only WHERE they are placed.)
 
 ## Model providers are DATA; the hub provides the function (DECIDED)
