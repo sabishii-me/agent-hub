@@ -10,6 +10,8 @@ use agent_hub_db::Db;
 use agent_hub_events::Bus;
 use agent_hub_plugins::routes::{routes as plugin_routes, PluginsState};
 use agent_hub_plugins::Plugins;
+use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
+use agent_hub_sessions::Sessions;
 use agent_hub_transport::{finish, routes, Admission, Transport};
 
 #[tokio::main]
@@ -43,9 +45,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plugins = Plugins::new(db, &plugins_root, bus.clone());
     let plugin_state = PluginsState::new(plugins, transport.clone());
 
+    // A second connection for the sessions domain (each domain owns its handle).
+    let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
+    let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir);
+    let session_state = SessionsState::new(sessions);
+
     // One axum app: the transport surface plus the domain routes.
     let app = finish(routes(), transport)
-        .merge(plugin_routes().with_state(plugin_state));
+        .merge(plugin_routes().with_state(plugin_state))
+        .merge(session_routes().with_state(session_state));
 
     let addr = std::env::var("AGENT_HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
