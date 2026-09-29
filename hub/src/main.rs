@@ -12,6 +12,8 @@ use agent_hub_plugins::routes::{routes as plugin_routes, PluginsState};
 use agent_hub_plugins::Plugins;
 use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
 use agent_hub_sessions::Sessions;
+use agent_hub_providers::routes::{routes as provider_routes, ProvidersState};
+use agent_hub_providers::{ProviderStore, Providers};
 use agent_hub_transport::{finish, routes, Admission, Transport};
 
 #[tokio::main]
@@ -50,10 +52,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = Sessions::new(sessions_db, bus.clone(), &data_dir);
     let session_state = SessionsState::new(sessions);
 
+    // Providers: one JSON file per provider under the data dir.
+    let providers = Providers::new(ProviderStore::new(data_dir.join("providers")));
+    let provider_state = ProvidersState::new(providers);
+
     // One axum app: the transport surface plus the domain routes.
     let app = finish(routes(), transport)
         .merge(plugin_routes().with_state(plugin_state))
-        .merge(session_routes().with_state(session_state));
+        .merge(session_routes().with_state(session_state))
+        .merge(provider_routes().with_state(provider_state));
 
     let addr = std::env::var("AGENT_HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;

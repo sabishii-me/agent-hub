@@ -14,6 +14,7 @@ agent-hub-transport = { path = "../crates/transport" }
 agent-hub-plugins = { path = "../crates/plugins" }
 agent-hub-db = { path = "../crates/db" }
 agent-hub-sessions = { path = "../crates/sessions" }
+agent-hub-providers = { path = "../crates/providers" }
 axum.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
