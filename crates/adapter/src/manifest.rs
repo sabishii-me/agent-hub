@@ -18,6 +18,9 @@ pub struct AdapterManifest {
     pub command: Option<Vec<String>>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Harness-side extensions this plugin ships (registry defaults).
+    #[serde(default)]
+    pub extensions: Vec<String>,
     pub name: Option<String>,
     pub base: Option<String>,
     pub version: Option<String>,
@@ -105,5 +108,40 @@ impl AdapterManifest {
                 })
                 .collect(),
         )
+    }
+}
+
+/// An extension a plugin ships: an id (its `extensions/<id>` directory name).
+#[derive(Debug, Clone)]
+pub struct ExtensionEntry {
+    pub id: String,
+    pub dir: std::path::PathBuf,
+}
+
+impl AdapterManifest {
+    /// The extensions this plugin ships: the directory names under its
+    /// `extensions/`, or the `extensions` array the manifest declares. The union,
+    /// because a manifest may declare ids that also have directories.
+    pub fn shipped_extensions(&self, dir: &std::path::Path) -> Vec<ExtensionEntry> {
+        use std::collections::BTreeMap;
+        let mut by_id: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
+        let ext_root = dir.join("extensions");
+        if let Ok(entries) = std::fs::read_dir(&ext_root) {
+            for e in entries.flatten() {
+                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let id = e.file_name().to_string_lossy().to_string();
+                    if !id.starts_with('.') {
+                        by_id.insert(id, e.path());
+                    }
+                }
+            }
+        }
+        for id in &self.extensions {
+            by_id.entry(id.clone()).or_insert_with(|| ext_root.join(id));
+        }
+        by_id
+            .into_iter()
+            .map(|(id, dir)| ExtensionEntry { id, dir })
+            .collect()
     }
 }

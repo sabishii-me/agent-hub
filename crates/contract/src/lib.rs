@@ -474,26 +474,6 @@ fn add_null_type(out: &mut JMap<String, Value>) {
     }
 }
 
-/// Rewrite every `#/defs/x` occurrence (in `$ref` values anywhere) to `#/$defs/x`.
-fn rewrite_refs(v: Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut out = JMap::new();
-            for (k, val) in m {
-                if k == "$ref" {
-                    if let Value::String(s) = &val {
-                        out.insert(k, Value::String(ref_target(s).unwrap_or_else(|_| s.clone())));
-                        continue;
-                    }
-                }
-                out.insert(k, rewrite_refs(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.into_iter().map(rewrite_refs).collect()),
-        other => other,
-    }
-}
 
 #[cfg(test)]
 mod tests {

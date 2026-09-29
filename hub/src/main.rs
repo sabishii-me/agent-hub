@@ -61,6 +61,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     selfcheck::check_error_codes(&declared_codes, &error_table)
         .map_err(|e| format!("self-check failed: {e}"))?;
+
+    // The surface check (ARCHITECTURE 13.4): report which contract routes the hub
+    // does not mount yet. Not every route is implemented (ARCHITECTURE 18), so
+    // this is a report at boot, not a refusal.
+    if let Ok(contract_v1) = std::fs::read_to_string(contract_dir.join("v1.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .ok_or(())
+    {
+        let mounted = selfcheck::mounted_surface();
+        match selfcheck::check_surface(&mounted, &contract_v1) {
+            Ok(()) => tracing::info!("the mounted surface matches contract/v1.json"),
+            Err(report) => tracing::warn!(%report, "surface self-check"),
+        }
+    }
     let errors = ErrorRenderer::new(error_table);
 
     // The data layer and the plugins domain. Recovery runs before serving.

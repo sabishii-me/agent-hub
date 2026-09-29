@@ -179,6 +179,41 @@ async fn the_adapter_receives_the_agent_hub_environment() {
 }
 
 #[tokio::test]
+async fn the_adapter_env_installs_the_plugins_shipped_extensions() {
+    // A plugin ships `extensions/plan`; the hub writes it into the harness dir
+    // it hands over as AGENT_HUB_INSTALLED_EXTENSIONS_DIR.
+    let root = tmp("extenv");
+    let dir = root.join("fake");
+    fs::create_dir_all(dir.join("extensions/plan")).unwrap();
+    fs::write(dir.join("extensions/plan/plan.js"), "// plan
+").unwrap();
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-adapter.mjs"),
+        dir.join("adapter.mjs"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("manifest.json"),
+        r#"{"id":"fake","pluginType":"harness-adapter","protocol":0,
+            "command":["node","adapter.mjs"],"capabilities":["models"],
+            "extensions":["plan"]}"#,
+    )
+    .unwrap();
+
+    let data = tmp("extenv-data");
+    let adapters = Adapters::new(vec![root], data.clone(), Bus::new(8, 8));
+    adapters.scan();
+    let env = adapters.adapter_env(&adapters.get("fake").unwrap());
+    let ext = env
+        .iter()
+        .find(|(k, _)| k == "AGENT_HUB_INSTALLED_EXTENSIONS_DIR")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let installed = PathBuf::from(&ext).join("plan/plan.js");
+    assert!(installed.exists(), "the shipped extension must be installed: {installed:?}");
+}
+
+#[tokio::test]
 async fn a_bad_protocol_version_is_refused() {
     let root = tmp("protocol");
     let dir = root.join("bad");

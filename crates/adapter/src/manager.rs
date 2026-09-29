@@ -105,7 +105,20 @@ impl Adapters {
         let extensions_dir = base.join("extensions");
         let _ = std::fs::create_dir_all(&harness_dir);
         let _ = std::fs::create_dir_all(&skills_dir);
+        // Install the plugin's shipped extensions (its registry defaults). The
+        // hub writes them here; the adapter places them where its harness reads
+        // them, with discovery off. A selection a PATCH narrows is a later step.
+        let _ = std::fs::remove_dir_all(&extensions_dir);
         let _ = std::fs::create_dir_all(&extensions_dir);
+        if let Ok(harness) = self.get(id) {
+            for e in harness.manifest.shipped_extensions(&harness.directory) {
+                if e.dir.exists() {
+                    let _ = copy_tree(&e.dir, &extensions_dir.join(&e.id));
+                } else {
+                    let _ = std::fs::create_dir_all(extensions_dir.join(&e.id));
+                }
+            }
+        }
         HarnessEnv {
             harness_dir,
             skills_dir,
@@ -254,6 +267,20 @@ impl Adapters {
         let handle = self.ensure_started(id).await?;
         Ok(handle.request(method, params).await?)
     }
+}
+
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// Map an adapter notification to the contract's event name and payload.

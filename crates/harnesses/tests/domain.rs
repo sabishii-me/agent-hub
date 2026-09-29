@@ -34,6 +34,16 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
+fn install_fake_with_extensions(root: &std::path::Path, id: &str, capabilities: &[&str], extensions: &[&str]) {
+    install_fake(root, id, capabilities);
+    let dir = root.join(id);
+    for e in extensions {
+        fs::create_dir_all(dir.join("extensions").join(e)).unwrap();
+        fs::write(dir.join("extensions").join(e).join("x.js"), "// x
+").unwrap();
+    }
+}
+
 fn install_fake(root: &std::path::Path, id: &str, capabilities: &[&str]) {
     let dir = root.join(id);
     fs::create_dir_all(&dir).unwrap();
@@ -155,6 +165,30 @@ async fn unknown_harness_is_a_contract_code() {
     assert_eq!(r.status(), 404);
     let body: serde_json::Value = r.json().await.unwrap();
     assert_eq!(body["error"], "harness_not_found");
+}
+
+#[tokio::test]
+async fn management_lists_the_extensions_a_plugin_ships() {
+    let root = tmp("extmgmt");
+    install_fake_with_extensions(&root, "fake", &["models"], &["plan", "agent-presets"]);
+    let base = serve(state(root, tmp("extmgmt-data"))).await;
+
+    let m: serde_json::Value = reqwest::Client::new()
+        .get(format!("{base}/v1/hub/harnesses"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ext: Vec<String> = m["availableExtensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(ext.contains(&"plan".to_string()), "{ext:?}");
+    assert!(ext.contains(&"agent-presets".to_string()), "{ext:?}");
 }
 
 #[tokio::test]

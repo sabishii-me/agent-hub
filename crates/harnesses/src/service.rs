@@ -90,14 +90,13 @@ impl Harnesses {
                 })
             })
             .collect();
-        // The available extensions a plugin ships (by id), so a client knows what
-        // it may enable. Union over all harnesses.
+        // The union of extension ids across installed plugins: the only
+        // extensions a harness may be given (the contract's rule).
         let mut extensions: Vec<String> = Vec::new();
         for h in self.adapters.list() {
-            // The manifest's `extensions` (harness-side extension ids) is not
-            // surfaced by AdapterManifest yet; keep the list honest and empty
-            // until the extension domain lands.
-            let _ = h;
+            for e in h.manifest.shipped_extensions(&h.directory) {
+                extensions.push(e.id);
+            }
         }
         extensions.sort();
         extensions.dedup();

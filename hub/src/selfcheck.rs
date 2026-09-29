@@ -28,6 +28,61 @@ pub fn check_error_codes(declared: &[&str], table: &agent_hub_contract::ErrorTab
     }
 }
 
+/// The routes this build mounts, as `"METHOD /path"`. Kept beside the mounts so
+/// the surface check has a list to compare (ARCHITECTURE 13.4).
+pub fn mounted_surface() -> BTreeSet<String> {
+    [
+        "GET /v1/hub/status",
+        "GET /v1/hub/events",
+        // plugins
+        "GET /v1/hub/plugins",
+        "POST /v1/hub/plugins",
+        "DELETE /v1/hub/plugins/{id}",
+        "POST /v1/hub/plugins/{id}/prepare",
+        // sessions
+        "POST /v1/sessions",
+        "GET /v1/sessions",
+        "GET /v1/sessions/{id}",
+        "PATCH /v1/sessions/{id}",
+        "DELETE /v1/sessions/{id}",
+        "GET /v1/sessions/{id}/turns",
+        "POST /v1/sessions/{id}/turns",
+        "POST /v1/sessions/{id}/cancel",
+        "POST /v1/sessions/{id}/close",
+        "POST /v1/sessions/{id}/reopen",
+        "POST /v1/sessions/{id}/fork",
+        // providers
+        "GET /v1/hub/providers",
+        "POST /v1/hub/providers",
+        "GET /v1/hub/providers/{id}",
+        "PATCH /v1/hub/providers/{id}",
+        "DELETE /v1/hub/providers/{id}",
+        "POST /v1/hub/providers/{id}/logout",
+        "GET /v1/hub/providers/{id}/models",
+        "PATCH /v1/hub/providers/{id}/models",
+        "POST /v1/hub/providers/{id}/models/refresh",
+        "GET /v1/hub/providers/models/list",
+        // harnesses
+        "GET /v1/harnesses",
+        "GET /v1/harnesses/{id}/presets",
+        "GET /v1/harnesses/{id}/models",
+        "GET /v1/harnesses/{id}/tools",
+        "POST /v1/harnesses/{id}/enable",
+        "POST /v1/harnesses/{id}/disable",
+        "GET /v1/hub/harnesses",
+        "POST /v1/hub/harnesses/{id}/enable",
+        "POST /v1/hub/harnesses/{id}/disable",
+        // skills
+        "GET /v1/hub/skills",
+        "DELETE /v1/hub/skills/{id}",
+        "PUT /v1/hub/skills/{id}/files/{file...}",
+        "GET /v1/hub/skills/{id}/files/{file...}",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 /// Every route the hub mounts, as `"METHOD /path"`, compared against the
 /// contract's endpoints.
 pub fn check_surface(mounted: &BTreeSet<String>, contract: &serde_json::Value) -> Result<(), String> {

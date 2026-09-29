@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 
 use crate::record::ProviderRecord;
 use agent_hub_transport::ErrorRenderer;
 use crate::service::{CreateProvider, PatchProvider, ProviderError, Providers};
-use crate::store::StoreError;
 
 #[derive(Clone)]
 pub struct ProvidersState {

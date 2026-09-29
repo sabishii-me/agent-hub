@@ -10,6 +10,7 @@ dependencies = [
  "agent-hub-contract",
  "agent-hub-db",
  "agent-hub-events",
+ "agent-hub-extensions",
  "agent-hub-harnesses",
  "agent-hub-plugins",
  "agent-hub-providers",
@@ -65,6 +66,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agent-hub-extensions"
+version = "0.1.0"
+dependencies = [
+ "agent-hub-contract",
+ "agent-hub-transport",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tracing",
 ]
 
