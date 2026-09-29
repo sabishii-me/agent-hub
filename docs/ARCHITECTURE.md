@@ -18,8 +18,18 @@ Two things make Rust possible; both are decisions of this design, not accidents:
 With those, **the hub itself requires nothing from Node**; Rust gives the concurrency, the
 isolation and the process model structurally instead of by discipline.
 
-The decisions live in the desktop repository's ADR log (ADR-0001, 0009, 0010, 0011); this file is
-how they are carried out here.
+The decisions live in the **desktop repository's** ADR log (`sabishii-dev-agent-desktop`,
+`docs/decisions/`). The ones this file carries out:
+
+- **ADR-0001** - the hub owns session/turn state; a client renders its snapshot (events trigger a
+  re-read, they are never state).
+- **ADR-0009** - the hub is a concurrent, non-blocking service; long work reports through the
+  event stream; >= 100 concurrent connections.
+- **ADR-0010** - transport and infrastructure use mature components; business and contract logic
+  stay ours.
+- **ADR-0011** - the contract is the interface; implementations are private.
+
+This file is how they are carried out here.
 
 ---
 
