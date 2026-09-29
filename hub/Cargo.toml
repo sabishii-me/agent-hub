@@ -13,6 +13,7 @@ agent-hub-events = { path = "../crates/events" }
 agent-hub-contract = { path = "../crates/contract" }
 agent-hub-adapter = { path = "../crates/adapter" }
 agent-hub-harnesses = { path = "../crates/harnesses" }
+agent-hub-skills = { path = "../crates/skills" }
 agent-hub-transport = { path = "../crates/transport" }
 agent-hub-plugins = { path = "../crates/plugins" }
 agent-hub-db = { path = "../crates/db" }

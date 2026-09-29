@@ -1,0 +1,20 @@
+[package]
+name = "agent-hub-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+agent-hub-transport = { path = "../transport" }
+axum.workspace = true
+tokio = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+agent-hub-contract = { path = "../contract" }
+reqwest.workspace = true
+bytes = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

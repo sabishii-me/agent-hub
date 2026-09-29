@@ -13,6 +13,8 @@ use agent_hub_plugins::Plugins;
 use agent_hub_adapter::Adapters;
 use agent_hub_harnesses::routes::{routes as harness_routes, HarnessesState};
 use agent_hub_harnesses::Harnesses;
+use agent_hub_skills::routes::{routes as skill_routes, SkillsState};
+use agent_hub_skills::Skills;
 use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
 use agent_hub_sessions::Sessions;
 use agent_hub_providers::routes::{routes as provider_routes, ProvidersState};
@@ -89,12 +91,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     adapters.scan();
     let harness_state = HarnessesState::new(Harnesses::new(adapters), errors.clone());
 
+    // Skills: the hub stores the bytes and installs the effective set per harness.
+    let skills = Skills::new(&data_dir);
+    let skill_state = SkillsState::new(skills, errors.clone());
+
     // One axum app: the transport surface plus the domain routes.
     let app = finish(routes(), transport)
         .merge(plugin_routes().with_state(plugin_state))
         .merge(session_routes().with_state(session_state))
         .merge(provider_routes().with_state(provider_state))
-        .merge(harness_routes().with_state(harness_state));
+        .merge(harness_routes().with_state(harness_state))
+        .merge(skill_routes().with_state(skill_state));
 
     let addr = std::env::var("AGENT_HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
