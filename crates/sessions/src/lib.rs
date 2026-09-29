@@ -7,4 +7,7 @@ pub mod runtime;
 pub mod service;
 
 pub use runtime::{SessionProcess, Sessions as Runtime, StartError, StartSpec};
-pub use service::{CreateSession, HarnessSpec, SessionError, SessionView, Sessions};
+pub use service::{
+    CreateSession, HarnessSpec, SessionError, SessionView, Sessions, TurnOutcome, TurnRequest,
+    TurnView,
+};

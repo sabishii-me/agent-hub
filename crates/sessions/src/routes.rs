@@ -13,7 +13,7 @@ use axum::{Json, Router};
 
 use agent_hub_transport::{Accepted, DomainError, ErrorRenderer, RouteTable};
 
-use crate::service::{CreateOutcome, CreateSession, SessionError, Sessions};
+use crate::service::{CreateOutcome, CreateSession, SessionError, Sessions, TurnOutcome, TurnRequest};
 
 #[derive(Clone)]
 pub struct SessionsState {
@@ -38,9 +38,9 @@ fn table() -> RouteTable<SessionsState> {
         .get("/v1/sessions/{id}", get_one)
         .patch("/v1/sessions/{id}", not_implemented)
         .delete("/v1/sessions/{id}", remove)
-        .get("/v1/sessions/{id}/turns", not_implemented)
-        .post("/v1/sessions/{id}/turns", not_implemented)
-        .post("/v1/sessions/{id}/cancel", not_implemented)
+        .get("/v1/sessions/{id}/turns", list_turns)
+        .post("/v1/sessions/{id}/turns", send_turn)
+        .post("/v1/sessions/{id}/cancel", cancel_turn)
         .post("/v1/sessions/{id}/close", close)
         .post("/v1/sessions/{id}/reopen", reopen)
         .post("/v1/sessions/{id}/fork", not_implemented)
@@ -138,6 +138,46 @@ async fn reopen(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) 
         Ok(session) => {
             Json(serde_json::json!({ "session": session, "reopened": true })).into_response()
         }
+        Err(e) => err(&s, e),
+    }
+}
+
+/// POST /v1/sessions/{id}/turns - a LONG command: reserve the turn identity,
+/// answer `202 + Location`, and run the prompt detached. An unknown turn is never
+/// replayed; a second turn while one runs is refused.
+async fn send_turn(
+    State(s): State<SessionsState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<TurnRequest>,
+) -> Response {
+    let text = crate::service::text_of_request(&req.content);
+    match s.sessions.accept_turn(&id, req) {
+        Ok(TurnOutcome::Accepted(turn)) => {
+            let sessions = s.sessions.clone();
+            let sid = id.clone();
+            let tid = turn.id.clone();
+            tokio::spawn(async move {
+                sessions.run_turn(sid, tid, text).await;
+            });
+            let location = format!("/v1/sessions/{id}/turns");
+            Accepted::new(location, serde_json::json!({ "turn": turn })).into_response()
+        }
+        Ok(TurnOutcome::Replay(turn)) => Json(serde_json::json!({ "turn": turn })).into_response(),
+        Err(e) => err(&s, e),
+    }
+}
+
+async fn list_turns(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
+    match s.sessions.list_turns(&id) {
+        Ok(turns) => Json(serde_json::json!({ "turns": turns, "next_cursor": null })).into_response(),
+        Err(e) => err(&s, e),
+    }
+}
+
+async fn cancel_turn(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
+    let sessions = s.sessions.clone();
+    match sessions.cancel_turn(&id).await {
+        Ok(turn) => Json(serde_json::json!({ "turn": turn })).into_response(),
         Err(e) => err(&s, e),
     }
 }

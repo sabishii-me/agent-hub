@@ -10,6 +10,6 @@ pub mod bus;
 pub mod manager;
 pub mod manifest;
 
-pub use bus::{AgentBus, BusError, Notification};
+pub use bus::{AgentBus, BusError, Notification, Notifications, RequestHandle};
 pub use manager::{AdapterError, Adapters, Harness, HarnessStatus};
 pub use manifest::{AdapterManifest, ManifestError, ADAPTER_PROTOCOL_VERSION};

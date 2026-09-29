@@ -36,6 +36,17 @@ plumbing; the model call is whatever the adapter's runtime does and is not asser
   exposes the bus so a turn can send `session/prompt` on the SAME process.
 - The event bus and the `Accepted` transport helper (both exist).
 
+## Dependency found during implementation
+
+A **real model call** needs a provider credential the hub does not have in this
+environment. The turn PLUMBING is complete and verified (admit -> `session/prompt`
+on the session's process -> the adapter's own answer -> a terminal state); a turn
+without a credential ends `failed` with the adapter's own reason ("No API key found
+for the selected model"), which is honest. Asserting a completed model answer is
+**not claimed** and needs a credential (a minimal secret store) as an explicit
+prerequisite - the same conclusion the first slice reached. No fake provider or
+plaintext token is used to cross it.
+
 ## Exit conditions
 
 1. On the REAL hub: create -> active; `POST /turns` -> `202 + Location`; the turn

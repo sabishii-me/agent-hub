@@ -607,6 +607,19 @@ follows distinguishes a real, narrow component fact from a product capability.
   process exited (a stop failure is surfaced, not claimed as release) and is idempotent; `reopen`
   refuses a session that is still running. A database created by an older build gains the new
   columns through the additive `migrate` path on open.
+
+- **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
+  identity is the body `idempotencyKey`, reserved **durably** by the UNIQUE
+  `(session_id, idempotency_key)`; the same key with the same content returns the original turn,
+  the same key with different content is `idempotency_conflict`, and a **deliberate new turn while
+  one runs is refused** (`session_busy`, never queued). The turn runs detached: the hub sends
+  `session/prompt` on the **session's own process** and pumps the adapter's notifications into the
+  event bus (`turn.*`, `message.*`). `GET /v1/sessions/{id}/turns` lists the turns; `cancel` sends
+  `session/abort` and the turn ends on the adapter's end. **A real model call needs a provider
+  credential the hub does not have here, so a turn without one ends `failed` with the adapter's
+  own reason - honest, not a fake success.** The plumbing (admit -> prompt -> events -> terminal
+  state) is verified against the real pi adapter; the model call itself is a credential dependency,
+  not claimed.
 - **providers** (now): the credential is **not part of the record** (no `token` field), so a
   secret cannot be persisted there; the API refuses a credential until an OS secret store exists.
   Still not a product: the catalog fetch is unauthenticated, and the OS secret store is not built.

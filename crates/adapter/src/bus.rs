@@ -75,6 +75,12 @@ impl Notifications {
     pub async fn recv(&mut self) -> Option<Notification> {
         self.rx.recv().await
     }
+
+    /// An empty receiver (used to move the real one out without an Option).
+    pub fn closed() -> Self {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        Notifications { rx }
+    }
 }
 
 /// A running adapter process.

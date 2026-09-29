@@ -40,6 +40,7 @@ pub struct TurnRow {
     pub ended: Option<String>,
     pub native_turn_id: Option<String>,
     pub idempotency_key: String,
+    pub intent: String,
     pub created_at: String,
     pub ended_at: Option<String>,
 }
@@ -82,6 +83,7 @@ CREATE TABLE IF NOT EXISTS turns (
   ended            TEXT,
   native_turn_id   TEXT,
   idempotency_key  TEXT NOT NULL,
+  intent           TEXT NOT NULL DEFAULT '',
   created_at       TEXT NOT NULL,
   ended_at         TEXT,
   UNIQUE(session_id, idempotency_key)
@@ -240,12 +242,50 @@ impl crate::Db {
 
     // --- turns ---
 
+    /// Atomically reserve a turn by its command identity (the UNIQUE
+    /// (session_id, idempotency_key) is the decision point). Returns
+    /// `ReserveOutcome`:
+    /// * `Reserved` - a new turn row was inserted (state `admitted`);
+    /// * `Replay(id)` - the same key with the SAME intent (return that turn);
+    /// * `Conflict` - the same key with a DIFFERENT intent.
+    pub fn reserve_turn(
+        &self,
+        session_id: &str,
+        idempotency_key: &str,
+        intent: &str,
+        turn_id: &str,
+    ) -> Result<ReserveOutcome, DbError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT intent, id FROM turns WHERE session_id = ?1 AND idempotency_key = ?2",
+                params![session_id, idempotency_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let outcome = match existing {
+            Some((it, id)) if it == intent => ReserveOutcome::Replay(id),
+            Some(_) => ReserveOutcome::Conflict,
+            None => {
+                tx.execute(
+                    "INSERT INTO turns (id, session_id, state, ended, native_turn_id, idempotency_key, intent, created_at, ended_at)
+                     VALUES (?1, ?2, 'admitted', NULL, NULL, ?3, ?4, ?5, NULL)",
+                    params![turn_id, session_id, idempotency_key, intent, crate::now_utc()],
+                )?;
+                ReserveOutcome::Reserved
+            }
+        };
+        tx.commit()?;
+        Ok(outcome)
+    }
+
     pub fn insert_turn(&self, t: &TurnRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "INSERT INTO turns (id, session_id, state, ended, native_turn_id, idempotency_key, created_at, ended_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![t.id, t.session_id, t.state, t.ended, t.native_turn_id, t.idempotency_key, t.created_at, t.ended_at],
+            "INSERT INTO turns (id, session_id, state, ended, native_turn_id, idempotency_key, intent, created_at, ended_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![t.id, t.session_id, t.state, t.ended, t.native_turn_id, t.idempotency_key, t.intent, t.created_at, t.ended_at],
         )?;
         Ok(())
     }
@@ -258,12 +298,13 @@ impl crate::Db {
             ended: r.get(3)?,
             native_turn_id: r.get(4)?,
             idempotency_key: r.get(5)?,
-            created_at: r.get(6)?,
-            ended_at: r.get(7)?,
+            intent: r.get(6)?,
+            created_at: r.get(7)?,
+            ended_at: r.get(8)?,
         })
     }
 
-    const TURN_COLS: &'static str = "id, session_id, state, ended, native_turn_id, idempotency_key, created_at, ended_at";
+    const TURN_COLS: &'static str = "id, session_id, state, ended, native_turn_id, idempotency_key, intent, created_at, ended_at";
 
     /// A turn by its logical command identity (R1): the same key returns the
     /// same turn, so a retried `202` never starts a second turn.
@@ -319,6 +360,19 @@ impl crate::Db {
 /// build gains the new columns on open.
 pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     let add = |table: &str, column: &str, decl: &str| -> Result<(), rusqlite::Error> {
+        // A table that does not exist yet is created fresh by the schema; only an
+        // EXISTING table needs an added column.
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                params![table],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !table_exists {
+            return Ok(());
+        }
         let exists: bool = conn
             .prepare(&format!("PRAGMA table_info({table})"))?
             .query_map([], |r| r.get::<_, String>(1))?
@@ -332,6 +386,7 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // Sessions columns added after the first release.
     add("sessions", "native_ref", "TEXT")?;
     add("sessions", "start_error", "TEXT")?;
+    add("turns", "intent", "TEXT NOT NULL DEFAULT ''")?;
     Ok(())
 }
 

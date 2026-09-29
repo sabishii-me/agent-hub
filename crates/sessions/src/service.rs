@@ -173,11 +173,12 @@ impl Sessions {
         harness_exists: Box<dyn Fn(&str) -> bool + Send + Sync>,
         harness_spec: Box<dyn Fn(&str) -> Result<HarnessSpec, String> + Send + Sync>,
     ) -> Self {
+        let runtime = Runtime::new(bus.clone());
         Sessions {
             db,
             bus,
             data_dir: data_dir.into(),
-            runtime: Runtime::new(),
+            runtime,
             harness_exists,
             harness_spec,
             locks: Mutex::new(std::collections::HashMap::new()),
@@ -506,4 +507,192 @@ pub fn new_id(prefix: &str) -> String {
         .as_millis();
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{millis:x}-{n:x}")
+}
+
+/// A turn as the contract's `turnState`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnView {
+    pub id: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    #[serde(rename = "partialPersisted")]
+    pub partial_persisted: bool,
+    #[serde(rename = "partialItems")]
+    pub partial_items: i64,
+}
+
+/// What a turn admission returned.
+pub enum TurnOutcome {
+    /// A new turn, reserved durable; run the prompt detached.
+    Accepted(TurnView),
+    /// The same idempotency key and content: the original turn.
+    Replay(TurnView),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TurnRequest {
+    pub content: serde_json::Value,
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: String,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+impl Sessions {
+    /// Accept a turn: reserve its command identity DURABLY (the UNIQUE
+    /// (session, idempotencyKey) is the decision point), refuse a second turn
+    /// while one runs (`session_busy`, never queued), and reject an empty body.
+    /// An **unknown** turn is never replayed.
+    pub fn accept_turn(
+        &self,
+        session_id: &str,
+        req: TurnRequest,
+    ) -> Result<TurnOutcome, SessionError> {
+        if req.idempotency_key.trim().is_empty() {
+            return Err(SessionError::Validation("idempotencyKey is required".into()));
+        }
+        let session = self
+            .db
+            .session(session_id)?
+            .ok_or_else(|| SessionError::NotFound(session_id.into()))?;
+        if session.status != "active" {
+            return Err(SessionError::Validation(format!(
+                "the session is {}; it must be active to send a turn",
+                session.status
+            )));
+        }
+        let text = text_of(&req.content);
+        if text.is_empty() {
+            return Err(SessionError::Validation("content must contain text".into()));
+        }
+        let intent = format!("turn:{}", text);
+
+        // Reserve the turn by identity BEFORE any side effect.
+        let turn_id = new_id("t");
+        match self.db.reserve_turn(session_id, &req.idempotency_key, &intent, &turn_id)? {
+            agent_hub_db::ReserveOutcome::Reserved => {}
+            agent_hub_db::ReserveOutcome::Replay(id) => {
+                let t = self
+                    .db
+                    .turn(&id)?
+                    .ok_or_else(|| SessionError::NotFound(id.clone()))?;
+                return Ok(TurnOutcome::Replay(turn_view(&t)));
+            }
+            agent_hub_db::ReserveOutcome::Conflict => {
+                return Err(SessionError::Conflict(req.idempotency_key));
+            }
+        }
+
+        // Refuse a second turn while one is running: a deliberate new turn is a
+        // busy session, never queued (C-9).
+        if let Some(active) = self.db.active_turn(session_id)? {
+            if active.id != turn_id {
+                return Err(SessionError::Validation(
+                    "the session has a running turn; a new turn is refused, not queued".into(),
+                ));
+            }
+        }
+
+        let t = self.db.turn(&turn_id)?.ok_or_else(|| SessionError::NotFound(turn_id.clone()))?;
+        self.bus
+            .publish("turn.admitted", serde_json::json!({ "turn": turn_view(&t), "sessionId": session_id }));
+        Ok(TurnOutcome::Accepted(turn_view(&t)))
+    }
+
+    /// The detached half of a turn: send `session/prompt` on the session's own
+    /// process and move the turn to a terminal state when it ends. The adapter's
+    /// notifications (message.delta etc.) are pumped to the event bus separately.
+    pub async fn run_turn(self: Arc<Self>, session_id: String, turn_id: String, text: String) {
+        // A turn must have a running process; otherwise fail honestly.
+        if !self.runtime.is_running(&session_id) {
+            self.end_turn(&turn_id, "failed", Some("the session has no running process")).await;
+            return;
+        }
+        let _ = self
+            .db
+            .set_turn_state(&turn_id, "running")
+            .map(|_| self.bus.publish(
+                "turn.running",
+                serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
+            ));
+        let params = serde_json::json!({
+            "sid": session_id,
+            "message": text,
+            "clientMessageId": turn_id,
+        });
+        match self.runtime.request(&session_id, "session/prompt", params).await {
+            Ok(_) => self.end_turn(&turn_id, "completed", None).await,
+            Err(e) => self.end_turn(&turn_id, "failed", Some(&e.to_string())).await,
+        }
+    }
+
+    async fn end_turn(&self, turn_id: &str, ended: &str, cause: Option<&str>) {
+        let _ = self.db.end_turn(turn_id, ended, &now_utc());
+        if let Some(c) = cause {
+            let _ = self.db.set_turn_state(turn_id, "ended");
+            let _ = c;
+        }
+        self.bus.publish(
+            "turn.ended",
+            serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
+        );
+    }
+
+    pub fn list_turns(&self, session_id: &str) -> Result<Vec<TurnView>, SessionError> {
+        if self.db.session(session_id)?.is_none() {
+            return Err(SessionError::NotFound(session_id.into()));
+        }
+        Ok(self.db.list_turns(session_id)?.iter().map(turn_view).collect())
+    }
+
+    /// Cancel: idempotent. Sends `session/abort`; the turn ends when the adapter
+    /// confirms (an adapter ACK is NOT "stopped").
+    pub async fn cancel_turn(self: Arc<Self>, session_id: &str) -> Result<TurnView, SessionError> {
+        let active = self.db.active_turn(session_id)?.ok_or_else(|| {
+            SessionError::Validation("the session has no running turn to cancel".into())
+        })?;
+        let _ = self.db.set_turn_state(&active.id, "cancelling");
+        let _ = self
+            .runtime
+            .request(session_id, "session/abort", serde_json::json!({ "sid": session_id }))
+            .await;
+        self.end_turn(&active.id, "cancelled", None).await;
+        let t = self.db.turn(&active.id)?.ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+        Ok(turn_view(&t))
+    }
+}
+
+fn turn_view(t: &agent_hub_db::TurnRow) -> TurnView {
+    TurnView {
+        id: t.id.clone(),
+        state: t.state.clone(),
+        ended: t.ended.clone(),
+        cause: None,
+        partial_persisted: false,
+        partial_items: 0,
+    }
+}
+
+/// The plain text of a content array (public so the route can carry it to the
+/// detached task).
+pub fn text_of_request(content: &serde_json::Value) -> String {
+    text_of(content)
+}
+
+/// The plain text of a content array (this slice supports text parts).
+fn text_of(content: &serde_json::Value) -> String {
+    content
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
 }

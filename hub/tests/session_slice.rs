@@ -139,6 +139,74 @@ async fn real_hub_session_202_start_close() {
         .unwrap();
     assert_eq!(conflict.status(), 409);
 
+    // The turn lifecycle: admit (202) with a durable identity; a retry returns the
+    // same turn; a different body under the same key is a conflict. The prompt
+    // itself reaches the adapter (a real model call is not asserted - without a
+    // credential the turn ends failed, which is honest, not a fake success).
+    let turn_resp = client
+        .post(format!("{base}/v1/sessions/{id}/turns"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "idempotencyKey": "turn-1",
+            "content": [{ "type": "text", "text": "hello" }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(turn_resp.status(), 202, "a turn is a long command: 202");
+    let turn: serde_json::Value = turn_resp.json().await.unwrap();
+    let turn_id = turn["turn"]["id"].as_str().unwrap().to_string();
+
+    let turn_replay: serde_json::Value = client
+        .post(format!("{base}/v1/sessions/{id}/turns"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "idempotencyKey": "turn-1",
+            "content": [{ "type": "text", "text": "hello" }]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(turn_replay["turn"]["id"], turn_id, "same turn key returns the same turn");
+
+    let turn_conflict = client
+        .post(format!("{base}/v1/sessions/{id}/turns"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "idempotencyKey": "turn-1",
+            "content": [{ "type": "text", "text": "different" }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(turn_conflict.status(), 409);
+
+    // The turn is listed and reaches a terminal state.
+    let mut turn_ended = String::new();
+    for _ in 0..200 {
+        let turns: serde_json::Value = client
+            .get(format!("{base}/v1/sessions/{id}/turns"))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if let Some(t) = turns["turns"].as_array().and_then(|a| a.first()) {
+            let state = t["state"].as_str().unwrap_or("").to_string();
+            if state == "ended" {
+                turn_ended = t["ended"].as_str().unwrap_or("").to_string();
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!turn_ended.is_empty(), "the turn reaches a terminal state");
+
     // Close -> readonly.
     let closed: serde_json::Value = client
         .post(format!("{base}/v1/sessions/{id}/close"))

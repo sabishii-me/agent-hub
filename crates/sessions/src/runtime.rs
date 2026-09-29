@@ -22,11 +22,22 @@ pub struct SessionProcess {
     pub harness_id: String,
     pub native_ref: String,
     bus: Option<AgentBus>,
+    /// A cloneable handle to send requests on this session's process (a turn's
+    /// `session/prompt`/`session/abort`). Kept even while the bus lives.
+    requests: agent_hub_adapter::RequestHandle,
     /// What the adapter reported as applied by `config/set` (proof, not a claim).
     pub applied: Value,
 }
 
 impl SessionProcess {
+    /// Send a request on this session's process (a turn's prompt/abort).
+    pub async fn request(&self, method: &str, params: Value) -> Result<Value, StartError> {
+        self.requests
+            .request(method, params)
+            .await
+            .map_err(|e| StartError::Protocol(e.to_string()))
+    }
+
     /// Stop the session's process and CONFIRM it exited. Idempotent. On a failure
     /// the handle is **kept**, so a retry can try again - a failed stop never
     /// leaves an unrecoverable entry (N3).
@@ -71,17 +82,16 @@ pub struct StartSpec {
 /// The session runtime: the running session processes, keyed by sid.
 pub struct Sessions {
     running: Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<SessionProcess>>>>,
-}
-
-impl Default for Sessions {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Where an adapter's notifications become events.
+    events: agent_hub_events::Bus,
 }
 
 impl Sessions {
-    pub fn new() -> Self {
-        Sessions { running: Mutex::new(std::collections::HashMap::new()) }
+    pub fn new(events: agent_hub_events::Bus) -> Self {
+        Sessions {
+            running: Mutex::new(std::collections::HashMap::new()),
+            events,
+        }
     }
 
     /// Start a session against a real adapter: spawn the process, run
@@ -127,11 +137,33 @@ impl Sessions {
         let sid = spec.sid.clone();
         let harness_id = spec.harness_id.clone();
         let applied_out = applied.clone();
+        let bus_requests = bus.requests.clone();
+        let requests_out = bus_requests.clone();
+        // Pump this session's notifications into the event bus. Every frame names
+        // its session, so one stream carries every session's turn events.
+        let events = self.events.clone();
+        let pump_sid = sid.clone();
+        let mut notifications = std::mem::replace(
+            &mut bus.notifications,
+            agent_hub_adapter::Notifications::closed(),
+        );
+        tokio::spawn(async move {
+            while let Some(n) = notifications.recv().await {
+                let mut payload = n.params.clone();
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert("sessionId".into(), json!(pump_sid));
+                } else {
+                    payload = json!({ "sessionId": pump_sid, "data": payload });
+                }
+                events.publish(n.method, payload);
+            }
+        });
         let process = SessionProcess {
             sid: sid.clone(),
             harness_id,
             native_ref: native_ref.clone(),
             bus: Some(bus),
+            requests: requests_out,
             applied,
         };
         self.running
@@ -145,8 +177,23 @@ impl Sessions {
             harness_id: spec.harness_id.clone(),
             native_ref,
             bus: None,
+            requests: bus_requests,
             applied: applied_out,
         })
+    }
+
+    /// Send a request on a session's own process (a turn's prompt/abort). Fails
+    /// if the session has no running process.
+    pub async fn request(&self, sid: &str, method: &str, params: Value) -> Result<Value, StartError> {
+        let handle = self
+            .running
+            .lock()
+            .expect("running")
+            .get(sid)
+            .cloned()
+            .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
+        let guard = handle.lock().await;
+        guard.request(method, params).await
     }
 
     /// Whether a process is running for this session.
