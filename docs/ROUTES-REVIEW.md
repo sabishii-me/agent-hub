@@ -263,34 +263,22 @@ the adapter - see "Extensions: two kinds" - the point here is only WHERE they ar
 
 ## Open questions (the ones still real)
 
-**(o4) the harness registry is a filtered plugin list (analysed; a decision is needed).**
+**(o4) DECIDED - `/v1/harnesses` is a thin, top-level projection that hides "harness is a
+plugin".** A harness is a **top-level resource** (the thing a user runs), not a view of the
+plugin list. `/v1/harnesses` stays a **thin projection** of the plugin list filtered to
+`pluginType === 'harness-adapter'`, for two reasons the owner gave: it **conveniences the UI**
+with a stable harness shape, and it **hides the internal fact that a harness is a plugin** - a
+consumer must not depend on that. So it is a projection over `/v1/plugins`, derived - never a
+second store, and consumers never see the plugin machinery through it.
 
-Confirmed from the consumer (the desktop) and the two shapes: `/v1/harnesses` returns almost
-exactly a `Plugin` restricted to `pluginType === 'harness-adapter'`. The desktop already calls
-BOTH `/v1/hub/plugins` (the plugin list) and `/v1/harnesses` (the roster), and the two types
-overlap field for field:
+The **runtime answers stay per harness** at `/v1/harnesses/{id}/...`
+(models/presets/tools/auth/connections) - those are the harness speaking. And
+`/v1/harnesses/{id}/extensions` is the extension sub-resource (harness context).
 
-| harness row field | also a plugin field |
-|---|---|
-| id, name, icons, capabilities | yes |
-| enabled, missing, state | yes (plugin enable/state) |
-| adapterVersion | plugin.version |
-| runtimeVersion, runtimePackage | plugin.runtime / manifest |
-
-So the "harness registry" is **the plugin list, filtered by type**, with a harness-flavoured
-naming. It is not a second source of truth; it is a projection.
-
-Two honest options:
-
-- **(A) drop the list endpoint.** The UI asks `GET /v1/plugins?type=harness-adapter` and reads
-  the two versions off the plugin fields (`version`, `runtime.version`). One list.
-- **(B) keep `/v1/harnesses` as a thin, explicitly-derived projection of the plugin list**
-  (filter by type), so the UI keeps a stable "harness roster" shape - but it is a VIEW, derived
-  from `/v1/plugins`, never a second store.
-
-Either way, the **runtime answers stay per harness** at `/v1/harnesses/{id}/...`
-(models/presets/tools/auth/connections) - those are the harness speaking, not the plugin list.
-And `/v1/harnesses/{id}/extensions` is the extension sub-resource (harness context).
+**(o5) DECIDED - no anonymous discovery.** `/v1/harnesses` was the only token-free route; the
+owner: there is no reason for it. The hub is loopback and a client already holds the token
+(from `endpoint.json`); discovery does not need to be anonymous. **Every route requires the
+token** - a contract change (the one exempt route becomes 401).
 
 **(o6) is the security delivery rule settled enough to implement?** The direction is decided
 (above): hub-owned paths outside the workspace, discovery off, adapter-enforced gate. What is
