@@ -67,8 +67,9 @@ impl ProviderStore {
         secret_ref: &str,
         expected_incarnation: &str,
         expected_revision: u64,
+        expected_config: &str,
     ) -> Result<String, StoreError> {
-        match self.db.begin_provider_op(provider, op, secret_ref, expected_incarnation, expected_revision) {
+        match self.db.begin_provider_op(provider, op, secret_ref, expected_incarnation, expected_revision, expected_config) {
             Ok(id) => Ok(id),
             Err(agent_hub_db::DbError::Conflict(m)) => Err(StoreError::Pending(m)),
             Err(e) => Err(StoreError::Db(e)),

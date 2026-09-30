@@ -283,3 +283,21 @@ Per the owner's correction, the development-era legacy/compat layer is REMOVED:
 
 Kept (NOT legacy): the current schema, `provider_ops` journal with the intended
 row-state, the per-instance secret namespace, and current-format crash recovery.
+
+## S1: every provider mutator/consumer honors the unresolved barrier (this pass)
+
+The pending guard was only on the resolver and the credential writes, so
+`refresh` (which SENDS the token as a bearer), a token-less PATCH and a model
+selection could bypass it. Now a single `admit_no_pending(id)` check runs at the top
+of `patch`, `set_selection` and `refresh`, under the provider lock: every entry that
+changes the row's config/revision or consumes the credential refuses while a
+transition is unresolved (`ProviderError::Unresolved` -> `revision_conflict`).
+
+Recovery also no longer reads an UNRELATED update as an op's commit: the journal now
+records `expected_config`, a stable digest of the row's `url`/`api`/`declarations`, and
+`intent_matches` requires incarnation AND revision AND that digest. An unrelated change
+that happens to reach the same revision (a URL patch, a selection) has a different
+digest and is refused.
+
+Tests: `every_mutator_refuses_while_a_transition_is_unresolved`,
+`recovery_rejects_an_unrelated_update_at_the_same_revision`.

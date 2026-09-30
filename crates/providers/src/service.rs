@@ -125,6 +125,30 @@ impl Providers {
         format!("{}:provider-{id}", self.namespace)
     }
 
+    /// A stable digest of the row's CONFIGURATION (url + api + declarations). It
+    /// EXCLUDES `secret_ref`, which recovery itself sets: including it would make a
+    /// create never match its own intent. Recorded in the journal so recovery can
+    /// prove a row is THIS operation's result, not an unrelated update that reached
+    /// the same revision (TASK-048 F1-current).
+    fn config_digest(rec: &ProviderRecord) -> String {
+        let decl = serde_json::to_string(&rec.declarations).unwrap_or_default();
+        // A simple, dependency-free digest; collisions are not security-critical
+        // here (it distinguishes concurrent writes, not attackers).
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut feed = |bytes: &[u8]| {
+            for b in bytes {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+        };
+        feed(rec.url.as_deref().unwrap_or("").as_bytes());
+        feed(b"");
+        feed(rec.api.as_deref().unwrap_or("").as_bytes());
+        feed(b"");
+        feed(decl.as_bytes());
+        format!("{h:016x}")
+    }
+
     /// Set `token_configured` from the authoritative secret store, using the
     /// row's OWN stored reference. A row with no reference is simply not
     /// configured: we do NOT fall back to a re-derived key, so a rebuilt provider
@@ -208,6 +232,7 @@ impl Providers {
                 &self.secret_ref(&id),
                 &record.incarnation,
                 record.revision,
+                &Self::config_digest(&record),
             )?;
             if let Err(e) = self.secrets.set(&self.secret_ref(&id), t) {
                 // Roll back the row so a failed credential does not leave a
@@ -248,9 +273,24 @@ impl Providers {
         Ok(record)
     }
 
+    /// Refuse an operation that MUTATES a provider's config/revision or CONSUMES
+    /// its credential while an unresolved credential transition stands. This is the
+    /// single admission check every such entry uses; the provider lock makes the
+    /// check and the operation one step. A create for a fresh id has no pending op,
+    /// so it is unaffected (TASK-048 F1-current).
+    fn admit_no_pending(&self, id: &str) -> Result<(), ProviderError> {
+        if self.store.has_pending_op(id)? {
+            return Err(ProviderError::Unresolved(format!(
+                "provider `{id}` has an unresolved credential transition; resolve it before changing configuration or consuming the credential"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn patch(&self, id: &str, req: PatchProvider) -> Result<ProviderRecord, ProviderError> {
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
+        self.admit_no_pending(id)?;
         let mut rec = self.store.get(id)?;
         let mut bump = false;
         if let Some(v) = req.label {
@@ -302,6 +342,7 @@ impl Providers {
                         &reference,
                         &intended_incarnation,
                         intended_revision,
+                        &Self::config_digest(&rec),
                     )?);
                     self.secrets
                         .set(&reference, &t)
@@ -315,6 +356,7 @@ impl Providers {
                         &reference,
                         &intended_incarnation,
                         intended_revision,
+                        &Self::config_digest(&rec),
                     )?);
                     self.secrets
                         .delete(&reference)
@@ -352,7 +394,14 @@ impl Providers {
         // boot sweep finishes the row deletion (no orphan credential).
         let row = self.store.get(id)?;
         let reference = row.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
-        let op = self.store.begin_op(id, "delete", &reference, &row.incarnation, row.revision)?;
+        let op = self.store.begin_op(
+            id,
+            "delete",
+            &reference,
+            &row.incarnation,
+            row.revision,
+            &Self::config_digest(&row),
+        )?;
         self.secrets
             .delete(&reference)
             .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
@@ -367,7 +416,14 @@ impl Providers {
         let _guard = lock.lock().await;
         let mut rec = self.store.get(id)?;
         let reference = rec.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
-        let op = self.store.begin_op(id, "logout", &reference, &rec.incarnation, rec.revision)?;
+        let op = self.store.begin_op(
+            id,
+            "logout",
+            &reference,
+            &rec.incarnation,
+            rec.revision,
+            &Self::config_digest(&rec),
+        )?;
         self.secrets
             .delete(&reference)
             .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
@@ -385,6 +441,7 @@ impl Providers {
     ) -> Result<ProviderRecord, ProviderError> {
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
+        self.admit_no_pending(id)?;
         let mut rec = self.store.get(id)?;
         if let Some(cat) = &rec.catalog {
             for want in &enabled {
@@ -415,6 +472,10 @@ impl Providers {
         // refresh cannot interleave with a patch/delete/create of the same id.
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
+        // A refresh CONSUMES the credential (it sends it as a bearer) and rewrites
+        // the row: it must not run over an unresolved transition, or it could send a
+        // new token to an old URL (TASK-048 F1-current).
+        self.admit_no_pending(id)?;
         let read = self.store.get(id)?;
         let url = read
             .url
@@ -541,10 +602,15 @@ impl Providers {
                 Err(e) => return Err(ProviderError::Store(e)),
             };
             // Did the row land EXACTLY as the operation intended? Only then may we
-            // bless the credential with this row.
+            // bless the credential with this row. Matching the incarnation AND
+            // revision AND the CONFIG DIGEST proves the row is THIS operation's
+            // result: an unrelated update that happens to reach the same revision
+            // (a URL patch, a selection change) has a different digest and must NOT
+            // be read as this op's commit (TASK-048 F1-current).
             let intent_matches = |r: &ProviderRecord| {
                 Some(r.incarnation.as_str()) == p.expected_incarnation.as_deref()
                     && Some(r.revision) == p.expected_revision
+                    && p.expected_config.as_deref() == Some(Self::config_digest(r).as_str())
             };
             match row {
                 Some(mut r) if intent_matches(&r) => {
@@ -665,7 +731,9 @@ mod recovery_tests {
         // An unavailable secret store: every read/write errors.
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe_unavailable_for_test());
         let p = Providers::new(store, secrets, "test-instance");
-        p.store.begin_op("p1", "create", "test-instance:provider-p1", "inc", 1).unwrap();
+        p.store
+            .begin_op("p1", "create", "test-instance:provider-p1", "inc", 1, "d")
+            .unwrap();
         p.recover_pending();
         // The entry is still there: the failure kept it for retry.
         let pending = p.store.pending_ops().unwrap();
@@ -699,7 +767,9 @@ mod recovery_tests {
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe_unavailable_for_test());
         let p = Providers::new(store, secrets, "test-instance");
         p.store.create(&arecord("p1", Some("https://x.test"))).unwrap();
-        p.store.begin_op("p1", "patch", "test-instance:provider-p1", "inc", 1).unwrap();
+        p.store
+            .begin_op("p1", "patch", "test-instance:provider-p1", "inc", 1, "d")
+            .unwrap();
         let e = p.resolve_grant("p1").await;
         assert!(matches!(e, Err(ProviderError::RevisionConflict(_))));
     }
@@ -751,7 +821,14 @@ mod recovery_intent_tests {
         // ...but the row save did NOT (the journal recorded intended revision 2; the
         // row stayed at revision 1).
         p.store
-            .begin_op("p1", "patch", &reference, &rec.incarnation, rec.revision + 1)
+            .begin_op(
+                "p1",
+                "patch",
+                &reference,
+                &rec.incarnation,
+                rec.revision + 1,
+                &Providers::config_digest(&rec),
+            )
             .unwrap();
 
         p.recover_pending();
@@ -760,6 +837,92 @@ mod recovery_intent_tests {
         assert_eq!(secrets.get(&reference).unwrap(), None, "the mismatched credential is dropped");
         rec = p.store.get("p1").unwrap();
         assert_eq!(rec.secret_ref, None, "the row does not point at a dropped credential");
+    }
+
+
+    /// S1: while a credential transition is unresolved, the OTHER entries that
+    /// consume the credential or change the row MUST refuse - not just the resolver.
+    #[tokio::test]
+    async fn every_mutator_refuses_while_a_transition_is_unresolved() {
+        let db = agent_hub_db::Db::open_in_memory().unwrap();
+        let store = ProviderStore::new(db);
+        let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe(format!(
+            "agent-hub-test-s1-{}",
+            std::process::id()
+        )));
+        // The barrier is DB-level and needs no OS keychain, so run regardless.
+        let p = Providers::new(store, secrets, "itest");
+        let rec = p.store.create(&record("p1", "https://u0.test")).unwrap();
+        let reference = p.secret_ref("p1");
+        p.store
+            .begin_op("p1", "patch", &reference, &rec.incarnation, rec.revision + 1, "digest-x")
+            .unwrap();
+
+        // PATCH (no token), selection and refresh all refuse.
+        let patch = p
+            .patch(
+                "p1",
+                crate::service::PatchProvider {
+                    url: Some(Some("https://u2.test".to_string())),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(patch, Err(ProviderError::Unresolved(_))), "patch must refuse: {patch:?}");
+
+        let sel = p.set_selection("p1", vec!["m".into()]).await;
+        assert!(matches!(sel, Err(ProviderError::Unresolved(_))), "selection must refuse: {sel:?}");
+
+        let refresh = p.refresh("p1").await;
+        assert!(matches!(refresh, Err(ProviderError::Unresolved(_))), "refresh must refuse: {refresh:?}");
+
+        // The row was NOT bumped by any of them.
+        assert_eq!(p.store.get("p1").unwrap().revision, rec.revision);
+    }
+
+    /// S1: recovery must NOT read an UNRELATED update that reached the same
+    /// revision as this op's commit. The config digest distinguishes them.
+    #[tokio::test]
+    async fn recovery_rejects_an_unrelated_update_at_the_same_revision() {
+        let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe(format!(
+            "agent-hub-test-s1b-{}",
+            std::process::id()
+        )));
+        if !secrets.is_available() {
+            eprintln!("SKIP: no OS secret store");
+            return;
+        }
+        let db = agent_hub_db::Db::open_in_memory().unwrap();
+        let store = ProviderStore::new(db);
+        let p = Providers::new(store, secrets.clone(), "itest");
+        let mut rec = p.store.create(&record("p1", "https://U0.test")).unwrap();
+        let reference = p.secret_ref("p1");
+        // Journal the intended row state (revision 2, config U0).
+        secrets.set(&reference, "T-NEW").unwrap();
+        p.store
+            .begin_op(
+                "p1",
+                "patch",
+                &reference,
+                &rec.incarnation,
+                2,
+                &Providers::config_digest(&rec),
+            )
+            .unwrap();
+        // An UNRELATED update lands U2 at revision 2 (different config, same rev).
+        rec.url = Some("https://U2.test".into());
+        rec.revision = 2;
+        p.store.save(&rec).unwrap();
+
+        p.recover_pending();
+
+        // The digest differs, so recovery must NOT bless T-NEW; the credential is
+        // dropped and the row keeps its own (none).
+        assert_eq!(
+            secrets.get(&reference).unwrap(),
+            None,
+            "an unrelated update at the same revision must not be read as this op's commit"
+        );
     }
 
 }

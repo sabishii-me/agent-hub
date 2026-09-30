@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS provider_ops (
   expected_incarnation TEXT,
   expected_revision    INTEGER,
   intent_version       INTEGER,
+  expected_config      TEXT,
   created_at TEXT NOT NULL
 );
 "#;
@@ -204,6 +205,12 @@ CREATE TABLE IF NOT EXISTS provider_ops (
         /// post-write state (its revision is the PRE-write one). Recovery must not
         /// interpret a legacy revision with the new semantics (TASK-048 F1).
         pub intent_version: Option<i64>,
+        /// A stable digest of the row's CONFIGURATION the op intended to save
+        /// (`url`/`api`/`declarations`/`secret_ref`). Recovery matches ONLY when the
+        /// CURRENT row's digest equals this: an unrelated update that happens to
+        /// reach the same revision must NOT be read as this op's commit
+        /// (TASK-048 F1-current).
+        pub expected_config: Option<String>,
     }
 
 /// The current journal intent semantics. Bump when the meaning of
@@ -225,6 +232,7 @@ impl crate::Db {
         secret_ref: &str,
         expected_incarnation: &str,
         expected_revision: u64,
+        expected_config: &str,
     ) -> Result<String, DbError> {
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction()?;
@@ -242,8 +250,8 @@ impl crate::Db {
         }
         let id = format!("{provider}:{op}");
         tx.execute(
-            "INSERT INTO provider_ops (id, provider, op, secret_ref, expected_incarnation, expected_revision, intent_version, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, provider, op, secret_ref, expected_incarnation, expected_revision as i64, INTENT_VERSION, crate::now_utc()],
+            "INSERT INTO provider_ops (id, provider, op, secret_ref, expected_incarnation, expected_revision, intent_version, expected_config, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, provider, op, secret_ref, expected_incarnation, expected_revision as i64, INTENT_VERSION, expected_config, crate::now_utc()],
         )?;
         tx.commit()?;
         Ok(id)
@@ -272,7 +280,7 @@ impl crate::Db {
     pub fn pending_provider_ops(&self) -> Result<Vec<PendingOp>, DbError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, provider, op, secret_ref, expected_incarnation, expected_revision, intent_version FROM provider_ops",
+            "SELECT id, provider, op, secret_ref, expected_incarnation, expected_revision, intent_version, expected_config FROM provider_ops",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -284,6 +292,7 @@ impl crate::Db {
                     expected_incarnation: r.get(4)?,
                     expected_revision: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
                     intent_version: r.get::<_, Option<i64>>(6)?,
+                    expected_config: r.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -299,7 +308,7 @@ mod op_journal_tests {
     #[test]
     fn a_pending_op_is_visible_and_cleared_by_its_id() {
         let db = Db::open_in_memory().unwrap();
-        let id = db.begin_provider_op("p1", "create", "ns:provider-p1", "inc1", 1).unwrap();
+        let id = db.begin_provider_op("p1", "create", "ns:provider-p1", "inc1", 1, "d").unwrap();
         let pending = db.pending_provider_ops().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].provider, "p1");
@@ -313,9 +322,9 @@ mod op_journal_tests {
     #[test]
     fn a_second_op_is_refused_while_one_is_pending() {
         let db = Db::open_in_memory().unwrap();
-        db.begin_provider_op("p1", "create", "r1", "inc", 1).unwrap();
+        db.begin_provider_op("p1", "create", "r1", "inc", 1, "d").unwrap();
         assert!(matches!(
-            db.begin_provider_op("p1", "delete", "r1", "inc", 1),
+            db.begin_provider_op("p1", "delete", "r1", "inc", 1, "d"),
             Err(DbError::Conflict(_))
         ));
         let pending = db.pending_provider_ops().unwrap();
