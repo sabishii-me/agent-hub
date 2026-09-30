@@ -4,11 +4,6 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-# Enables test-only helpers (e.g. inserting a LEGACY journal entry) for OTHER
-# crates' tests. Never enabled by the hub binary.
-testing = []
-
 [dependencies]
 rand = "0.9"
 serde.workspace = true

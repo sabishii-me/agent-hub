@@ -75,25 +75,6 @@ impl ProviderStore {
         }
     }
 
-    /// TEST-ONLY: insert a LEGACY journal entry (no `intent_version`).
-    #[cfg(feature = "testing")]
-    pub fn begin_op_legacy(
-        &self,
-        provider: &str,
-        op: &str,
-        secret_ref: &str,
-        expected_incarnation: &str,
-        expected_revision: u64,
-    ) -> Result<String, StoreError> {
-        Ok(self.db.begin_provider_op_legacy(
-            provider,
-            op,
-            secret_ref,
-            expected_incarnation,
-            expected_revision,
-        )?)
-    }
-
     /// Whether this provider has an unresolved credential transition.
     pub fn has_pending_op(&self, provider: &str) -> Result<bool, StoreError> {
         Ok(self.db.has_pending_provider_op(provider)?)

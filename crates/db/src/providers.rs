@@ -249,29 +249,6 @@ impl crate::Db {
         Ok(id)
     }
 
-    /// TEST-ONLY (feature `testing`): insert a LEGACY journal entry (no
-    /// `intent_version`), simulating an entry written by an older hub where
-    /// `expected_revision` meant the PRE-write revision. The hub binary never
-    /// enables the `testing` feature, so this is not a production path.
-    #[cfg(feature = "testing")]
-    #[doc(hidden)]
-    pub fn begin_provider_op_legacy(
-        &self,
-        provider: &str,
-        op: &str,
-        secret_ref: &str,
-        expected_incarnation: &str,
-        expected_revision: u64,
-    ) -> Result<String, DbError> {
-        let conn = self.lock();
-        let id = format!("{provider}:{op}");
-        conn.execute(
-            "INSERT INTO provider_ops (id, provider, op, secret_ref, expected_incarnation, expected_revision, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, provider, op, secret_ref, expected_incarnation, expected_revision as i64, crate::now_utc()],
-        )?;
-        Ok(id)
-    }
-
     /// Clear the op the caller actually began, by ITS id. A different pending op
     /// (a later write that began after ours, or an unresolved one) is untouched.
     pub fn finish_provider_op_id(&self, id: &str) -> Result<(), DbError> {
@@ -382,44 +359,6 @@ fn new_incarnation() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// Additive upgrade: an existing `providers` table gains `incarnation` (empty for
-/// rows that predate it; the next save mints one through a re-read).
-pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
-    // Additive, per-table: each table is upgraded independently, so an existing DB
-    // from any prior version gains exactly the columns it is missing (TASK-048 F1).
-    let add = |table: &str, column: &str, decl: &str| -> Result<(), rusqlite::Error> {
-        let exists: bool = conn
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
-                params![table],
-                |_| Ok(true),
-            )
-            .optional()?
-            .unwrap_or(false);
-        if !exists {
-            return Ok(());
-        }
-        let has: bool = conn
-            .prepare(&format!("PRAGMA table_info({table})"))?
-            .query_map([], |r| r.get::<_, String>(1))?
-            .filter_map(Result::ok)
-            .any(|n| n == column);
-        if !has {
-            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
-        }
-        Ok(())
-    };
-    add("providers", "incarnation", "TEXT NOT NULL DEFAULT ''")?;
-    // The provider journal gained the intended ROW STATE it records; an upgraded DB
-    // must gain it too or recovery cannot distinguish a landed write.
-    add("provider_ops", "expected_incarnation", "TEXT")?;
-    add("provider_ops", "expected_revision", "INTEGER")?;
-    // A legacy entry gained the columns but NOT the version: it keeps NULL, which
-    // recovery reads as "PRE-write intent" (do not apply the new semantics).
-    add("provider_ops", "intent_version", "INTEGER")?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod incarnation_tests {
     use super::*;
@@ -468,33 +407,3 @@ mod incarnation_tests {
     }
 }
 
-#[cfg(test)]
-mod migrate_tests {
-    use super::*;
-
-    /// An OLD database (a `providers` table without `incarnation`, a `provider_ops`
-    /// table without the intent columns) gains them on open, so the new recovery can
-    /// run. This is the upgrade path, not a fresh-create path (TASK-048 F1).
-    #[test]
-    fn an_old_provider_ops_gains_the_intent_columns() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        // Simulate the previous schema.
-        conn.execute_batch(
-            "CREATE TABLE providers (id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1);
-             CREATE TABLE provider_ops (id TEXT PRIMARY KEY, provider TEXT NOT NULL, op TEXT NOT NULL, secret_ref TEXT, created_at TEXT NOT NULL);",
-        )
-        .unwrap();
-        migrate(&conn).unwrap();
-        let cols = |t: &str| -> Vec<String> {
-            conn.prepare(&format!("PRAGMA table_info({t})"))
-                .unwrap()
-                .query_map([], |r| r.get::<_, String>(1))
-                .unwrap()
-                .filter_map(Result::ok)
-                .collect()
-        };
-        assert!(cols("providers").contains(&"incarnation".to_string()));
-        assert!(cols("provider_ops").contains(&"expected_incarnation".to_string()));
-        assert!(cols("provider_ops").contains(&"expected_revision".to_string()));
-    }
-}

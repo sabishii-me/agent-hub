@@ -65,6 +65,10 @@ pub enum DbError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    /// The on-disk database is a format this hub does not serve: it is refused,
+    /// never migrated or overwritten (no-legacy: ARCHITECTURE 1).
+    #[error("unsupported database format: {0}")]
+    UnsupportedFormat(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,24 +104,57 @@ impl Db {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// The CURRENT on-disk schema version. Bump ONLY with a deliberate format
+    /// change. There is no migration and no compatibility: a database whose version
+    /// is neither 0-and-empty nor this value is REFUSED (ARCHITECTURE 1: from
+    /// scratch, no migration).
+    pub const SCHEMA_VERSION: i64 = 1;
+
     fn init(conn: Connection) -> Result<Self, DbError> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(SCHEMA)?;
-        conn.execute_batch(sessions::SCHEMA_SESSIONS)?;
-        conn.execute_batch(providers::SCHEMA_PROVIDERS)?;
-        conn.execute_batch(instance::SCHEMA_INSTANCE)?;
-        conn.execute_batch(connections::SCHEMA_CONNECTIONS)?;
-        conn.execute_batch(SCHEMA_HARNESS_STATUS)?;
-        conn.execute_batch(SCHEMA_HARNESS_EXTENSIONS)?;
-        conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
+
+        // VERSION RECOGNITION COMES FIRST, before any schema write, journal sweep
+        // or secret side effect: an unsupported existing format must be refused, not
+        // silently rewritten or migrated.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let has_tables: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
+                [],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        match (version, has_tables) {
+            (v, _) if v == Self::SCHEMA_VERSION => {}
+            (0, false) => {
+                // A brand-new, empty database: create the CURRENT schema and stamp
+                // the version.
+                conn.execute_batch(SCHEMA)?;
+                conn.execute_batch(sessions::SCHEMA_SESSIONS)?;
+                conn.execute_batch(providers::SCHEMA_PROVIDERS)?;
+                conn.execute_batch(instance::SCHEMA_INSTANCE)?;
+                conn.execute_batch(connections::SCHEMA_CONNECTIONS)?;
+                conn.execute_batch(SCHEMA_HARNESS_STATUS)?;
+                conn.execute_batch(SCHEMA_HARNESS_EXTENSIONS)?;
+                conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
+                conn.pragma_update(None, "user_version", Self::SCHEMA_VERSION)?;
+            }
+            (0, true) => {
+                return Err(DbError::UnsupportedFormat(
+                    "the database predates the schema version; this hub does not migrate or overwrite an unsupported format".into(),
+                ));
+            }
+            (other, _) => {
+                return Err(DbError::UnsupportedFormat(format!(
+                    "the database declares schema version {other}, but this hub expects {}; refusing rather than migrating",
+                    Self::SCHEMA_VERSION
+                )));
+            }
+        }
+
         instance::instance_id(&conn)?;
-        // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so
-        // a column added after a database was created must be added explicitly.
-        // This is the upgrade path: adding a column that is missing (idempotent).
-        sessions::migrate(&conn)?;
-        providers::migrate(&conn)?;
-        migrate_plugins(&conn)?;
         Ok(Db { conn: std::sync::Mutex::new(conn) })
     }
 
@@ -331,27 +368,6 @@ CREATE TABLE IF NOT EXISTS plugin_ops (
 
 /// RFC 3339 UTC, dependency-free (shared by the domains).
 
-/// Additive, idempotent upgrade of the `plugins` table: an existing database
-/// (created before the column existed) gains `artifact` so a recorded install
-/// source survives. `CREATE TABLE IF NOT EXISTS` does NOT extend an existing
-/// table, so a column added later must be added explicitly.
-fn migrate_plugins(conn: &Connection) -> Result<(), rusqlite::Error> {
-    let has = |name: &str| -> Result<bool, rusqlite::Error> {
-        let mut stmt = conn.prepare("PRAGMA table_info(plugins)")?;
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            if r.get::<_, String>(1)? == name {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    };
-    if !has("artifact")? {
-        conn.execute_batch("ALTER TABLE plugins ADD COLUMN artifact TEXT")?;
-    }
-    Ok(())
-}
-
 /// RFC 3339 UTC (a maintained date library, shared by the domains).
 pub fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -482,5 +498,96 @@ mod harness_extensions_tests {
             Some(vec!["plan".to_string()])
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod schema_version_tests {
+    use super::*;
+
+    fn tmp_path(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "agent-hub-ver-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d.join("hub.sqlite")
+    }
+
+    /// A brand-new database is created at the CURRENT version.
+    #[test]
+    fn a_fresh_database_is_stamped_with_the_current_version() {
+        let path = tmp_path("fresh");
+        {
+            let db = Db::open(&path).unwrap();
+            let conn = db.conn.lock().unwrap();
+            let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+            assert_eq!(v, Db::SCHEMA_VERSION);
+            // The current tables exist.
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='provider_ops'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1);
+        }
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The CURRENT format reopens normally.
+    #[test]
+    fn a_current_database_reopens() {
+        let path = tmp_path("reopen");
+        Db::open(&path).unwrap();
+        Db::open(&path).unwrap();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A database with tables but NO version (a prior, unsupported format) is
+    /// REFUSED: no migration, no overwrite.
+    #[test]
+    fn an_unversioned_existing_database_is_refused() {
+        let path = tmp_path("unversioned");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE something (id TEXT PRIMARY KEY);").unwrap();
+        }
+        assert!(
+            matches!(Db::open(&path), Err(DbError::UnsupportedFormat(_))),
+            "an unversioned existing database must be refused"
+        );
+        // The original table is untouched (never overwritten).
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='something'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "the unsupported database must not be rewritten");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A FUTURE/other version is refused (not migrated down/up).
+    #[test]
+    fn a_foreign_schema_version_is_refused() {
+        let path = tmp_path("foreign");
+        {
+            let db = Db::open(&path).unwrap();
+            let conn = db.conn.lock().unwrap();
+            conn.pragma_update(None, "user_version", 999_i64).unwrap();
+        }
+        assert!(
+            matches!(Db::open(&path), Err(DbError::UnsupportedFormat(_))),
+            "a foreign schema version must be refused"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

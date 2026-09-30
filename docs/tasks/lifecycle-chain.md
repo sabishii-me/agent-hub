@@ -263,3 +263,23 @@ Two remaining P1s and the reported P2s:
 
 Lifecycle note: `recover_pending` at boot keeps an unresolved legacy entry forever
 until an explicit resolution - that is the intended barrier, not a stuck sweep.
+
+## S0: no-legacy cleanup (this pass)
+
+Per the owner's correction, the development-era legacy/compat layer is REMOVED:
+
+- Deleted `providers::migrate`, `sessions::migrate`, `migrate_plugins` (ALTER-based
+  upgrades) and their tests.
+- Deleted the legacy journal interpretation branch in `recover_one` and the
+  `begin_provider_op_legacy`/`begin_op_legacy` helpers, the `testing` feature, and the
+  legacy recovery tests.
+- ADDED version recognition BEFORE any schema write / journal sweep / secret side
+  effect: `PRAGMA user_version` = `Db::SCHEMA_VERSION` (=1). A fresh, empty database is
+  created at the current schema and stamped; a database already at the current version
+  reopens; a database with tables and NO version, or a different version, is REFUSED
+  with `UnsupportedFormat` (never migrated or overwritten). Tests:
+  `schema_version_tests` (fresh stamp, reopen, unversioned refused + untouched, foreign
+  version refused).
+
+Kept (NOT legacy): the current schema, `provider_ops` journal with the intended
+row-state, the per-instance secret namespace, and current-format crash recovery.
