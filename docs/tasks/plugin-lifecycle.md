@@ -34,3 +34,17 @@ icon delivery) are not mounted yet.
 Verified live: catalog over a seeded registry (6 plugins, no fault); a missing file ->
 `fault`; icon/light -> `200 image/svg+xml` with the real bytes; a bad variant ->
 `not_found`; refresh with no URL -> an honest refusal.
+
+## Extension selection (PATCH /v1/harnesses/{id}/extensions)
+
+Selects the extensions the hub installs for a harness. The selection is **durable**
+(a `harness_extensions` table); `harness_env` installs exactly the selected set on the
+next start (absent = the default, every shipped extension). An id the harness does not
+ship is refused with the available list as `validation_failed` (400), not
+`unsupported` (501): it is client input, not a missing capability.
+
+Verified live: available `["agent-presets","plan"]`; `["plan"]` accepted; an unknown id
+-> 400 validation_failed; after a RESTART a session start installs ONLY `plan` (the
+`agents/pi/extensions` dir contains `plan` alone). DB test: the selection survives a
+reopen. Introduced `AdapterError::Invalid` so a client-input refusal is not reported as
+an unsupported operation.

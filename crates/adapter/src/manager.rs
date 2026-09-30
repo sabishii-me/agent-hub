@@ -44,6 +44,10 @@ pub enum AdapterError {
     NotFound(String),
     #[error("this harness does not support `{0}`")]
     Unsupported(String),
+    /// A client-input refusal (a value the harness does not accept), NOT an
+    /// unsupported operation: maps to `validation_failed`, not `unsupported`.
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     Manifest(#[from] crate::manifest::ManifestError),
     #[error(transparent)]
@@ -153,7 +157,16 @@ impl Adapters {
                 .into_iter()
                 .map(|e| (e.id, e.dir))
                 .collect();
-            let selected: Vec<String> = shipped.iter().map(|(id, _)| id.clone()).collect();
+            // The selection is durable (PATCH /v1/harnesses/{id}/extensions). Absent
+            // = install every shipped extension (the default).
+            let selected: Vec<String> = match self
+                .status_store
+                .as_ref()
+                .and_then(|db| db.harness_extensions(id).ok().flatten())
+            {
+                Some(sel) => sel,
+                None => shipped.iter().map(|(id, _)| id.clone()).collect(),
+            };
             agent_hub_extensions::install_for_harness(
                 &self.data_dir.join("agents"),
                 id,
@@ -264,6 +277,48 @@ impl Adapters {
             json!({ "id": id, "status": status.as_str() }),
         );
         Ok(harness.clone())
+    }
+
+    /// The extension ids a harness MAY be given (its shipped set).
+    pub fn available_extensions(&self, id: &str) -> Result<Vec<String>, AdapterError> {
+        let h = self.get(id)?;
+        let mut ids: Vec<String> = h
+            .manifest
+            .shipped_extensions(&h.directory)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    /// The extension ids currently SELECTED for a harness (the durable set the next
+    /// start installs). Absent = the default (every shipped extension).
+    pub fn selected_extensions(&self, id: &str) -> Result<Vec<String>, AdapterError> {
+        if let Some(db) = &self.status_store {
+            if let Ok(Some(sel)) = db.harness_extensions(id) {
+                return Ok(sel);
+            }
+        }
+        self.available_extensions(id)
+    }
+
+    /// Set the selected extensions for a harness. An unknown id is refused with the
+    /// available list (an id the harness does not ship is never installed).
+    pub fn set_extensions(&self, id: &str, selected: &[String]) -> Result<Vec<String>, AdapterError> {
+        let available = self.available_extensions(id)?;
+        for s in selected {
+            if !available.contains(s) {
+                return Err(AdapterError::Invalid(format!(
+                    "harness `{id}` does not ship extension `{s}`; available: {available:?}"
+                )));
+            }
+        }
+        if let Some(db) = &self.status_store {
+            let _ = db.set_harness_extensions(id, selected);
+        }
+        Ok(selected.to_vec())
     }
 
     /// Start an adapter for a harness (idempotent: one process per harness).

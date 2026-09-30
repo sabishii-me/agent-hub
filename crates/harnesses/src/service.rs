@@ -28,12 +28,19 @@ impl HarnessError {
             HarnessError::Unsupported(_) => "unsupported",
             HarnessError::Adapter(AdapterError::NotFound(_)) => "harness_not_found",
             HarnessError::Adapter(AdapterError::Unsupported(_)) => "unsupported",
+            HarnessError::Adapter(AdapterError::Invalid(_)) => "validation_failed",
             HarnessError::Adapter(_) => "adapter_unreachable",
         }
     }
 
     pub fn to_domain_error(&self) -> agent_hub_transport::DomainError {
-        agent_hub_transport::DomainError::new(self.code(), self.to_string())
+        // An `Invalid` from the adapter is a client-input message, not a transport
+        // failure: do not wrap it with the noisy `adapter:` prefix.
+        let detail = match self {
+            HarnessError::Adapter(AdapterError::Invalid(m)) => m.clone(),
+            other => other.to_string(),
+        };
+        agent_hub_transport::DomainError::new(self.code(), detail)
     }
 }
 
@@ -101,6 +108,16 @@ impl Harnesses {
         extensions.sort();
         extensions.dedup();
         json!({ "harnesses": harnesses, "availableExtensions": extensions })
+    }
+
+    /// Set the extensions the hub installs for a harness; an unknown id is refused
+    /// with the available list.
+    pub fn set_extensions(&self, id: &str, selected: &[String]) -> Result<Value, HarnessError> {
+        let applied = self
+            .adapters
+            .set_extensions(id, selected)
+            .map_err(HarnessError::Adapter)?;
+        Ok(json!({ "harnessId": id, "extensions": applied }))
     }
 
     pub fn set_status(&self, id: &str, status: HarnessStatus) -> Result<Value, HarnessError> {

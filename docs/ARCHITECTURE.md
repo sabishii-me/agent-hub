@@ -665,8 +665,8 @@ follows distinguishes a real, narrow component fact from a product capability.
   exists but is always empty; the `/v1/connections*` and `/v1/harnesses/{id}/connections*` routes
   are not mounted. This is the largest remaining domain (§17 order: after providers).
 - **harnesses**: the thin projection (`GET /v1/harnesses`, and `presets`/`models`/`tools`/
-  `extensions` gated capability calls) is real; harness `auth` and `PATCH .../extensions` are not
-  mounted.
+  `extensions` gated capability calls) is real, and `PATCH /v1/harnesses/{id}/extensions` selects
+  the DURABLE extension set the next start installs. Harness `auth` is not mounted.
 - **plugins**: install/get/list/remove/prepare/recovery are real; `enable`/`disable` are real and
   DURABLE (a `harness_status` table; a disabled harness refuses session create/turns and survives a
   restart). The catalog (`GET /v1/plugins/catalog`, a verbatim restatement of the registry file
@@ -821,7 +821,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 54
+### Real (mounted, real handler) - 55
 
 ```
 DELETE /v1/connections/{id}
@@ -857,6 +857,7 @@ GET /v1/skills
 GET /v1/status
 GET /v1/surface
 PATCH /v1/connections/{id}
+PATCH /v1/harnesses/{id}/extensions
 PATCH /v1/model-providers/{id}
 PATCH /v1/sessions/{id}
 POST /v1/connections
@@ -894,7 +895,7 @@ POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted - 11
+### Not mounted - 10
 
 ```
 DELETE /v1/harnesses/{id}/connections/{cid}
@@ -902,7 +903,6 @@ GET /v1/harnesses/{id}/auth/{op}
 GET /v1/harnesses/{id}/connections
 GET /v1/harnesses/{id}/connections/schema
 GET /v1/skills/{id}/files/{file...}
-PATCH /v1/harnesses/{id}/extensions
 POST /v1/harnesses/{id}/auth
 POST /v1/harnesses/{id}/auth/{op}/cancel
 POST /v1/harnesses/{id}/connections

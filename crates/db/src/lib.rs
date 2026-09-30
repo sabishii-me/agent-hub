@@ -105,6 +105,7 @@ impl Db {
         conn.execute_batch(instance::SCHEMA_INSTANCE)?;
         conn.execute_batch(connections::SCHEMA_CONNECTIONS)?;
         conn.execute_batch(SCHEMA_HARNESS_STATUS)?;
+        conn.execute_batch(SCHEMA_HARNESS_EXTENSIONS)?;
         conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
         instance::instance_id(&conn)?;
         // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so
@@ -387,6 +388,69 @@ mod harness_status_tests {
         // Re-enabling overwrites.
         db.set_harness_status("pi", "enabled").unwrap();
         assert_eq!(db.harness_statuses().unwrap(), vec![("pi".to_string(), "enabled".to_string())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The extensions the hub installs for a harness (the selected set). Durable: a
+/// PATCH survives a restart and is what the next start installs. Absent = the
+/// default (every shipped extension).
+pub const SCHEMA_HARNESS_EXTENSIONS: &str = r#"
+CREATE TABLE IF NOT EXISTS harness_extensions (
+  harness_id TEXT PRIMARY KEY,
+  extensions TEXT NOT NULL
+);
+"#;
+
+impl Db {
+    /// The selected extension ids for a harness, as JSON. `None` = never set
+    /// (the default applies).
+    pub fn harness_extensions(&self, id: &str) -> Result<Option<Vec<String>>, DbError> {
+        let conn = self.lock();
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT extensions FROM harness_extensions WHERE harness_id = ?1",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(raw.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    pub fn set_harness_extensions(&self, id: &str, extensions: &[String]) -> Result<(), DbError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO harness_extensions (harness_id, extensions) VALUES (?1, ?2)
+             ON CONFLICT(harness_id) DO UPDATE SET extensions = excluded.extensions",
+            rusqlite::params![id, serde_json::to_string(extensions).unwrap_or_else(|_| "[]".into())],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod harness_extensions_tests {
+    use crate::Db;
+
+    #[test]
+    fn extensions_survive_a_reopen() {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-hub-hx-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hub.sqlite");
+        {
+            let db = Db::open(&path).unwrap();
+            assert_eq!(db.harness_extensions("pi").unwrap(), None, "unset = default");
+            db.set_harness_extensions("pi", &["plan".into()]).unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        assert_eq!(
+            db.harness_extensions("pi").unwrap(),
+            Some(vec!["plan".to_string()])
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

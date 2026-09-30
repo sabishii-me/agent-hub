@@ -29,6 +29,26 @@ fn table() -> agent_hub_transport::RouteTable<HarnessesState> {
         .get("/v1/harnesses/{id}/models", models)
         .get("/v1/harnesses/{id}/tools", tools)
         .get("/v1/harnesses/{id}/extensions", extensions)
+        .patch("/v1/harnesses/{id}/extensions", patch_extensions)
+}
+
+#[derive(serde::Deserialize)]
+struct ExtensionsBody {
+    #[serde(default)]
+    extensions: Vec<String>,
+}
+
+/// PATCH /v1/harnesses/{id}/extensions - select the extensions the hub installs for
+/// this harness. An unknown id is refused with the available list.
+async fn patch_extensions(
+    State(s): State<HarnessesState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<ExtensionsBody>,
+) -> Response {
+    match s.harnesses.set_extensions(&id, &body.extensions) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => s.errors.render(&e.to_domain_error()),
+    }
 }
 
 pub fn routes() -> Router<HarnessesState> {
