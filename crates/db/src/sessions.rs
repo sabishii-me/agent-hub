@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS turns (
   ended_at         TEXT,
   cancel_requested_at TEXT,
   running_at         TEXT,
+  process_gen        INTEGER,
   UNIQUE(session_id, idempotency_key)
 );
 "#;
@@ -410,13 +411,26 @@ impl crate::Db {
     /// if the turn is STILL `admitted` (no cancel won the race) and non-terminal.
     /// Returns true for the caller that won; a `cancelling`/terminal turn returns
     /// false, so the winner is exactly one of dispatch or cancel (TASK-048 F4).
-    pub fn claim_running(&self, id: &str) -> Result<bool, DbError> {
+    /// Atomically claim `admitted` -> `running`, RECORDING the process generation
+    /// that will run it. A later cancel compares the CURRENT generation to this
+    /// value, so an abort is bound to the process the turn actually dispatched on
+    /// (TASK-048 F4/S2).
+    pub fn claim_running(&self, id: &str, process_generation: u64) -> Result<bool, DbError> {
         let conn = self.lock();
         let n = conn.execute(
-            "UPDATE turns SET state='running', running_at=?2 WHERE id=?1 AND state='admitted' AND ended IS NULL",
-            params![id, crate::now_utc()],
+            "UPDATE turns SET state='running', running_at=?2, process_gen=?3 WHERE id=?1 AND state='admitted' AND ended IS NULL",
+            params![id, crate::now_utc(), process_generation as i64],
         )?;
         Ok(n > 0)
+    }
+
+    /// The process generation recorded when this turn was dispatched (if any).
+    pub fn turn_process_gen(&self, id: &str) -> Result<Option<u64>, DbError> {
+        let conn = self.lock();
+        let v: Option<i64> = conn
+            .query_row("SELECT process_gen FROM turns WHERE id = ?1", params![id], |r| r.get(0))
+            .optional()?;
+        Ok(v.map(|x| x as u64))
     }
 
     /// Move a turn to a **non-terminal** state (`running`, `cancelling`). This

@@ -301,3 +301,20 @@ digest and is refused.
 
 Tests: `every_mutator_refuses_while_a_transition_is_unresolved`,
 `recovery_rejects_an_unrelated_update_at_the_same_revision`.
+
+## S2: the abort is bound to the turn's DISPATCHED process (this pass)
+
+The previous pass captured the CURRENT generation at send time, so a replacement
+between the turn check and the send could still receive the old abort. Now:
+
+- `turns.process_gen` records the generation the turn dispatched on, written by
+  `claim_running(id, process_generation)` in the SAME SQL as the state change.
+- `cancel_turn` reads the TURN'S recorded generation and uses `send_if_generation`;
+  if the process was replaced since, the send is REFUSED (never re-bound to the new
+  process). A turn cancelled before dispatch has no generation and is not aborted.
+- `start` publishes the request handle AND bumps the generation in ONE critical
+  section under the `requests` lock, so `send_if_generation` can never observe a new
+  handle with an old generation.
+
+Live: a dispatched turn records `process_gen=1`; cancel binds to it; after a restart
+the process is gone and the turn is reconciled `interrupted` (no stale abort).

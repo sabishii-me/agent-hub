@@ -1594,7 +1594,11 @@ impl Sessions {
             // turn `cancelling`, so the claim fails and we never send a prompt. A
             // DB ERROR is NOT "someone else won": log it and fail the turn rather
             // than silently treat a store failure as a cancellation (TASK-048 F4).
-            let claimed = match self.db.claim_running(&turn_id) {
+            // Capture the process generation and RECORD it with the claim, in one
+            // step: the abort later compares against THIS value, so it is bound to
+            // the process the turn dispatched on (TASK-048 F4/S2).
+            let process_gen = self.runtime.generation(&session_id);
+            let claimed = match self.db.claim_running(&turn_id, process_gen) {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::error!(turn = %turn_id, error = %e, "claim_running failed; the turn is not dispatched");
@@ -1994,11 +1998,21 @@ impl Sessions {
                     .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
                 return Ok(turn_view(&t));
             }
-            // Bind the abort to the PROCESS GENERATION we re-checked: if the
-            // process was replaced (timeout/repair/reopen) after we confirmed the
-            // turn, the send refuses rather than aborting the NEW process
-            // (TASK-048 F4).
-            let generation = self.runtime.generation(session_id);
+            // Bind the abort to the process the turn DISPATCHED on (recorded at
+            // claim time), NOT the current generation: if the process was replaced
+            // (stop/reopen/repair) since, the send refuses - an old abort must never
+            // reach a new process (TASK-048 F4/S2). A turn with no recorded
+            // generation (cancelled before dispatch) has nothing to abort.
+            let generation = match self.db.turn_process_gen(&active_id)? {
+                Some(g) => g,
+                None => {
+                    let t = self
+                        .db
+                        .turn(&active_id)?
+                        .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
+                    return Ok(turn_view(&t));
+                }
+            };
             match self
                 .runtime
                 .send_if_generation(

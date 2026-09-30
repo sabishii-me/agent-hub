@@ -387,18 +387,19 @@ impl Sessions {
             applied_plan,
             applied_review,
         };
-        self.requests.lock().expect("requests").insert(sid.clone(), bus_requests.clone());
+        // Publish the handle AND the generation in ONE critical section: a
+        // `send_if_generation` takes the SAME `requests` lock, so it can never
+        // observe the new handle with the old generation (or vice versa)
+        // (TASK-048 F4/S2).
+        {
+            let mut reqs = self.requests.lock().expect("requests");
+            reqs.insert(sid.clone(), bus_requests.clone());
+            self.bump_generation(&spec.sid);
+        }
         self.running
             .lock()
             .expect("running")
             .insert(sid, std::sync::Arc::new(tokio::sync::Mutex::new(process)));
-        // A NEW process: bump the generation so an action captured against the old
-        // process can detect the replacement. Bumped under the requests lock so it
-        // pairs atomically with the handle insert (see send_if_generation).
-        {
-            let _reqs = self.requests.lock().expect("requests");
-            self.bump_generation(&spec.sid);
-        }
         // Return a description (the process itself lives in the map). The bus
         // stays in the map entry; this value is the caller's record of it.
         Ok(SessionProcess {
