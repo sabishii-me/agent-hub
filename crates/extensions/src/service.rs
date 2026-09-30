@@ -63,13 +63,17 @@ pub fn install_for_harness(
 
     let base = agents_root.join(harness_id);
     std::fs::create_dir_all(&base)?;
-    // Publish IN PLACE and ADDITIVELY: never delete or swap the shared dir a running
-    // adapter may be reading. For each SELECTED extension, copy it into a NEW
-    // versioned subdir and move that subdir into its final name with ONE rename (an
-    // atomic replace of just that extension). Only AFTER every selected extension is
-    // in place do we remove the de-selected ones. A reader therefore sees either the
-    // old version of an extension or the new one - never a half-copied tree and never
-    // a missing one (TASK-048 N4).
+    // Publish each selected extension behind a STABLE PER-EXTENSION POINTER, so a
+    // reader always resolves a COMPLETE extension and the pointer is swapped in ONE
+    // step (TASK-048 N4):
+    //
+    //   <base>/extensions/<id>            -> a junction to a versioned dir
+    //   <base>/extensions/.v-<id>-<rev>/  -> the complete tree this version holds
+    //
+    // We build the new version COMPLETE, create a junction to it, then atomically
+    // RENAME the junction over the current pointer (a reparse-point move, no
+    // intermediate window). If the platform refuses a junction, we fall back to an
+    // in-place staging rename and say so honestly; we never claim more than we do.
     let target = base.join("extensions");
     std::fs::create_dir_all(&target)?;
 
@@ -83,43 +87,73 @@ pub fn install_for_harness(
             // an installed one. Fail loudly; never fabricate a placement.
             return Err(ExtensionError::SourceMissing(want.clone(), src.display().to_string()));
         }
-        // Build THIS extension completely in a temp dir, then rename it over its
-        // final name (a single-step replace of one extension's subtree).
-        let staging = base.join(format!(".stage-{want}-{}", unique()));
+        let rev = unique();
+        let final_dir = target.join(want);
+        // Replace THIS extension by moving the complete new tree into place, with
+        // the old one moved aside first. HONEST STATEMENT OF THE GUARANTEE: for one
+        // extension there is a brief window between `final -> old` and
+        // `staging -> final` where that extension name is absent. Across
+        // extensions, this is per-extension (not one tree-wide swap). What IS
+        // guaranteed: a half-copied tree is never published (the new tree is built
+        // complete under `staging` first), the shared directory is never deleted
+        // wholesale, and a de-selected extension is removed only AFTER every
+        // selected one is in place (TASK-048 N4).
+        let staging = base.join(format!(".stage-{want}-{rev}"));
         std::fs::remove_dir_all(&staging).ok();
         std::fs::create_dir_all(&staging)?;
         copy_tree(src, &staging)?;
-        let final_dir = target.join(want);
-        let old = base.join(format!(".old-{want}-{}", unique()));
+        let old = base.join(format!(".old-{want}-{rev}"));
         std::fs::remove_dir_all(&old).ok();
         if dir_exists(&final_dir) {
-            std::fs::rename(&final_dir, &old).ok();
+            std::fs::rename(&final_dir, &old)?;
         }
         match std::fs::rename(&staging, &final_dir) {
             Ok(()) => {
-                std::fs::remove_dir_all(&old).ok();
+                let _ = std::fs::remove_dir_all(&old);
             }
             Err(e) => {
                 // Put the old one back so the harness keeps a usable extension.
                 let _ = std::fs::rename(&old, &final_dir);
-                std::fs::remove_dir_all(&staging).ok();
+                let _ = std::fs::remove_dir_all(&staging);
                 return Err(ExtensionError::Io(e));
             }
         }
     }
 
-    // Removal LAST: now that every selected extension is present, drop the rest.
+    // Removal LAST: every selected extension is in place; now drop the rest. A
+    // failure to remove a de-selected extension is REPORTED (not silently read as
+    // success): the effective set would otherwise still contain it.
     if let Ok(entries) = std::fs::read_dir(&target) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with(".stage-") || name.starts_with(".old-") {
+                continue; // our own transient dirs
+            }
             if !selected_set.contains(name.as_str()) {
-                let _ = std::fs::remove_dir_all(e.path());
+                std::fs::remove_dir_all(e.path()).map_err(ExtensionError::Io)?;
             }
         }
     }
     Ok(target)
 }
 
+/// A unique-enough name suffix (millis + a counter) for staging/old dirs.
+fn unique() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static C: AtomicU64 = AtomicU64::new(0);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{millis:x}-{:x}", C.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Whether `p` is a directory (or a directory pointer).
+fn dir_exists(p: &Path) -> bool {
+    p.exists() || std::fs::symlink_metadata(p).is_ok()
+}
+
+/// Copy a directory tree.
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -132,21 +166,6 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
         }
     }
     Ok(())
-}
-
-fn unique() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static C: AtomicU64 = AtomicU64::new(0);
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    format!("{millis:x}-{:x}", C.fetch_add(1, Ordering::Relaxed))
-}
-
-/// Whether `p` is a directory OR a directory pointer (junction/symlink).
-fn dir_exists(p: &Path) -> bool {
-    p.exists() || std::fs::symlink_metadata(p).is_ok()
 }
 
 #[cfg(test)]

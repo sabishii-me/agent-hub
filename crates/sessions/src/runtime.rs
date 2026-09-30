@@ -320,14 +320,15 @@ impl Sessions {
                 None => true,
             };
             // The adapter must also report the RESOLVED NATIVE ROUTE
-            // (`applied.connectionId`). It is the route for the REQUESTED provider:
-            // the contract says an injected provider is named `hub-<id>`, so the
-            // route must be non-empty AND must be the requested id or its injected
-            // name. A route that points at a DIFFERENT provider is a mismatch, not
-            // a confirmation (TASK-048 F3).
+            // (`applied.connectionId`). The contract (adapter-v1) is explicit: an
+            // injected provider is named `hub-<id>` IN EVERY HARNESS, and
+            // `applied.connectionId` is its RESOLVED NATIVE ROUTE (`session/start`
+            // receives the resolved route from the hub). A BARE id is NOT the
+            // resolved route, so accepting it would be an unauthorized alias
+            // (TASK-048 F3): require the injected name.
             let want = want_provider.unwrap_or("");
             let ok_route = match applied_route.as_deref() {
-                Some(r) if !r.is_empty() => r == want || r == format!("hub-{want}"),
+                Some(r) => !r.is_empty() && r == format!("hub-{want}"),
                 _ => false,
             };
             if !applied.is_object() || !ok_provider || !ok_model || !ok_route {
@@ -417,13 +418,29 @@ impl Sessions {
             .get(sid)
             .cloned()
             .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
-        requests.request(method, params).await.map_err(|e| match e {
-            agent_hub_adapter::BusError::Rpc { code, message, data } => {
-                StartError::Refused { code: code.to_string(), message, data }
-            }
-            other => StartError::Protocol(other.to_string()),
-        })
+        requests.request(method, params).await.map_err(map_bus_err)
     }
+
+    /// WRITE a request frame and return the receiver for its reply, WITHOUT
+    /// awaiting it (the delivery half of a turn's prompt vs a cancel's abort).
+    pub async fn send(
+        &self,
+        sid: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<Value, agent_hub_adapter::BusError>>, StartError>
+    {
+        let requests = self
+            .requests
+            .lock()
+            .expect("requests")
+            .get(sid)
+            .cloned()
+            .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
+        requests.send(method, params).await.map_err(map_bus_err)
+    }
+
+    /// Whether a LIVE process is running for this session (see `is_running`).
 
     /// Deliver a credential grant to a session's live adapter (a mid-session
     /// provider switch: `credentials/grant` precedes `config/set`).
@@ -626,5 +643,16 @@ fn bus_error(e: agent_hub_adapter::BusError, what: &str) -> StartError {
             data,
         },
         other => StartError::Protocol(format!("{what} failed: {other}")),
+    }
+}
+
+/// Map a bus error into a StartError, KEEPING the adapter's typed `data.code`
+/// when it answered, so the identity survives (TASK-048 F5).
+pub fn map_bus_err(e: agent_hub_adapter::BusError) -> StartError {
+    match e {
+        agent_hub_adapter::BusError::Rpc { code, message, data } => {
+            StartError::Refused { code: code.to_string(), message, data }
+        }
+        other => StartError::Protocol(other.to_string()),
     }
 }

@@ -200,3 +200,34 @@ Live evidence (bound = 3s):
   session stays `active`).
 - create against a mute adapter -> `starting` -> `starting_failed`
   ("the adapter did not answer config/set in time") at ~3s (was: hang).
+
+## REVIEW-f1f6801 fixes (this pass)
+
+Three P1s from the reviewer, fixed at the root:
+
+1. **Legacy journal semantics (F1)**: an entry written at base `b0459a5` stored the
+   PRE-write revision in `expected_revision`; the new recovery read it as POST-write.
+   `provider_ops` now carries `intent_version` (2 = post-write intent). A LEGACY entry
+   (`intent_version` NULL) is ISOLATED: recovery never blesses it and never deletes a
+   credential the row already references; only a TRULY orphaned credential (no row
+   references it) is removed. Tests: `a_legacy_journal_entry_neither_blesses_nor_destroys`,
+   `a_legacy_entry_removes_a_truly_orphaned_credential`.
+2. **Turn delivery ordering (F4)**: a per-session DELIVERY lock now serializes a turn's
+   `session/prompt` frame write against a cancel's `session/abort` frame write, and the
+   row is re-checked under it. The prompt frame is wholly written before any abort, or the
+   cancel wins the row and the prompt never sends. The lock is held ONLY across the frame
+   write; the long wait for an answer is outside it. The abort re-checks the turn under
+   the lock, so it can never hit a later turn. A `claim_running` DB error fails the turn
+   (never swallowed as "someone won"). Live: 5 rapid prompt+cancel pairs all show
+   `session/prompt` before `session/abort`.
+3. **Repair unbounded wait (new)**: repair's re-abort is now a BOUNDED, best-effort send
+   (never an unbounded wait under the session lock); the STOP is the real replacement.
+   Non-native modes (`truncate`/`tombstone`) are refused honestly (the hub does not
+   perform hub-side history surgery).
+
+Also closed: `applied.connectionId` now MUST be the injected `hub-<id>` (a bare id is not
+the resolved native route); `SessionError::from_start` is wired (typed adapter errors keep
+their identity through reopen/run_start) and the adapter's `abort-failed` maps to
+`adapter_unreachable`; quarantine/fail_start/timeout no longer PUBLISH a state change whose
+DB write failed; the `thinkingLevel` and policy-knob `config/set` branches are bounded and
+fail closed (quarantine) on an unknown/unconfirmed outcome.

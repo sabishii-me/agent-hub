@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS provider_ops (
   secret_ref TEXT,
   expected_incarnation TEXT,
   expected_revision    INTEGER,
+  intent_version       INTEGER,
   created_at TEXT NOT NULL
 );
 "#;
@@ -197,8 +198,18 @@ CREATE TABLE IF NOT EXISTS provider_ops (
         pub secret_ref: String,
         pub expected_incarnation: Option<String>,
         pub expected_revision: Option<u64>,
+        /// The SEMANTICS of `expected_incarnation`/`expected_revision`:
+        /// `Some(2)` = the row state the op intended to WRITE (post-write intent);
+        /// `None`/`Some(1)` = a LEGACY entry written before the intent was the
+        /// post-write state (its revision is the PRE-write one). Recovery must not
+        /// interpret a legacy revision with the new semantics (TASK-048 F1).
+        pub intent_version: Option<i64>,
     }
 
+/// The current journal intent semantics. Bump when the meaning of
+/// `expected_incarnation`/`expected_revision` changes, so a newer hub can
+/// recognise an older entry instead of misreading it.
+pub const INTENT_VERSION: i64 = 2;
 
 impl crate::Db {
     /// Record an in-flight credential transition. It REFUSES (Conflict) when a
@@ -231,10 +242,32 @@ impl crate::Db {
         }
         let id = format!("{provider}:{op}");
         tx.execute(
+            "INSERT INTO provider_ops (id, provider, op, secret_ref, expected_incarnation, expected_revision, intent_version, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, provider, op, secret_ref, expected_incarnation, expected_revision as i64, INTENT_VERSION, crate::now_utc()],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Insert a LEGACY journal entry (no `intent_version`), simulating an entry
+    /// written by an older hub where `expected_revision` meant the PRE-write
+    /// revision. Public so a cross-crate test can prove recovery isolates it; the
+    /// hub itself never calls it.
+    #[doc(hidden)]
+    pub fn begin_provider_op_legacy(
+        &self,
+        provider: &str,
+        op: &str,
+        secret_ref: &str,
+        expected_incarnation: &str,
+        expected_revision: u64,
+    ) -> Result<String, DbError> {
+        let conn = self.lock();
+        let id = format!("{provider}:{op}");
+        conn.execute(
             "INSERT INTO provider_ops (id, provider, op, secret_ref, expected_incarnation, expected_revision, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![id, provider, op, secret_ref, expected_incarnation, expected_revision as i64, crate::now_utc()],
         )?;
-        tx.commit()?;
         Ok(id)
     }
 
@@ -261,7 +294,7 @@ impl crate::Db {
     pub fn pending_provider_ops(&self) -> Result<Vec<PendingOp>, DbError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, provider, op, secret_ref, expected_incarnation, expected_revision FROM provider_ops",
+            "SELECT id, provider, op, secret_ref, expected_incarnation, expected_revision, intent_version FROM provider_ops",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -272,6 +305,7 @@ impl crate::Db {
                     secret_ref: r.get(3)?,
                     expected_incarnation: r.get(4)?,
                     expected_revision: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
+                    intent_version: r.get::<_, Option<i64>>(6)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -379,6 +413,9 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     // must gain it too or recovery cannot distinguish a landed write.
     add("provider_ops", "expected_incarnation", "TEXT")?;
     add("provider_ops", "expected_revision", "INTEGER")?;
+    // A legacy entry gained the columns but NOT the version: it keeps NULL, which
+    // recovery reads as "PRE-write intent" (do not apply the new semantics).
+    add("provider_ops", "intent_version", "INTEGER")?;
     Ok(())
 }
 

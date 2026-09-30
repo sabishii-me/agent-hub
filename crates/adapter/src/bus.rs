@@ -59,6 +59,19 @@ impl RequestHandle {
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, BusError> {
+        let rx = self.send(method, params).await?;
+        rx.await.map_err(|_| BusError::Closed)?
+    }
+
+    /// WRITE the request frame and return the receiver for its reply, WITHOUT
+    /// awaiting it. A caller that must serialize DELIVERY (a turn's prompt vs a
+    /// cancel's abort) can hold a lock across the write and then release it before
+    /// the long wait for the answer (TASK-048 F4).
+    pub async fn send(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<oneshot::Receiver<Result<Value, BusError>>, BusError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().expect("pending").insert(id, tx);
@@ -71,7 +84,7 @@ impl RequestHandle {
             stdin.write_all(line.as_bytes()).await?;
             stdin.flush().await?;
         }
-        rx.await.map_err(|_| BusError::Closed)?
+        Ok(rx)
     }
 }
 
