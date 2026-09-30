@@ -220,22 +220,44 @@ impl Sessions {
                 "url": grant.url,
                 "declarations": grant.declarations,
             });
-            if let Err(e) = bus.requests.request("credentials/grant", params).await {
-                let _ = bus.shutdown().await;
-                return Err(bus_error(e, "credentials/grant"));
+            match tokio::time::timeout(control_request_timeout(), bus.requests.request("credentials/grant", params)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    let _ = bus.shutdown().await;
+                    return Err(bus_error(e, "credentials/grant"));
+                }
+                Err(_) => {
+                    let _ = bus.shutdown().await;
+                    return Err(StartError::Refused {
+                        code: "credentials/grant:timeout".into(),
+                        message: "the adapter did not answer credentials/grant in time".into(),
+                        data: serde_json::Value::Null,
+                    });
+                }
             }
         }
 
-        // config/set (the hub's materialization must be applied before a turn)
-        let applied = match bus
-            .requests
-            .request("config/set", json!({ "sid": spec.sid, "config": spec.config }))
-            .await
+        // config/set (the hub's materialization must be applied before a turn). A
+        // bounded wait: an adapter that never answers must not hang the start.
+        let applied = match tokio::time::timeout(
+            control_request_timeout(),
+            bus.requests
+                .request("config/set", json!({ "sid": spec.sid, "config": spec.config })),
+        )
+        .await
         {
-            Ok(v) => v.get("applied").cloned().unwrap_or(Value::Null),
-            Err(e) => {
+            Ok(Ok(v)) => v.get("applied").cloned().unwrap_or(Value::Null),
+            Ok(Err(e)) => {
                 let _ = bus.shutdown().await;
                 return Err(bus_error(e, "config/set"));
+            }
+            Err(_) => {
+                let _ = bus.shutdown().await;
+                return Err(StartError::Refused {
+                    code: "config/set:timeout".into(),
+                    message: "the adapter did not answer config/set in time".into(),
+                    data: serde_json::Value::Null,
+                });
             }
         };
 
@@ -576,6 +598,21 @@ mod env_tests {
         let empty = build_env(&spec(vec![]));
         assert!(!empty.iter().any(|(k, _)| k == "AGENT_HUB_ADDITIONAL_DIRS"));
     }
+}
+
+/// How long a control request (`credentials/grant`, `config/set`) may wait for an
+/// adapter answer before the hub treats the outcome as UNKNOWN and fails closed. A
+/// control request has no business holding a handler (or a start) indefinitely: an
+/// adapter that never answers must not block the hub (ADR-0009), and a config that
+/// may have applied must not be assumed to have failed.
+pub fn control_request_timeout() -> std::time::Duration {
+    // Overridable for tests/rehearsal; the default is generous because a real
+    // adapter may do work before it answers.
+    let secs = std::env::var("AGENT_HUB_CONTROL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60);
+    std::time::Duration::from_secs(secs)
 }
 
 /// Turn a bus error into a StartError, KEEPING the adapter's typed `data.code` when

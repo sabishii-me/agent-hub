@@ -601,6 +601,37 @@ impl Sessions {
     /// session must not keep serving prompts against its old applied identity: stop
     /// the process and mark it `needs-repair`, so the next use reopens and re-grants
     /// (TASK-048 F3).
+    /// Apply ONE policy knob (`plan`/`review`) through `config/set` with a bounded
+    /// wait. `Ok(true)` = the adapter confirmed the value; `Ok(false)` = it
+    /// answered but did not confirm; `Err` = the outcome is UNKNOWN and the session
+    /// was quarantined (fail closed).
+    async fn apply_policy_knob(
+        &self,
+        id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<bool, SessionError> {
+        let call = self
+            .runtime
+            .request(id, "config/set", serde_json::json!({ "sid": id, "config": { key: value } }));
+        match tokio::time::timeout(crate::runtime::control_request_timeout(), call).await {
+            Ok(Ok(r)) => Ok(r
+                .get("applied")
+                .and_then(|a| a.get(key))
+                .and_then(|v| v.as_bool())
+                == value.as_bool()),
+            Ok(Err(e)) => Err(self
+                .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
+                .await),
+            Err(_) => Err(self
+                .quarantine_session(
+                    id,
+                    "config/set outcome unknown: the adapter did not answer in time",
+                )
+                .await),
+        }
+    }
+
     async fn quarantine_session(&self, sid: &str, reason: &str) -> SessionError {
         // Block FIRST: the in-memory gate is authoritative even if the stop or the
         // DB write fails (TASK-048 F3).
@@ -760,29 +791,32 @@ impl Sessions {
 
         let mut warning: Option<String> = None;
 
-        // policy knobs: allowed during a running turn
+        // policy knobs: allowed during a running turn. Each is a bounded control
+        // request: a config that may have APPLIED but was never confirmed leaves the
+        // session in an unknown configuration, so it fails CLOSED (quarantine); a
+        // non-answer must never hang the handler (ADR-0009).
         if let Some(v) = req.plan {
-            let r = self
-                .runtime
-                .request(id, "config/set", serde_json::json!({ "sid": id, "config": { "plan": v } }))
-                .await
-                .map_err(|e| SessionError::Start(e.to_string()))?;
-            let applied = r.get("applied").and_then(|a| a.get("plan")).and_then(|p| p.as_bool());
-            if applied != Some(v) {
-                return Err(SessionError::Validation(format!("the adapter did not confirm plan={v}")));
+            match self.apply_policy_knob(id, "plan", serde_json::json!(v)).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(SessionError::Validation(format!(
+                        "the adapter did not confirm plan={v}"
+                    )));
+                }
+                Err(e) => return Err(e),
             }
             row.plan = Some(v);
             row.applied_plan = Some(v);
         }
         if let Some(v) = req.review {
-            let r = self
-                .runtime
-                .request(id, "config/set", serde_json::json!({ "sid": id, "config": { "review": v } }))
-                .await
-                .map_err(|e| SessionError::Start(e.to_string()))?;
-            let applied = r.get("applied").and_then(|a| a.get("review")).and_then(|p| p.as_bool());
-            if applied != Some(v) {
-                return Err(SessionError::Validation(format!("the adapter did not confirm review={v}")));
+            match self.apply_policy_knob(id, "review", serde_json::json!(v)).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(SessionError::Validation(format!(
+                        "the adapter did not confirm review={v}"
+                    )));
+                }
+                Err(e) => return Err(e),
             }
             row.review = Some(v);
             row.applied_review = Some(v);
@@ -819,24 +853,49 @@ impl Sessions {
                 )
                 .await?;
             if let Some(g) = &grant {
-                if let Err(e) = self.runtime.grant(id, g).await {
-                    // A grant may have reached the adapter: fail closed.
-                    let msg = format!("credentials/grant failed: {e}");
-                    return Err(self.quarantine_session(id, &msg).await);
+                // A bounded wait: a grant may have reached the adapter, so a
+                // non-answer is an UNKNOWN outcome and must fail closed, not hang
+                // the handler (ADR-0009).
+                match tokio::time::timeout(
+                    crate::runtime::control_request_timeout(),
+                    self.runtime.grant(id, g),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        let msg = format!("credentials/grant failed: {e}");
+                        return Err(self.quarantine_session(id, &msg).await);
+                    }
+                    Err(_) => {
+                        let msg = "credentials/grant outcome unknown: the adapter did not answer in time".to_string();
+                        return Err(self.quarantine_session(id, &msg).await);
+                    }
                 }
             }
-            let r = match self
-                .runtime
-                .request(id, "config/set", serde_json::json!({ "sid": id, "config": config }))
-                .await
+            // A bounded wait: config/set may have APPLIED in the adapter before the
+            // response failed or timed out, so an unknown outcome fails CLOSED rather
+            // than keep serving prompts on the old identity - and never hangs the
+            // handler (ADR-0009).
+            let r = match tokio::time::timeout(
+                crate::runtime::control_request_timeout(),
+                self.runtime
+                    .request(id, "config/set", serde_json::json!({ "sid": id, "config": config })),
+            )
+            .await
             {
-                Ok(v) => v,
-                Err(e) => {
-                    // config/set may have APPLIED in the adapter before the response
-                    // failed: the session is in an unknown configuration, so fail
-                    // closed rather than keep serving prompts on the old identity.
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => {
                     return Err(self
                         .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
+                        .await);
+                }
+                Err(_) => {
+                    return Err(self
+                        .quarantine_session(
+                            id,
+                            "config/set outcome unknown: the adapter did not answer in time",
+                        )
                         .await);
                 }
             };

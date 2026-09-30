@@ -178,3 +178,25 @@ Two defects found and fixed in the process:
 
 Honest limit: the live rehearsal needed a real long-running turn, which the mock
 provides; a REAL vendor turn still needs a credential authorization.
+
+## Bounded control requests (this pass, live)
+
+Rehearsed a boundary the earlier pass left open: a `config/set` whose **response was
+lost** (the adapter may have applied it, the hub never learns the outcome).
+
+- **Defect 9 (real)**: the mid-session `config/set` for a policy knob (`plan`/`review`)
+  and for the provider/model switch had **no bound**. An adapter that never answered
+  hung the PATCH handler **indefinitely** and left the session `active` on an UNKNOWN
+  configuration - a direct ADR-0009 violation and a fail-closed violation.
+- Fix: every control request (`credentials/grant`, `config/set`) now has a bounded wait
+  (`runtime::control_request_timeout`, default 60s, `AGENT_HUB_CONTROL_TIMEOUT_SECS`
+  overridable). On timeout the outcome is UNKNOWN, so the session is **quarantined**
+  (`needs-repair`), never assumed failed and never left running.
+
+Live evidence (bound = 3s):
+
+- PATCH `plan` against a mute adapter -> returns in **3.4s** with `502 adapter_crash`,
+  the session becomes `needs-repair`, and a new turn is refused (was: hang forever,
+  session stays `active`).
+- create against a mute adapter -> `starting` -> `starting_failed`
+  ("the adapter did not answer config/set in time") at ~3s (was: hang).
