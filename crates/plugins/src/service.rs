@@ -26,6 +26,8 @@ pub enum PluginError {
     Conflict(String),
     #[error("install failed: {0}")]
     InstallFailed(String),
+    #[error("no registry URL is configured")]
+    RegistryUrlMissing(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
     #[error("io: {0}")]
@@ -44,6 +46,7 @@ impl PluginError {
             PluginError::InvalidManifest(_) => "plugin_archive_invalid",
             PluginError::Conflict(_) => "idempotency_conflict",
             PluginError::InstallFailed(_) => "plugin_install_failed",
+            PluginError::RegistryUrlMissing(_) => "plugin_install_failed",
             PluginError::Db(_) | PluginError::Io(_) => "internal_error",
         }
     }
@@ -68,6 +71,97 @@ pub struct Plugins {
 }
 
 impl Plugins {
+    /// The registry file the hub reads: `AGENT_HUB_REGISTRY_FILE`, else
+    /// `<DATA_DIR>/registry.json` (beside the plugin root's parent).
+    fn registry_file(&self) -> PathBuf {
+        std::env::var("AGENT_HUB_REGISTRY_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                self.root
+                    .parent()
+                    .map(|p| p.join("registry.json"))
+                    .unwrap_or_else(|| PathBuf::from("registry.json"))
+            })
+    }
+
+    /// The plugin catalog: the registry file restated VERBATIM (the hub does not
+    /// resolve, rank or rewrite it). A missing or invalid file is a `fault`, never a
+    /// 500: the catalog is data, and its absence is a fact a caller needs.
+    pub fn catalog(&self) -> serde_json::Value {
+        let file = self.registry_file();
+        let source = file.to_string_lossy().to_string();
+        if !file.exists() {
+            return serde_json::json!({
+                "schema": 1, "source": null, "plugins": [],
+                "fault": format!("no registry at {source}")
+            });
+        }
+        let raw = match std::fs::read_to_string(&file) {
+            Ok(t) => t,
+            Err(e) => {
+                return serde_json::json!({
+                    "schema": 1, "source": source, "plugins": [],
+                    "fault": format!("the registry file is not readable: {e}")
+                })
+            }
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                return serde_json::json!({
+                    "schema": 1, "source": source, "plugins": [],
+                    "fault": format!("the registry file is not readable JSON: {e}")
+                })
+            }
+        };
+        let plugins = parsed.get("plugins").and_then(|v| v.as_array()).cloned();
+        match plugins {
+            Some(plugins) => serde_json::json!({
+                "schema": parsed.get("schema").and_then(|v| v.as_i64()).unwrap_or(1),
+                "source": source,
+                "note": parsed.get("note").cloned().unwrap_or(serde_json::Value::Null),
+                "plugins": plugins,
+            }),
+            None => serde_json::json!({
+                "schema": 1, "source": source, "plugins": [],
+                "fault": "the registry file has no plugins array"
+            }),
+        }
+    }
+
+    /// Refresh the catalog: read `AGENT_HUB_REGISTRY_URL` and write it where the hub
+    /// reads the catalog. This is the ONLY way the URL is contacted - never at
+    /// startup, never silently.
+    pub async fn refresh_registry(&self) -> Result<serde_json::Value, PluginError> {
+        let url = std::env::var("AGENT_HUB_REGISTRY_URL")
+            .map_err(|_| PluginError::RegistryUrlMissing("AGENT_HUB_REGISTRY_URL is not set".into()))?;
+        let resp = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| PluginError::RegistryUrlMissing(format!("registry fetch failed: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(PluginError::RegistryUrlMissing(format!(
+                "registry fetch failed: HTTP {}",
+                resp.status()
+            )));
+        }
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| PluginError::RegistryUrlMissing(format!("registry read failed: {e}")))?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| PluginError::RegistryUrlMissing(format!("registry is not JSON: {e}")))?;
+        let count = parsed
+            .get("plugins")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .ok_or_else(|| PluginError::RegistryUrlMissing("registry has no plugins array".into()))?;
+        let file = self.registry_file();
+        std::fs::write(&file, &text)?;
+        Ok(serde_json::json!({ "source": file.to_string_lossy(), "plugins": count }))
+    }
+
     pub fn new(db: Db, root: impl Into<PathBuf>, bus: Bus) -> Self {
         Plugins {
             db,

@@ -27,6 +27,9 @@ pub struct AdapterManifest {
     pub runtime: Option<RuntimeSpec>,
     pub permission_model: Option<String>,
     pub plan_mode: Option<String>,
+    /// The plugin's own icon files, by variant (`{light, dark}`), relative to the
+    /// plugin directory. The hub serves the bytes; it never inlines them.
+    pub icons: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

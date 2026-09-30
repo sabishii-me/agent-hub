@@ -50,6 +50,9 @@ fn table() -> agent_hub_transport::RouteTable<PluginsState> {
         .post("/v1/plugins/{id}/prepare", prepare)
         .post("/v1/plugins/{id}/enable", enable)
         .post("/v1/plugins/{id}/disable", disable)
+        .get("/v1/plugins/catalog", catalog)
+        .post("/v1/plugins/registry/refresh", refresh_registry)
+        .get("/v1/plugins/{id}/icon/{variant}", icon)
 }
 
 /// POST /v1/plugins/{id}/enable - enable a plugin's lifecycle. A disabled harness
@@ -80,6 +83,61 @@ async fn disable(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) 
         Err(_) => s
             .errors
             .render(&DomainError::new("not_found", format!("no plugin `{id}`"))),
+    }
+}
+
+/// GET /v1/plugins/catalog - the plugin catalog the hub was shipped with: the
+/// registry file restated verbatim (the hub does not resolve, rank or rewrite it).
+/// A missing or invalid file is a `fault`, never a 500.
+async fn catalog(State(s): State<PluginsState>) -> Response {
+    Json(s.plugins.catalog()).into_response()
+}
+
+/// POST /v1/plugins/registry/refresh - read AGENT_HUB_REGISTRY_URL and write it
+/// where the hub reads the catalog. The URL is contacted ONLY here.
+async fn refresh_registry(State(s): State<PluginsState>) -> Response {
+    match s.plugins.refresh_registry().await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => s.errors.render(&e.to_domain_error()),
+    }
+}
+
+/// GET /v1/plugins/{id}/icon/{variant} - serve one variant (light|dark) of a
+/// plugin's own icon, from the file its manifest declares. 404 when the plugin or
+/// the variant is absent. The hub never inlines the bytes.
+async fn icon(
+    State(s): State<PluginsState>,
+    AxumPath((id, variant)): AxumPath<(String, String)>,
+) -> Response {
+    if variant != "light" && variant != "dark" {
+        return s.errors.render(&DomainError::new("not_found", "variant must be light|dark"));
+    }
+    let Ok(h) = s.adapters.get(&id) else {
+        return s.errors.render(&DomainError::new("not_found", format!("no plugin `{id}`")));
+    };
+    let Some(rel) = h.manifest.icons.as_ref().and_then(|m| m.get(&variant)) else {
+        return s.errors.render(&DomainError::new("not_found", format!("`{id}` has no {variant} icon")));
+    };
+    // The icon path is relative to the plugin directory; refuse a traversal.
+    let path = h.directory.join(rel);
+    if !path.starts_with(&h.directory) {
+        return s.errors.render(&DomainError::new("not_found", "icon path escapes the plugin"));
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let ct = match path.extension().and_then(|e| e.to_str()) {
+                Some("svg") => "image/svg+xml",
+                Some("png") => "image/png",
+                _ => "application/octet-stream",
+            };
+            (
+                axum::http::StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, ct)],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => s.errors.render(&DomainError::new("not_found", format!("no icon file for `{id}` ({variant})"))),
     }
 }
 

@@ -669,7 +669,9 @@ follows distinguishes a real, narrow component fact from a product capability.
   mounted.
 - **plugins**: install/get/list/remove/prepare/recovery are real; `enable`/`disable` are real and
   DURABLE (a `harness_status` table; a disabled harness refuses session create/turns and survives a
-  restart). The catalog, registry refresh and icon routes are not mounted.
+  restart). The catalog (`GET /v1/plugins/catalog`, a verbatim restatement of the registry file
+  with a `fault` when absent), registry refresh (`POST /v1/plugins/registry/refresh`, the ONLY place
+  `AGENT_HUB_REGISTRY_URL` is contacted) and the icon route are real.
 
 ### What was fake and is being removed
 
@@ -819,7 +821,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 51
+### Real (mounted, real handler) - 54
 
 ```
 DELETE /v1/connections/{id}
@@ -840,7 +842,9 @@ GET /v1/model-providers/{id}/models
 GET /v1/models
 GET /v1/openapi.json
 GET /v1/plugins
+GET /v1/plugins/catalog
 GET /v1/plugins/{id}
+GET /v1/plugins/{id}/icon/{variant}
 GET /v1/sessions
 GET /v1/sessions/{id}
 GET /v1/sessions/{id}/approvals
@@ -860,6 +864,7 @@ POST /v1/model-providers
 POST /v1/model-providers/{id}/logout
 POST /v1/model-providers/{id}/models/refresh
 POST /v1/plugins
+POST /v1/plugins/registry/refresh
 POST /v1/plugins/{id}/disable
 POST /v1/plugins/{id}/enable
 POST /v1/plugins/{id}/prepare
@@ -889,22 +894,19 @@ POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted - 14
+### Not mounted - 11
 
 ```
 DELETE /v1/harnesses/{id}/connections/{cid}
 GET /v1/harnesses/{id}/auth/{op}
 GET /v1/harnesses/{id}/connections
 GET /v1/harnesses/{id}/connections/schema
-GET /v1/plugins/catalog
-GET /v1/plugins/{id}/icon/{variant}
 GET /v1/skills/{id}/files/{file...}
 PATCH /v1/harnesses/{id}/extensions
 POST /v1/harnesses/{id}/auth
 POST /v1/harnesses/{id}/auth/{op}/cancel
 POST /v1/harnesses/{id}/connections
 POST /v1/harnesses/{id}/connections/validate
-POST /v1/plugins/registry/refresh
 PUT /v1/skills/{id}/files/{file...}
 ```
 
