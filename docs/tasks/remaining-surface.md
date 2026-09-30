@@ -1,7 +1,7 @@
 # What remains, and why it is not hub-ownable yet
 
 Verified at the plugin-install-sources + repair commit against `contract/v1.json`
-(74 endpoints): 58 real, 6 mounted but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
+(74 endpoints): 56 real, 8 mounted but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
 own code, not on a hub omission. This file records the reason per group, so the next
 session does not re-derive it.
 
@@ -39,8 +39,11 @@ below (the `skills://` `node:fs` hook, ARCHITECTURE §7). They stay `501` with t
 
 ## The plugin-sourced skills model
 
-`GET`/`PUT /v1/skills/{id}/files/{file...}` stay `501` by a **decided** correction
-(TASK-048 C2): the earlier hub-authored skills store was the excluded model. The
+ALL FOUR skills routes (`GET /v1/skills`, `DELETE /v1/skills/{id}`, and
+`GET`/`PUT /v1/skills/{id}/files/{file...}`) stay `501` by a **decided** correction
+(TASK-048 C2): the earlier hub-authored skills store was the excluded model. (The
+architecture's §24 "Real" list was stale - it still counted `GET /v1/skills` and
+`DELETE /v1/skills/{id}` as real after C2 made every skills route `501`; corrected.) The
 decided direction is a plugin-sourced, layered delivery with a `skills://` `node:fs`
 hook (ARCHITECTURE §7), which is a verification-gated unknown (T2b). Re-enabling the
 routes over the old model would revert an approved correction.
