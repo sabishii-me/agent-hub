@@ -330,3 +330,15 @@ the process is gone and the turn is reconciled `interrupted` (no stale abort).
 - **A known terminal whose write failed is not forgotten**: `settle_turn` records a
   durable `terminal_intent` BEFORE the terminal write; `reconcile_interrupted` applies
   every recorded intent at boot. Test: `boot_applies_a_recorded_terminal_intent`.
+
+## S4: the owning adapter->contract error mapping (this pass)
+
+`adapter_code_to_contract` is the ONE place the adapter's hyphenated vocabulary
+(`contract/adapter-v1.json` `errors`) is reconciled with the hub's underscored codes
+(`contract/errors.json`): revision-conflict/credential-shadowed -> revision_conflict;
+unknown-provider -> provider_not_found; unknown-model -> model_not_found;
+auth-expired -> provider_unauthorized; busy-session-active -> session_busy;
+unsupported-for-provider -> unsupported; requires-new-session -> requires_new_session;
+validation-failed -> validation_failed; abort-failed -> adapter_unreachable. An unknown
+code is `adapter_crash` (never invented). `SessionError::from_start` uses it, so a typed
+refusal keeps its contract code through reopen/fork/PATCH. Test: `code_map_tests`.

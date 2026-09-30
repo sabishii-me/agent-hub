@@ -644,23 +644,46 @@ impl StartError {
             StartError::Spawn(_) => "adapter_unreachable",
             StartError::Protocol(_) => "adapter_crash",
             StartError::Refused { data, .. } => {
-                // Pass through the adapter's typed code ONLY when it is one the
-                // contract declares (a closed set); otherwise the honest fallback.
-                match data.get("code").and_then(|c| c.as_str()) {
-                    Some("provider_unauthorized") => "provider_unauthorized",
-                    Some("provider_not_found") => "provider_not_found",
-                    Some("model_not_found") => "model_not_found",
-                    Some("model_mismatch") => "model_mismatch",
-                    Some("model_not_applied") => "model_not_applied",
-                    Some("revision_conflict") => "revision_conflict",
-                    Some("requires_new_session") => "requires_new_session",
-                    Some("unsupported") => "unsupported",
-                    Some("validation_failed") => "validation_failed",
-                    Some("session_busy") => "session_busy",
-                    _ => "adapter_crash",
-                }
+                // The adapter answers with its OWN hyphenated codes (adapter-v1
+                // `errors`). Map them EXPLICITLY at this owning boundary; a code
+                // with no contract identity is an honest `adapter_crash`, never an
+                // invented one.
+                adapter_code_to_contract(data)
             }
         }
+    }
+}
+
+/// The owning adapter->contract error mapping. The adapter's vocabulary is the
+/// hyphenated set in `contract/adapter-v1.json` `errors`; the hub's is the
+/// underscored `contract/errors.json`. This is the ONE place they are reconciled
+/// (TASK-048 F5/S4).
+pub fn adapter_code_to_contract(data: &Value) -> &'static str {
+    let code = data.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    match code {
+        // The adapter's hyphenated codes.
+        "revision-conflict" => "revision_conflict",
+        "credential-shadowed" => "revision_conflict",
+        "unknown-provider" => "provider_not_found",
+        "unknown-model" => "model_not_found",
+        "validation-failed" => "validation_failed",
+        "auth-expired" => "provider_unauthorized",
+        "busy-session-active" => "session_busy",
+        "unsupported-for-provider" => "unsupported",
+        "requires-new-session" => "requires_new_session",
+        "abort-failed" => "adapter_unreachable",
+        // A contract code passed through unchanged (a hub-shaped adapter).
+        "provider_unauthorized" => "provider_unauthorized",
+        "provider_not_found" => "provider_not_found",
+        "model_not_found" => "model_not_found",
+        "model_mismatch" => "model_mismatch",
+        "model_not_applied" => "model_not_applied",
+        "revision_conflict" => "revision_conflict",
+        "requires_new_session" => "requires_new_session",
+        "unsupported" => "unsupported",
+        "validation_failed" => "validation_failed",
+        "session_busy" => "session_busy",
+        _ => "adapter_crash",
     }
 }
 
@@ -783,5 +806,31 @@ pub fn map_bus_err(e: agent_hub_adapter::BusError) -> StartError {
             StartError::Refused { code: code.to_string(), message, data }
         }
         other => StartError::Protocol(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod code_map_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The owning adapter->contract mapping is explicit and complete for the
+    /// adapter's declared vocabulary (TASK-048 F5/S4).
+    #[test]
+    fn adapter_codes_map_to_contract_codes() {
+        let m = |c: &str| adapter_code_to_contract(&json!({ "code": c }));
+        assert_eq!(m("revision-conflict"), "revision_conflict");
+        assert_eq!(m("credential-shadowed"), "revision_conflict");
+        assert_eq!(m("unknown-provider"), "provider_not_found");
+        assert_eq!(m("unknown-model"), "model_not_found");
+        assert_eq!(m("auth-expired"), "provider_unauthorized");
+        assert_eq!(m("busy-session-active"), "session_busy");
+        assert_eq!(m("requires-new-session"), "requires_new_session");
+        assert_eq!(m("unsupported-for-provider"), "unsupported");
+        assert_eq!(m("validation-failed"), "validation_failed");
+        // An unknown code is never invented into a contract code.
+        assert_eq!(m("totally-made-up"), "adapter_crash");
+        // A hub-shaped adapter passing a contract code through is honored.
+        assert_eq!(m("provider_unauthorized"), "provider_unauthorized");
     }
 }

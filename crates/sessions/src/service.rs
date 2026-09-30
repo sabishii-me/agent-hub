@@ -69,12 +69,14 @@ impl SessionError {
     /// start/transport failure (TASK-048 F5).
     pub fn from_start(e: crate::runtime::StartError) -> Self {
         if let crate::runtime::StartError::Refused { data, message, .. } = &e {
-            if let Some(code) = data.get("code").and_then(|c| c.as_str()) {
-                return SessionError::Provider {
-                    code: code.to_string(),
-                    message: message.clone(),
-                };
-            }
+            // Map the adapter's code to a CONTRACT code at this owning boundary, so
+            // the machine identity survives to the HTTP/resource result (TASK-048
+            // F5/S4). `code()` then returns it verbatim.
+            let contract = crate::runtime::adapter_code_to_contract(data);
+            return SessionError::Provider {
+                code: contract.to_string(),
+                message: message.clone(),
+            };
         }
         SessionError::Start(e.to_string())
     }
@@ -92,28 +94,25 @@ impl SessionError {
             SessionError::AbortFailed(_) => "adapter_unreachable",
             SessionError::Busy => "session_busy",
             SessionError::Provider { code, .. } => {
-                // The adapter answers with its OWN hyphenated codes (adapter-v1):
-                // translate the ones the hub has a contract identity for; pass a
-                // contract code through unchanged; otherwise it is a validation
-                // failure (never invent a code the master table does not declare).
+                // `from_start` already mapped adapter hyphenated codes to contract
+                // codes; a provider-domain code (from the provider service) is also a
+                // contract code. Return the declared one; an unknown value is a
+                // validation failure (never invent a code the master table lacks).
                 match code.as_str() {
-                    "abort-failed" => "adapter_unreachable",
-                    "provider_unauthorized" | "provider_not_found"
-                    | "provider_catalog_failed" | "revision_conflict" | "catalog_not_loaded"
-                    | "catalog_stale" | "internal_error" | "adapter_unreachable" => {
-                        // A declared contract code: keep it (the arm returns a
-                        // &'static; `code` is a String so cannot leak a slice).
-                        match code.as_str() {
-                            "provider_unauthorized" => "provider_unauthorized",
-                            "provider_not_found" => "provider_not_found",
-                            "provider_catalog_failed" => "provider_catalog_failed",
-                            "revision_conflict" => "revision_conflict",
-                            "catalog_not_loaded" => "catalog_not_loaded",
-                            "catalog_stale" => "catalog_stale",
-                            "adapter_unreachable" => "adapter_unreachable",
-                            _ => "internal_error",
-                        }
-                    }
+                    "provider_unauthorized" => "provider_unauthorized",
+                    "provider_not_found" => "provider_not_found",
+                    "provider_catalog_failed" => "provider_catalog_failed",
+                    "revision_conflict" => "revision_conflict",
+                    "catalog_not_loaded" => "catalog_not_loaded",
+                    "catalog_stale" => "catalog_stale",
+                    "adapter_unreachable" => "adapter_unreachable",
+                    "model_not_found" => "model_not_found",
+                    "model_mismatch" => "model_mismatch",
+                    "model_not_applied" => "model_not_applied",
+                    "requires_new_session" => "requires_new_session",
+                    "unsupported" => "unsupported",
+                    "session_busy" => "session_busy",
+                    "internal_error" => "internal_error",
                     _ => "validation_failed",
                 }
             }
