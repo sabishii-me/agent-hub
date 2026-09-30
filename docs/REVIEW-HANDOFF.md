@@ -1,11 +1,11 @@
 # Review handoff
 
-**Fixed SHA: `1abd5bf2ab8a19dc0e9804061233a0c42dcd4b79`**
+**Fixed SHA: `2bf3f38f313ec3eb49d218bc6a4555704cb156f3`**
 (`origin/feat/hub-modular-redesign`, PR #12)
 
-Previous reviewed base: `3b6730b3befece01777208638a587aa7f8ad785b`. The range
-`3b6730b3..1abd5bf` closes F1-F5 of PROVIDER-TURN-REVIEW-3b6730b3 plus N4; see
-`docs/tasks/review-3b6730b3.md`. This document states what changed, the evidence,
+Previous reviewed base: `9647b0d4df354ab36a8cc34d160bc86909ea470d`. The range
+`9647b0d..2bf3f38` addresses F1/F3/F4 (P1) of PROVIDER-TURN-REVIEW-9647b0d and the F5/N4
+remainders; see `docs/tasks/review-9647b0d.md` and `docs/tasks/review-3b6730b3.md`. This document states what changed, the evidence,
 and the remaining surface, so a review does not re-derive any of it.
 
 ## What to read first
