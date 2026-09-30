@@ -66,3 +66,11 @@ The execution timeout (`timeout_unconfirmed_cancels(30, 1800)`) now covers BOTH 
 unconfirmed cancel (30s) and a `running` turn whose prompt never returned (1800s): it
 stops the adapter and settles `interrupted`. `running_at` records when a turn entered
 `running`, so the age is known.
+
+## N4 — shared placement serialized per harness
+
+`harness_env` deletes and rebuilds the SHARED `<data>/agents/<id>/extensions` tree.
+It now holds a per-harness placement lock (a sync mutex) across the whole
+delete/install, so two concurrent starts of the same harness cannot interleave those
+moves and half-swap the tree. (The blocking work already ran in `spawn_blocking`; this
+closes the shared-publication race the reviewer named.)

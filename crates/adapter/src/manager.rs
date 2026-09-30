@@ -93,6 +93,10 @@ pub struct Adapters {
     /// The durable status store: a harness's enable/disable survives a restart, so a
     /// rescan never silently re-enables a disabled harness.
     status_store: Option<agent_hub_db::Db>,
+    /// One SYNC placement lock per harness: `harness_env` deletes and rebuilds the
+    /// SHARED `<data>/agents/<id>/extensions` tree, so two concurrent starts of the
+    /// same harness must not interleave those moves (TASK-048 N4).
+    placement_locks: Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
 }
 
 impl Adapters {
@@ -104,7 +108,19 @@ impl Adapters {
             running: Mutex::new(HashMap::new()),
             events,
             status_store: None,
+            placement_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The sync placement lock for one harness id (held across the whole
+    /// delete/rebuild so the shared tree is never half-swapped).
+    fn placement_lock(&self, id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+        self.placement_locks
+            .lock()
+            .expect("placement locks")
+            .entry(id.to_string())
+            .or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(())))
+            .clone()
     }
 
     /// Attach a durable status store (the hub's DB), so enable/disable survives a
@@ -127,6 +143,10 @@ impl Adapters {
         id: &str,
         session_id: Option<String>,
     ) -> Result<HarnessEnv, AdapterError> {
+        // Serialize the shared-tree rebuild per harness: a concurrent start of the
+        // same harness waits here instead of racing the delete/install moves.
+        let placement = self.placement_lock(id);
+        let _placement_guard = placement.lock().unwrap_or_else(|e| e.into_inner());
         let base = self.data_dir.join("agents").join(id);
         let harness_dir = base.clone();
         let skills_dir = base.join("skills");

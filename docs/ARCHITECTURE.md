@@ -831,6 +831,11 @@ Verified live: `{plan:true, review:true, presetId:standard}` -> active with
   right before dispatch; a core cancel timeout stops the adapter and settles
   `interrupted`.
 - **F5**: `internal_error` passes through; the bus keeps the adapter's typed `data`.
+- **F4 refinement**: `StartError::Refused` distinguishes an adapter answer from a
+  transport error; the execution timeout covers both an unconfirmed cancel and a stuck
+  `running` turn.
+- **N4**: `harness_env` holds a per-harness placement lock across the shared-tree
+  rebuild, so concurrent starts cannot half-swap it.
 
 ## 24. The remaining surface (single source of truth)
 
