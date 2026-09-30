@@ -144,8 +144,14 @@ impl Harnesses {
             .call(id, capability, method, json!({}))
             .await
             .map_err(HarnessError::Adapter)?;
-        // The adapter's own answer already carries harnessId/known/list.
-        Ok(reply)
+        // The hub adds the envelope the contract requires: every gated capability
+        // answer names the harness it addressed and is `known` when the harness
+        // answered. A list key the adapter omitted is an empty list, never null.
+        let mut obj = reply.as_object().cloned().unwrap_or_default();
+        obj.insert("harnessId".into(), json!(id));
+        obj.insert("known".into(), json!(true));
+        obj.entry(list_key.to_string()).or_insert_with(|| json!([]));
+        Ok(Value::Object(obj))
     }
 
     /// The extension ids this harness may be given (the plugin's shipped set),

@@ -323,8 +323,18 @@ impl Adapters {
 
     /// Start an adapter for a harness (idempotent: one process per harness).
     pub async fn ensure_started(&self, id: &str) -> Result<RequestHandle, AdapterError> {
-        if let Some(handle) = self.running.lock().expect("running").get(id) {
-            return Ok(handle.clone());
+        // A cached handle whose process has EXITED is not reusable: a one-shot
+        // capability adapter (pi) exits after it answers `models/list` etc. Drop a
+        // dead handle and respawn, or the next capability call faults with a closed
+        // pipe.
+        {
+            let mut running = self.running.lock().expect("running");
+            if let Some(handle) = running.get(id) {
+                if handle.is_alive() {
+                    return Ok(handle.clone());
+                }
+                running.remove(id);
+            }
         }
         let harness = self.get(id)?;
         if harness.status == HarnessStatus::Disabled {

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -46,9 +46,18 @@ pub struct RequestHandle {
     stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
     next_id: Arc<AtomicU64>,
     pending: Pending,
+    /// False once the adapter's stdout closes (the process exited). A cached
+    /// handle that is dead must not be reused: a one-shot capability adapter exits
+    /// after it answers.
+    alive: Arc<AtomicBool>,
 }
 
 impl RequestHandle {
+    /// Whether the adapter process is still alive (its stdout is open).
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
+    }
+
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, BusError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
@@ -119,8 +128,10 @@ impl AgentBus {
 
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (tx, rx) = mpsc::unbounded_channel();
+        let alive = Arc::new(AtomicBool::new(true));
 
         let reader_pending = pending.clone();
+        let reader_alive = alive.clone();
         let reader = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -157,6 +168,9 @@ impl AgentBus {
                     }
                 }
             }
+            // The adapter closed its stdout: it is gone. Mark it dead so a cached
+            // handle is not reused.
+            reader_alive.store(false, Ordering::Relaxed);
             let mut pending = reader_pending.lock().expect("pending");
             for (_, sender) in pending.drain() {
                 let _ = sender.send(Err(BusError::Closed));
@@ -169,6 +183,7 @@ impl AgentBus {
                 stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
                 next_id: Arc::new(AtomicU64::new(1)),
                 pending,
+                alive,
             },
             notifications: Notifications { rx },
             _reader: reader,
@@ -185,5 +200,38 @@ impl AgentBus {
         let _status = self.child.wait().await?;
         // The reader task ends when stdout closes; do not block a retry on it.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod alive_tests {
+    use super::*;
+
+    /// A child that exits marks its handle dead: a cached handle is not reused.
+    /// This is what makes a one-shot capability adapter safe to call repeatedly.
+    #[tokio::test]
+    async fn a_dead_child_is_reported_dead() {
+        // A shell/one-shot command that exits immediately. Use the platform shell.
+        let (program, args): (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/C".into(), "echo {}".into()])
+        } else {
+            ("sh", vec!["-c".into(), "true".into()])
+        };
+        let bus = AgentBus::spawn(
+            &[program.to_string(), args[0].clone(), args[1].clone()],
+            std::path::Path::new("."),
+            &[],
+        )
+        .expect("spawn");
+        let handle = bus.requests.clone();
+        assert!(handle.is_alive(), "alive right after spawn");
+        // Wait for the child to exit and the reader to observe EOF.
+        for _ in 0..100 {
+            if !handle.is_alive() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!handle.is_alive(), "a handle whose child exited reports dead");
     }
 }
