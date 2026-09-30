@@ -31,11 +31,23 @@ pub enum BusError {
     Protocol(String),
 }
 
-/// A notification from the adapter (an event the hub turns into an SSE frame).
+/// A message the adapter PUSHED: either a NOTIFICATION (an event the hub turns into
+/// an SSE frame) or a REVERSE REQUEST the adapter wants the hub to ANSWER (e.g.
+/// `approval_need`). A reverse request carries the JSON-RPC `id`, which the hub must
+/// echo on its reply (JSON-RPC 2.0). `id` is `None` for a plain notification.
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub method: String,
     pub params: Value,
+    /// The JSON-RPC id when the adapter expects a REPLY (a reverse request).
+    pub id: Option<Value>,
+}
+
+impl Notification {
+    /// Whether the hub must reply (a reverse request, not a one-way event).
+    pub fn wants_reply(&self) -> bool {
+        self.id.is_some()
+    }
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, BusError>>>>>;
@@ -56,6 +68,31 @@ impl RequestHandle {
     /// Whether the adapter process is still alive (its stdout is open).
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    /// Answer a REVERSE REQUEST the adapter pushed (its `id` from the
+    /// `Notification`). This is the hub's half of a bidirectional JSON-RPC link: an
+    /// `approval_need` from the adapter is answered with the user's decision.
+    pub async fn reply(&self, id: &Value, result: Value) -> Result<(), BusError> {
+        let msg = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+        self.write_frame(&msg).await
+    }
+
+    /// Reply an ERROR to a reverse request (e.g. the session ended before a
+    /// decision, or the request is refused).
+    pub async fn reply_error(&self, id: &Value, code: i64, message: &str) -> Result<(), BusError> {
+        let msg = json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } });
+        self.write_frame(&msg).await
+    }
+
+    /// Write one JSON-RPC frame to the adapter's stdin.
+    async fn write_frame(&self, msg: &Value) -> Result<(), BusError> {
+        let mut line = serde_json::to_string(msg).expect("serialize frame");
+        line.push('\n');
+        let mut stdin = self.stdin.lock().await;
+        stdin.write_all(line.as_bytes()).await?;
+        stdin.flush().await?;
+        Ok(())
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, BusError> {
@@ -191,7 +228,11 @@ impl AgentBus {
                 if msg.get("method").is_some() {
                     let method = msg["method"].as_str().unwrap_or_default().to_string();
                     let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                    let _ = tx.send(Notification { method, params });
+                    // An `id` means the adapter wants an ANSWER (a reverse request,
+                    // e.g. approval_need). Keep it, so the hub can reply to the SAME
+                    // request (JSON-RPC 2.0). No id = a one-way notification.
+                    let id = msg.get("id").cloned();
+                    let _ = tx.send(Notification { method, params, id });
                     continue;
                 }
                 if let Some(id) = msg.get("id").and_then(Value::as_u64) {

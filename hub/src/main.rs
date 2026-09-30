@@ -5,6 +5,7 @@
 //! implemented they mount here the same way.
 
 use std::path::PathBuf;
+use serde_json::Value;
 
 use agent_hub_db::Db;
 use agent_hub_events::Bus;
@@ -222,6 +223,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<agent_hub_sessions::runtime::Grant, String>> + Send>>
     };
+    // Humans owns approvals/questions; created BEFORE the session runtime so the
+    // reverse-request handler can raise into it and await the /v1 decision.
+    let humans = std::sync::Arc::new(Humans::new(bus.clone()));
     let sessions = std::sync::Arc::new(
         Sessions::new(
             sessions_db,
@@ -236,6 +240,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Box::new(move || conns.materialize().map_err(|e| e.to_string()))
         }),
     );
+
+    // The reverse-request handler: the adapter asks the hub to decide. For
+    // `approval_need`/`question_need`, raise the resource and AWAIT the /v1
+    // decision, then return the reply the adapter's request is waiting for
+    // (TASK-048 G1). A method the hub does not answer returns `None` (the pump
+    // leaves it as an announcement).
+    {
+        let humans = humans.clone();
+        sessions.set_reverse_handler(std::sync::Arc::new(move |sid: String, method: String, params: Value| {
+            let humans = humans.clone();
+            Box::pin(async move {
+                match method.as_str() {
+                    "approval_need" => {
+                        let tool = params.get("tool").and_then(Value::as_str).unwrap_or("tool").to_string();
+                        let args = params.get("args").cloned().unwrap_or(Value::Null);
+                        let options = params
+                            .get("options")
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>());
+                        let approval = humans.raise_approval(&sid, &tool, args, options);
+                        let rx = humans.await_approval(&approval.id);
+                        match rx.await {
+                            Ok(resolved) => {
+                                let decision = resolved.decision.unwrap_or_else(|| "reject".into());
+                                let approved = !decision.to_lowercase().contains("reject");
+                                Some(serde_json::json!({
+                                    "approved": approved,
+                                    "decision": decision,
+                                    "reason": resolved.reason,
+                                }))
+                            }
+                            // The approval was dropped (session ended): answer a
+                            // refusal so the adapter never waits forever.
+                            Err(_) => Some(serde_json::json!({ "approved": false, "reason": "the approval was withdrawn" })),
+                        }
+                    }
+                    "question_need" => {
+                        let questions = params.get("questions").cloned().unwrap_or(Value::Null);
+                        let question = humans.raise_question(&sid, questions);
+                        let rx = humans.await_question(&question.id);
+                        match rx.await {
+                            Ok(resolved) => Some(serde_json::json!({ "answers": resolved.answers })),
+                            Err(_) => Some(serde_json::json!({ "answers": Value::Null })),
+                        }
+                    }
+                    _ => None,
+                }
+            })
+        }));
+    }
     // A start interrupted by a restart must not keep claiming `starting`.
     match sessions.reconcile_interrupted() {
         Ok(n) if n > 0 => tracing::info!(reconciled = n, "reconciled sessions interrupted by a restart"),
@@ -269,8 +323,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let skills = Skills::new(&data_dir);
     let skill_state = SkillsState::new(skills, errors.clone());
 
-    // Humans: approvals and questions.
-    let human_state = HumansState::shared(Humans::new(bus.clone()), errors.clone());
+    // Humans: approvals and questions (the SAME instance the reverse handler uses).
+    let human_state = HumansState::new(humans.clone(), errors.clone());
 
     // Every route requires the bearer token (o5: no anonymous discovery).
     let bearer = BearerToken::from_env_or_generate();

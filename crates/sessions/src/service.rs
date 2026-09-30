@@ -441,6 +441,12 @@ impl Sessions {
     }
 
     /// The full spec (does placement). Called in the detached start only.
+    /// Install the reverse-request handler on the underlying runtime (the adapter
+    /// -> hub requests, e.g. `approval_need`). Wired once by the composition root.
+    pub fn set_reverse_handler(&self, handler: crate::runtime::ReverseHandler) {
+        self.runtime.set_reverse_handler(handler);
+    }
+
     fn harness(&self, id: &str) -> Result<HarnessSpec, SessionError> {
         (self.harness_spec)(id).map_err(SessionError::NoHarness)
     }

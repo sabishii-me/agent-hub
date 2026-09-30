@@ -66,6 +66,12 @@ pub struct Humans {
     approvals: Mutex<HashMap<String, Approval>>,
     questions: Mutex<HashMap<String, Question>>,
     counter: std::sync::atomic::AtomicU64,
+    /// One waiter per pending approval: the reverse request raised by the adapter
+    /// (`approval_need`) waits here, and `/v1` resolution fires it so the decision
+    /// reaches the SAME adapter request (TASK-048 G1).
+    approval_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Approval>>>,
+    /// The same for a question (`question_need`).
+    question_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Question>>>,
 }
 
 fn now_millis() -> u64 {
@@ -82,12 +88,37 @@ impl Humans {
             approvals: Mutex::new(HashMap::new()),
             questions: Mutex::new(HashMap::new()),
             counter: std::sync::atomic::AtomicU64::new(0),
+            approval_waiters: Mutex::new(HashMap::new()),
+            question_waiters: Mutex::new(HashMap::new()),
         }
     }
 
     fn next_id(&self, prefix: &str) -> String {
         let n = self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         format!("{prefix}-{}", now_millis() + n)
+    }
+
+    /// Register a waiter for a pending approval and return the receiver. The
+    /// adapter's `approval_need` reverse request awaits this; `/v1` resolution fires
+    /// it. A duplicate registration replaces the previous waiter (the same approval
+    /// has one waiting request).
+    pub fn await_approval(&self, approval_id: &str) -> tokio::sync::oneshot::Receiver<Approval> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.approval_waiters
+            .lock()
+            .expect("waiters")
+            .insert(approval_id.to_string(), tx);
+        rx
+    }
+
+    /// The same for a question.
+    pub fn await_question(&self, question_id: &str) -> tokio::sync::oneshot::Receiver<Question> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.question_waiters
+            .lock()
+            .expect("waiters")
+            .insert(question_id.to_string(), tx);
+        rx
     }
 
     /// Register an approval the adapter raised (`approval_need`).
@@ -155,6 +186,12 @@ impl Humans {
         }
         approval.decision = Some(decision.to_string());
         let out = approval.clone();
+        drop(all);
+        // Fire the reverse-request waiter so the adapter's `approval_need` is
+        // answered with THIS decision (same request; JSON-RPC id preserved).
+        if let Some(tx) = self.approval_waiters.lock().expect("waiters").remove(approval_id) {
+            let _ = tx.send(out.clone());
+        }
         self.bus.publish(
             "approval.resolved",
             json!({
@@ -209,6 +246,10 @@ impl Humans {
         }
         question.answers = Some(answers.clone());
         let out = question.clone();
+        drop(all);
+        if let Some(tx) = self.question_waiters.lock().expect("waiters").remove(question_id) {
+            let _ = tx.send(out.clone());
+        }
         self.bus.publish(
             "question.answered",
             json!({ "questionId": question_id, "sessionId": session_id, "answers": answers }),

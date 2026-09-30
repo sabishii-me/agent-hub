@@ -163,7 +163,19 @@ pub struct Sessions {
     /// the generation under the delivery lock and refuses to act if the process
     /// was replaced (stop/reopen) since (TASK-048 F4).
     generations: Mutex<std::collections::HashMap<String, u64>>,
+    /// The REVERSE-REQUEST handler (the adapter asks the hub): given
+    /// `(sid, method, params)`, it returns the JSON-RPC `result` to send back (or
+    /// `None` to leave a plain notification alone). The composition root wires this
+    /// to Humans for `approval_need`/`question_need` (TASK-048 G1).
+    reverse: std::sync::Mutex<Option<ReverseHandler>>,
 }
+
+/// A boxed reverse-request handler.
+pub type ReverseHandler = std::sync::Arc<
+    dyn Fn(String, String, Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Value>> + Send>>
+        + Send
+        + Sync,
+>;
 
 impl Sessions {
     pub fn new(events: agent_hub_events::Bus) -> Self {
@@ -172,7 +184,14 @@ impl Sessions {
             requests: Mutex::new(std::collections::HashMap::new()),
             events,
             generations: Mutex::new(std::collections::HashMap::new()),
+            reverse: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Install the reverse-request handler (the adapter -> hub requests). Wired
+    /// once by the composition root.
+    pub fn set_reverse_handler(&self, handler: ReverseHandler) {
+        *self.reverse.lock().expect("reverse") = Some(handler);
     }
 
     /// Start a session against a real adapter: spawn the process, run
@@ -358,19 +377,36 @@ impl Sessions {
         // its session, so one stream carries every session's turn events.
         let events = self.events.clone();
         let pump_sid = sid.clone();
+        let pump_events = events.clone();
+        let pump_reply = bus.requests.clone();
+        let pump_reverse = self.reverse.lock().expect("reverse").clone();
         let mut notifications = std::mem::replace(
             &mut bus.notifications,
             agent_hub_adapter::Notifications::closed(),
         );
         tokio::spawn(async move {
             while let Some(n) = notifications.recv().await {
+                // A REVERSE REQUEST (`id` present, e.g. `approval_need`) must be
+                // ANSWERED, not merely announced: run the handler and reply to the
+                // SAME request. A plain notification is published as an event.
+                if n.wants_reply() {
+                    let id = n.id.clone().unwrap_or(Value::Null);
+                    let method = n.method.clone();
+                    if let Some(handler) = &pump_reverse {
+                        let result = handler(pump_sid.clone(), method, n.params.clone()).await;
+                        if let Some(result) = result {
+                            let _ = pump_reply.reply(&id, result).await;
+                        }
+                    }
+                    continue;
+                }
                 let mut payload = n.params.clone();
                 if let Some(obj) = payload.as_object_mut() {
                     obj.insert("sessionId".into(), json!(pump_sid));
                 } else {
                     payload = json!({ "sessionId": pump_sid, "data": payload });
                 }
-                events.publish(n.method, payload);
+                pump_events.publish(n.method, payload);
             }
         });
         let process = SessionProcess {
