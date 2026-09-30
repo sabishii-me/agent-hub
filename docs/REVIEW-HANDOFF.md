@@ -1,6 +1,6 @@
 # Review handoff
 
-**Fixed SHA: `2bf3f38f313ec3eb49d218bc6a4555704cb156f3`**
+**Fixed SHA: `44079dcbee44da161f1ba4df1de420603aae71f0`**
 (`origin/feat/hub-modular-redesign`, PR #12)
 
 Previous reviewed base: `9647b0d4df354ab36a8cc34d160bc86909ea470d`. The range
@@ -85,6 +85,8 @@ answer `200` (the TASK-036 freeze defect does not reproduce).
 
 ## Authorization
 
-No real credential was read, no apiKey imported, no real vendor call made. The one honest
-gap on the vertical chain is a REAL model turn, which needs a credential authorization;
-it blocks only that call, not the system implementation.
+No real credential was read, no apiKey imported, no real vendor call made. A real model
+turn needs a credential authorization (it blocks only that call). Fault/recovery branches
+(an unconfirmed cancel, a stop that fails, a config response failing after the adapter
+applied it, a DB-terminal write failing) are reasoned and unit-tested but only partly
+exercised on a real process - see `docs/tasks/lifecycle-chain.md`.

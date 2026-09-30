@@ -28,16 +28,21 @@ hub-managed provider relationship state
 ```
 
 Every link has real code and live verification; the work records below hold the detail.
-**The one honest gap is a real model turn**, which needs a provider credential the hub does
-not have here. That gap is a **credential authorization**, not a code gap; see the boundary.
+What is NOT fully closed, honestly: a real model turn needs a provider credential this
+environment does not have (a credential authorization - it blocks only that call); and
+several fault/recovery branches are reasoned and unit-tested but only partly exercised
+on a real process (an unconfirmed cancel, a stop that fails, a config response that
+fails after the adapter applied it). These are tracked in `docs/tasks/lifecycle-chain.md`
+and `docs/tasks/review-*.md`, not claimed as done.
 
-### Next step
+### Current focus
 
-Make the chain a **usable product slice**, not just correct internals - the next capability is
-`PATCH /v1/sessions/{id}` (mid-session provider/model switch, `title`, `plan`/`review`,
-`thinkingLevel`) over the same resolver->grant->`config/set`->applied-confirmation path, plus
-the read views (`messages`, `stats`). See `docs/ARCHITECTURE.md` §24 for the exact remaining
-surface.
+Make the already-wired chain a **coherent, recoverable slice** before adding surface: one
+consistent story for provider version + secret ownership, resolver consistency, the applied
+confirmation on start/reopen/switch, turn admission/delivery/cancel/terminal, fault/restart
+reclamation, and one fact across GET/event/error. The whole-chain analysis is
+`docs/tasks/lifecycle-chain.md`; `docs/ARCHITECTURE.md` §24 lists the remaining surface
+(unbuilt routes stay `501` and are not this round's goal).
 
 ## Status
 
