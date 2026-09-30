@@ -81,7 +81,11 @@ impl SessionError {
             SessionError::NoHarness(_) => "harness_not_found",
             SessionError::Validation(_) => "validation_failed",
             SessionError::Unsupported(_) => "unsupported",
-            SessionError::AbortFailed(_) => "abort_failed",
+            // The abort could not be delivered to a LIVE adapter: the adapter is
+            // unreachable (not crashed - it is still there, holding the turn).
+            // `adapter_unreachable` (502, retryable) is the declared identity; the
+            // timeout sweep will rescue the turn if it never confirms.
+            SessionError::AbortFailed(_) => "adapter_unreachable",
             SessionError::Busy => "session_busy",
             SessionError::Provider { code, .. } => {
                 // A leaked &'static is fine here: the codes are a closed set.

@@ -155,3 +155,26 @@ publication; then (4)+(5) the turn half; then (6) the error path.
 
 Verified: zero warnings; `cargo test --workspace` all green (39 result sets); live
 create->active, turn->terminal, cancel idempotent, GET reflects the row.
+
+## Rehearsed on a real process (this pass)
+
+A mock adapter (`E:/AI/ideas/_mock/plugins/mock`, NOT in the repo) obeys the protocol
+but deliberately never answers `session/prompt`/`session/abort`. Rehearsal result:
+
+- create -> `active`; prompt -> turn `running`; cancel -> the abort is not answered.
+- The turn stays held; within one sweep tick it becomes `ended/interrupted` and the
+  session becomes `needs-repair` (in memory AND in the DB), logged `timed_out=1`.
+- Reopen -> `active` again.
+
+Two defects found and fixed in the process:
+
+7. **Reader treated any end-of-stream as "the adapter exited"** (`crates/adapter`): a
+   transient EOF detached a LIVE adapter, so a delivered abort failed and the turn was
+   left unsettled until the sweep. The reader now re-reads on EOF and only concludes the
+   adapter is gone after a SUSTAINED EOF.
+8. **The cancel could not be delivered** returned the UNDECLARED `abort_failed` (500).
+   It now returns the declared `adapter_unreachable` (502, retryable) - the adapter is
+   alive, just not answering; the sweep still rescues the turn.
+
+Honest limit: the live rehearsal needed a real long-running turn, which the mock
+provides; a REAL vendor turn still needs a credential authorization.

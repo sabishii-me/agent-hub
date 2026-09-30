@@ -134,7 +134,37 @@ impl AgentBus {
         let reader_alive = alive.clone();
         let reader = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            const EOF_RETRIES: u32 = 20;
+            let mut eof_streak: u32 = 0;
+            loop {
+                // Distinguish a real END OF STREAM (the adapter is gone) from a
+                // transient read error: `while let Ok(Some(..))` treated an IO error
+                // as "closed", which detached a LIVE adapter and failed a delivered
+                // abort (TASK-048 rework). Only `Ok(None)` (EOF) or a repeated error
+                // after the child has exited ends the read.
+                let line = match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        eof_streak = 0;
+                        line
+                    }
+                    Ok(None) => {
+                        // END OF STREAM. Confirmed by re-reading: a transient EOF (a
+                        // pipe read racing the adapter's own flush) must NOT be
+                        // mistaken for "the adapter exited", or a LIVE adapter gets
+                        // detached and a delivered abort fails (TASK-048 rework).
+                        // Only a SUSTAINED EOF means the adapter is gone.
+                        eof_streak += 1;
+                        if eof_streak <= EOF_RETRIES {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            continue;
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "adapter read error; retrying");
+                        continue;
+                    }
+                };
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -173,6 +203,7 @@ impl AgentBus {
             }
             // The adapter closed its stdout: it is gone. Mark it dead so a cached
             // handle is not reused.
+            tracing::warn!("adapter stdout closed (reader ending)");
             reader_alive.store(false, Ordering::Relaxed);
             let mut pending = reader_pending.lock().expect("pending");
             for (_, sender) in pending.drain() {
