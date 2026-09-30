@@ -100,3 +100,18 @@ plaintext token is used to cross it.
 At boot: `starting` -> `starting_failed`; `active` (no process) -> `needs-repair`;
 open turns (`ended IS NULL`) settled `failed` (or `interrupted` when `cancelling`).
 Verified live: kill-without-close -> restart -> `needs-repair` -> `reopen` -> `active`.
+
+## Read-through routes (messages / stats / skills)
+
+`GET /v1/sessions/{id}/messages` -> adapter `history/page`, translated to the
+contract's `{messages, next_cursor}` (the cursor is the OLDEST id on the page while
+more remain, else null). `GET .../stats` -> `session/stats` (a field the harness does
+not report is ABSENT: a zero and an unmeasured value are different claims; the hub
+adds `sessionId`/`source:"harness"`). `GET .../skills` -> `skills/list` (the skills
+the HARNESS actually has, not the hub's installed set).
+
+All three are READ-THROUGH: a read starts the session's process if it is not running
+(`Sessions::read_through` -> `ensure_running_locked` reuses the reopen path, re-grant
+included) and caches nothing. Verified live: on a CLOSED (`readonly`) session, `GET
+/stats` started the process (status back to `active`) and answered from the harness.
+Real-hub gated test `read_through_routes_start_the_process_and_answer_from_the_harness`.

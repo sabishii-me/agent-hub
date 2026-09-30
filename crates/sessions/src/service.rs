@@ -793,8 +793,26 @@ impl Sessions {
     pub async fn reopen(self: Arc<Self>, id: &str) -> Result<SessionView, SessionError> {
         let lock = self.lock_for(id).await;
         let _guard = lock.lock().await;
+        self.ensure_running_locked(id, false).await
+    }
+
+    /// Ensure a session has a running adapter process, WITHOUT holding the lock
+    /// (the caller holds it). Used by reopen and by the read-through routes
+    /// (messages/stats/skills): a read starts the process if it is not running and
+    /// caches nothing.
+    ///
+    /// `already_running_is_ok`: reopen refuses a running session (never overwrite a
+    /// live instance); a read-through tolerates one (it just wants the process).
+    async fn ensure_running_locked(
+        self: &Arc<Self>,
+        id: &str,
+        already_running_is_ok: bool,
+    ) -> Result<SessionView, SessionError> {
         let mut row = self.db.session(id)?.ok_or_else(|| SessionError::NotFound(id.into()))?;
         if self.runtime.is_running(id) {
+            if already_running_is_ok {
+                return Ok(self.view(&row));
+            }
             return Err(SessionError::Validation("the session is already running".into()));
         }
         if row.native_ref.is_none() {
@@ -849,9 +867,6 @@ impl Sessions {
         row.applied_review = process.applied_review;
         row.updated_at = now_utc();
         if let Err(e) = self.db.update_session(&row) {
-            // The process started but the row could not be persisted: stop it and
-            // mark the session for repair. A live adapter behind a stale row is
-            // exactly the leak N3 names (TASK-048).
             let _ = self.runtime.stop(id).await;
             row.status = "needs-repair".into();
             row.updated_at = now_utc();
@@ -863,6 +878,29 @@ impl Sessions {
         let view = self.view(&row);
         self.bus.publish("session.reopened", serde_json::json!({ "session": view, "reopened": true }));
         Ok(view)
+    }
+
+    /// A READ-THROUGH capability call on a session: start its process if it is not
+    /// running (caching nothing), then ask the adapter. `method`/`params` are the
+    /// session-scoped adapter method.
+    pub async fn read_through(
+        self: Arc<Self>,
+        id: &str,
+        method: &str,
+        mut params: serde_json::Value,
+    ) -> Result<serde_json::Value, SessionError> {
+        {
+            let lock = self.lock_for(id).await;
+            let _guard = lock.lock().await;
+            self.ensure_running_locked(id, true).await?;
+        }
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("sid".into(), serde_json::json!(id));
+        }
+        self.runtime
+            .request(id, method, params)
+            .await
+            .map_err(|e| SessionError::Start(e.to_string()))
     }
 
     /// Delete (soft): stop the process, mark the row deleted.

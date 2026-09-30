@@ -617,9 +617,9 @@ follows distinguishes a real, narrow component fact from a product capability.
   "do not intervene". `PATCH /v1/sessions/{id}` is now real: policy knobs
   (`plan`/`review`) apply during a running turn, model/provider/preset/thinking require
   an idle turn (`409 session_busy`), a title is renamed IN the harness, and a switch
-  runs the same resolver -> grant -> `config/set` -> applied-confirmation path. Still
-  `501`: `fork`, `compact`, `messages`, `stats`, `skills` (read-through), `artifacts`,
-  `repair`, `resources`.
+  runs the same resolver -> grant -> `config/set` -> applied-confirmation path. `messages`/`stats`/`skills` are
+  now real read-through views (a read starts the process if needed, caches nothing).
+  Still `501`: `fork`, `compact`, `artifacts`, `repair`, `resources`.
 
 - **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
   identity is the body `idempotencyKey`, reserved **durably** by the UNIQUE
@@ -809,7 +809,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 37
+### Real (mounted, real handler) - 40
 
 ```
 DELETE /v1/model-providers/{id}
@@ -831,7 +831,10 @@ GET /v1/plugins/{id}
 GET /v1/sessions
 GET /v1/sessions/{id}
 GET /v1/sessions/{id}/approvals
+GET /v1/sessions/{id}/messages
 GET /v1/sessions/{id}/questions
+GET /v1/sessions/{id}/skills
+GET /v1/sessions/{id}/stats
 GET /v1/sessions/{id}/turns
 GET /v1/skills
 GET /v1/status
@@ -851,16 +854,13 @@ POST /v1/sessions/{id}/reopen
 POST /v1/sessions/{id}/turns
 ```
 
-### Mounted but `501` - 14
+### Mounted but `501` - 11
 
 ```
 GET /v1/model-providers/types
 GET /v1/model-providers/{id}/auth/{op}
 GET /v1/sessions/{id}/artifacts
-GET /v1/sessions/{id}/messages
 GET /v1/sessions/{id}/resources
-GET /v1/sessions/{id}/skills
-GET /v1/sessions/{id}/stats
 PATCH /v1/model-providers/{id}/models
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel

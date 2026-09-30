@@ -571,3 +571,96 @@ async fn a_session_patch_renames_and_sets_policy() {
     let _ = hub.0.kill();
     let _ = std::fs::remove_dir_all(&data);
 }
+
+/// The read-through routes through the REAL hub: `messages`, `stats` and `skills`
+/// read from the session's harness, and a read starts the process if it is not
+/// running (here: after a `close`).
+#[tokio::test]
+async fn read_through_routes_start_the_process_and_answer_from_the_harness() {
+    let Some(pdir) = plugin_dir() else {
+        eprintln!("SKIP readthrough_slice: set AGENT_HUB_TEST_PLUGIN_DIR");
+        return;
+    };
+    let harness = std::env::var("AGENT_HUB_TEST_HARNESS").unwrap_or_else(|_| "pi".into());
+    install_provider();
+
+    let unique = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        format!("{}-{}", std::process::id(), nanos)
+    };
+    let data = std::env::temp_dir().join(format!("agent-hub-rt-{unique}"));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let plugins_root = data.join("plugins");
+    std::fs::create_dir_all(&plugins_root).unwrap();
+    copy_tree(&pdir, &plugins_root.join(&harness));
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agent-hub"))
+        .env("AGENT_HUB_DATA_DIR", &data)
+        .env("AGENT_HUB_ADDR", "127.0.0.1:0")
+        .env("AGENT_HUB_CONTRACT_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/../contract"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hub");
+    let mut hub = Hub(child);
+    let (addr, token) = wait_ready(&data, Duration::from_secs(30)).await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let auth = format!("Bearer {token}");
+
+    let created: serde_json::Value = client
+        .post(format!("{base}/v1/sessions"))
+        .header("authorization", &auth)
+        .json(&serde_json::json!({ "harnessId": harness, "commandKey": "rt-1" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["session"]["id"].as_str().unwrap().to_string();
+    for _ in 0..400 {
+        let s: serde_json::Value = client
+            .get(format!("{base}/v1/sessions/{id}"))
+            .header("authorization", &auth)
+            .send().await.unwrap().json().await.unwrap();
+        if s["session"]["status"] == "active" || s["session"]["status"] == "starting_failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Close it: the process stops, status becomes readonly.
+    let closed: serde_json::Value = client
+        .post(format!("{base}/v1/sessions/{id}/close"))
+        .header("authorization", &auth)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(closed["session"]["status"], "readonly");
+
+    // A read must START the process and answer from the harness.
+    let stats: serde_json::Value = client
+        .get(format!("{base}/v1/sessions/{id}/stats"))
+        .header("authorization", &auth)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(stats["sessionId"], id, "stats names the session: {stats}");
+    assert_eq!(stats["source"], "harness", "stats is read from the harness: {stats}");
+
+    let messages: serde_json::Value = client
+        .get(format!("{base}/v1/sessions/{id}/messages?limit=5"))
+        .header("authorization", &auth)
+        .send().await.unwrap().json().await.unwrap();
+    assert!(messages["messages"].is_array(), "messages is a page: {messages}");
+    assert!(messages.get("next_cursor").is_some(), "next_cursor present: {messages}");
+
+    let skills: serde_json::Value = client
+        .get(format!("{base}/v1/sessions/{id}/skills"))
+        .header("authorization", &auth)
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(skills["source"], "harness", "skills read from the harness: {skills}");
+    assert!(skills["skills"].is_array(), "skills is a list: {skills}");
+
+    let _ = hub.0.kill();
+    let _ = std::fs::remove_dir_all(&data);
+}

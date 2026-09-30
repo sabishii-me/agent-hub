@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -47,13 +47,93 @@ fn table() -> RouteTable<SessionsState> {
         .post("/v1/sessions/{id}/reopen", reopen)
         .post("/v1/sessions/{id}/fork", not_implemented)
         .post("/v1/sessions/{id}/compact", not_implemented)
-        .get("/v1/sessions/{id}/messages", not_implemented)
-        .get("/v1/sessions/{id}/stats", not_implemented)
-        .get("/v1/sessions/{id}/skills", not_implemented)
+        .get("/v1/sessions/{id}/messages", messages)
+        .get("/v1/sessions/{id}/stats", stats)
+        .get("/v1/sessions/{id}/skills", session_skills)
         .get("/v1/sessions/{id}/artifacts", not_implemented)
         .post("/v1/sessions/{id}/repair", not_implemented)
         .get("/v1/sessions/{id}/resources", not_implemented)
         .post("/v1/sessions/{id}/resources/read", not_implemented)
+}
+
+#[derive(serde::Deserialize)]
+struct MessagesQuery {
+    #[serde(rename = "beforeId")]
+    before_id: Option<String>,
+    limit: Option<u32>,
+}
+
+/// GET /v1/sessions/{id}/messages - read-through native history. The hub asks the
+/// adapter's `history/page` (starting the session's process first if needed) and
+/// translates its `{messages, hasMore}` into the contract's
+/// `{messages, next_cursor}`: the cursor is the OLDEST id on the page while more
+/// remain, else null.
+async fn messages(
+    State(s): State<SessionsState>,
+    AxumPath(id): AxumPath<String>,
+    Query(q): Query<MessagesQuery>,
+) -> Response {
+    let mut params = serde_json::json!({});
+    if let Some(b) = &q.before_id {
+        params["beforeId"] = serde_json::json!(b);
+    }
+    if let Some(l) = q.limit {
+        params["limit"] = serde_json::json!(l);
+    }
+    let sessions = s.sessions.clone();
+    match sessions.read_through(&id, "history/page", params).await {
+        Ok(v) => {
+            let messages = v.get("messages").cloned().unwrap_or(serde_json::json!([]));
+            let has_more = v.get("hasMore").and_then(|h| h.as_bool()).unwrap_or(false);
+            let next_cursor = if has_more {
+                messages
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|m| m.get("id"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            };
+            Json(serde_json::json!({ "messages": messages, "next_cursor": next_cursor })).into_response()
+        }
+        Err(e) => err(&s, e),
+    }
+}
+
+/// GET /v1/sessions/{id}/stats - read-through session statistics from the harness.
+/// Nothing is cached and nothing is invented: a field the harness does not report is
+/// absent.
+async fn stats(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
+    let sessions = s.sessions.clone();
+    match sessions.read_through(&id, "session/stats", serde_json::json!({})).await {
+        Ok(v) => {
+            let mut body = v.as_object().cloned().unwrap_or_default();
+            body.insert("sessionId".into(), serde_json::json!(id));
+            body.insert("source".into(), serde_json::json!("harness"));
+            Json(serde_json::Value::Object(body)).into_response()
+        }
+        Err(e) => err(&s, e),
+    }
+}
+
+/// GET /v1/sessions/{id}/skills - the skills THIS session's harness actually has,
+/// read from the harness (not the hub's installed set).
+async fn session_skills(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
+    let sessions = s.sessions.clone();
+    match sessions.read_through(&id, "skills/list", serde_json::json!({})).await {
+        Ok(v) => {
+            let skills = v.get("skills").cloned().unwrap_or(serde_json::json!([]));
+            Json(serde_json::json!({
+                "sessionId": id,
+                "source": "harness",
+                "known": true,
+                "skills": skills
+            }))
+            .into_response()
+        }
+        Err(e) => err(&s, e),
+    }
 }
 
 pub fn routes() -> Router<SessionsState> {
