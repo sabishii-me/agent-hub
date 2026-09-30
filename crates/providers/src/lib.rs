@@ -4,6 +4,7 @@
 //! request, the auth, the catalog fetch and the field mapping; **no plugin runs
 //! code inside the hub's process**.
 
+pub mod auth;
 pub mod catalog;
 pub mod record;
 pub mod routes;

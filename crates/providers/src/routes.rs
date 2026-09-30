@@ -26,11 +26,18 @@ pub struct ProvidersState {
     /// Where installed plugins live: a model-provider plugin ships its type
     /// descriptor here (see `crate::types`).
     pub plugins_root: std::path::PathBuf,
+    /// Hub-level authorization operations (see `crate::auth`).
+    pub auth: Arc<crate::auth::AuthStore>,
 }
 
 impl ProvidersState {
     pub fn new(providers: Providers, errors: ErrorRenderer, plugins_root: impl Into<std::path::PathBuf>) -> Self {
-        ProvidersState { providers: Arc::new(providers), errors, plugins_root: plugins_root.into() }
+        ProvidersState {
+            providers: Arc::new(providers),
+            errors,
+            plugins_root: plugins_root.into(),
+            auth: Arc::new(crate::auth::AuthStore::new()),
+        }
     }
 
     /// From an existing shared handle (the composition root shares one instance
@@ -40,7 +47,12 @@ impl ProvidersState {
         errors: ErrorRenderer,
         plugins_root: impl Into<std::path::PathBuf>,
     ) -> Self {
-        ProvidersState { providers, errors, plugins_root: plugins_root.into() }
+        ProvidersState {
+            providers,
+            errors,
+            plugins_root: plugins_root.into(),
+            auth: Arc::new(crate::auth::AuthStore::new()),
+        }
     }
 }
 
@@ -57,9 +69,9 @@ fn table() -> RouteTable<ProvidersState> {
         .post("/v1/model-providers/{id}/models/refresh", refresh)
         .get("/v1/models", list_models)
         .get("/v1/model-providers/types", list_types)
-        .post("/v1/model-providers/{id}/auth", not_implemented)
-        .get("/v1/model-providers/{id}/auth/{op}", not_implemented)
-        .post("/v1/model-providers/{id}/auth/{op}/cancel", not_implemented)
+        .post("/v1/model-providers/{id}/auth", start_auth)
+        .get("/v1/model-providers/{id}/auth/{op}", auth_status)
+        .post("/v1/model-providers/{id}/auth/{op}/cancel", auth_cancel)
 }
 
 pub fn routes() -> Router<ProvidersState> {
@@ -216,9 +228,79 @@ async fn list_types(State(s): State<ProvidersState>) -> Response {
     Json(catalog.to_json()).into_response()
 }
 
-async fn not_implemented(State(s): State<ProvidersState>) -> Response {
+/// `POST /v1/model-providers/{id}/auth`: start the authorization the provider TYPE
+/// declares. A type that declares no INTERACTIVE method is refused `501` rather than
+/// a fabricated flow (the step schema of a device-code/browser flow is not specified,
+/// so the hub does not invent it). No plugin code runs in-process.
+async fn start_auth(
+    State(s): State<ProvidersState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let provider = match s.providers.get(&id) {
+        Ok(p) => p,
+        Err(e) => return s.errors.render(&e.to_domain_error()),
+    };
+    let kind = provider.provider_type.clone();
+    let Some(kind) = kind else {
+        return s.errors.render(&DomainError::new(
+            "unsupported",
+            "this provider names no type; there is no declared auth method to run",
+        ));
+    };
+    let catalog = crate::types::TypeCatalog::scan(&s.plugins_root);
+    let desc = catalog.types.into_iter().find(|t| t.id == kind);
+    let Some(desc) = desc else {
+        return s.errors.render(&DomainError::new(
+            "unsupported",
+            format!("no installed plugin ships the provider type `{kind}`"),
+        ));
+    };
+    let _method = crate::auth::AuthStore::interactive_method(&desc);
+    // The type has an interactive method, but the flow's STEP schema is not written
+    // down in the contract; the hub refuses rather than fabricate a step. (An
+    // operation is created so STATUS/CANCEL have a real lifecycle to read.)
+    let op = s.auth.create(&id);
     s.errors.render(&DomainError::new(
-        "not_implemented",
-        "this model-provider route needs the fuller provider data layer, which is not wired yet",
+        "unsupported",
+        format!(
+            "the provider type `{kind}` declares an interactive method, but its step flow is not implemented yet (operation {})",
+            op.id
+        ),
     ))
 }
+
+/// `GET /v1/model-providers/{id}/auth/{op}`: the current state of a hub-level auth
+/// operation.
+async fn auth_status(
+    State(s): State<ProvidersState>,
+    AxumPath((id, op)): AxumPath<(String, String)>,
+) -> Response {
+    match s.auth.get(&op) {
+        Some(operation) if operation.provider == id => {
+            Json(operation.to_json()).into_response()
+        }
+        _ => s.errors.render(&DomainError::new(
+            "not_found",
+            format!("no authorization operation `{op}` for provider `{id}`"),
+        )),
+    }
+}
+
+/// `POST /v1/model-providers/{id}/auth/{op}/cancel`: cancel a pending operation.
+/// Idempotent.
+async fn auth_cancel(
+    State(s): State<ProvidersState>,
+    AxumPath((id, op)): AxumPath<(String, String)>,
+) -> Response {
+    match s.auth.get(&op) {
+        Some(operation) if operation.provider == id => {
+            let _ = s.auth.cancel(&op);
+            Json(serde_json::json!({ "ok": true, "id": op })).into_response()
+        }
+        _ => s.errors.render(&DomainError::new(
+            "not_found",
+            format!("no authorization operation `{op}` for provider `{id}`"),
+        )),
+    }
+}
+
