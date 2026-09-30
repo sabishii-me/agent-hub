@@ -11,7 +11,12 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 fn plugin_dir() -> Option<PathBuf> {
-    std::env::var("AGENT_HUB_TEST_PLUGIN_DIR").ok().map(PathBuf::from)
+    // A path that does not exist is a SKIP, not a panic: the gate is the env var
+    // AND a real directory.
+    std::env::var("AGENT_HUB_TEST_PLUGIN_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
 }
 
 struct Hub(Child);
