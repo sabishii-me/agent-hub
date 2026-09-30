@@ -848,7 +848,7 @@ logs the count and refuses to START only if the hub serves a route the contract 
 remaining route** (adapter protocol, the provider-type data model, the plugin-sourced skills
 model, artifact recording).
 
-### Real (mounted, real handler) - 56
+### Real (mounted, real handler) - 57
 
 ```
 DELETE /v1/connections/{id}
@@ -863,6 +863,7 @@ GET /v1/harnesses/{id}/models
 GET /v1/harnesses/{id}/presets
 GET /v1/harnesses/{id}/tools
 GET /v1/model-providers
+GET /v1/model-providers/types
 GET /v1/model-providers/{id}
 GET /v1/model-providers/{id}/models
 GET /v1/models
@@ -909,11 +910,10 @@ POST /v1/sessions/{id}/turns
 POST /v1/shutdown
 ```
 
-### Mounted but `501` - 8
+### Mounted but `501` - 7
 
 ```
 DELETE /v1/skills/{id}
-GET /v1/model-providers/types
 GET /v1/model-providers/{id}/auth/{op}
 GET /v1/sessions/{id}/resources
 GET /v1/skills

@@ -10,14 +10,11 @@ implement its own consumer/executor and simply have no input yet.
 
 ## Provider-type: HUB-TODO (+ EXT-DEP for input)
 
-`GET /v1/model-providers/types` and the provider `auth/*` routes
-(`POST /v1/model-providers/{id}/auth`, `GET .../auth/{op}`, `POST .../auth/{op}/cancel`)
-are **unconditional `501`** today (`providers/routes.rs`). The hub OWES:
-- a **descriptor loader** that reads provider-type descriptors a model-provider plugin
-  ships (`{id,version,owner,name,authMethods,configuration,catalog}`) from installed
-  plugins, and reports `types` + `broken[]`;
-- the **auth executor** (device-code/browser flows as DATA, run in the hub, outliving the
-  request), plus the operation store and cancel.
+`GET /v1/model-providers/types` is now REAL: `ProvidersState` scans installed
+`model-provider` plugins for a `provider.json` descriptor and returns `{types, broken}`
+(an invalid descriptor is `broken[]`, an absent one stays absent). The provider
+`auth/*` routes remain HUB-TODO: the **auth executor** (device-code/browser flows as
+DATA, run in the hub, outliving the request), the operation store and cancel.
 
 **EXT-DEP**: no model-provider plugin ships a descriptor yet, so `types` would be an
 empty list and no auth flow can start. That does not remove the HUB-TODO.

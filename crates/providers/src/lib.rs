@@ -9,6 +9,7 @@ pub mod record;
 pub mod routes;
 pub mod service;
 pub mod store;
+pub mod types;
 
 pub use record::{Catalog, CatalogModel, Declaration, ProviderRecord};
 pub use service::{CreateProvider, PatchProvider, ProviderError, Providers};

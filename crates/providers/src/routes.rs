@@ -23,17 +23,24 @@ use crate::service::{CreateProvider, PatchProvider, ProviderError, Providers};
 pub struct ProvidersState {
     pub providers: Arc<Providers>,
     pub errors: ErrorRenderer,
+    /// Where installed plugins live: a model-provider plugin ships its type
+    /// descriptor here (see `crate::types`).
+    pub plugins_root: std::path::PathBuf,
 }
 
 impl ProvidersState {
-    pub fn new(providers: Providers, errors: ErrorRenderer) -> Self {
-        ProvidersState { providers: Arc::new(providers), errors }
+    pub fn new(providers: Providers, errors: ErrorRenderer, plugins_root: impl Into<std::path::PathBuf>) -> Self {
+        ProvidersState { providers: Arc::new(providers), errors, plugins_root: plugins_root.into() }
     }
 
     /// From an existing shared handle (the composition root shares one instance
     /// with the session provider resolver).
-    pub fn new_shared(providers: Arc<Providers>, errors: ErrorRenderer) -> Self {
-        ProvidersState { providers, errors }
+    pub fn new_shared(
+        providers: Arc<Providers>,
+        errors: ErrorRenderer,
+        plugins_root: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        ProvidersState { providers, errors, plugins_root: plugins_root.into() }
     }
 }
 
@@ -49,7 +56,7 @@ fn table() -> RouteTable<ProvidersState> {
         .patch("/v1/model-providers/{id}/models", patch_models)
         .post("/v1/model-providers/{id}/models/refresh", refresh)
         .get("/v1/models", list_models)
-        .get("/v1/model-providers/types", not_implemented)
+        .get("/v1/model-providers/types", list_types)
         .post("/v1/model-providers/{id}/auth", not_implemented)
         .get("/v1/model-providers/{id}/auth/{op}", not_implemented)
         .post("/v1/model-providers/{id}/auth/{op}/cancel", not_implemented)
@@ -198,6 +205,15 @@ async fn list_models(State(s): State<ProvidersState>) -> Response {
         }));
     }
     Json(serde_json::json!({ "models": models, "failures": [], "catalogs": catalogs })).into_response()
+}
+
+/// `GET /v1/model-providers/types`: the provider types installed plugins ship, as
+/// DATA. A type no plugin ships stays absent; a descriptor that cannot be honoured
+/// is `broken[]` (never a 500). The hub reads the descriptor; it never runs plugin
+/// code (ARCHITECTURE 5).
+async fn list_types(State(s): State<ProvidersState>) -> Response {
+    let catalog = crate::types::TypeCatalog::scan(&s.plugins_root);
+    Json(catalog.to_json()).into_response()
 }
 
 async fn not_implemented(State(s): State<ProvidersState>) -> Response {

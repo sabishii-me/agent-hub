@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stopped (a crash between the row store and the keychain).
     providers.recover_pending();
     let providers = std::sync::Arc::new(providers);
-    let provider_state = ProvidersState::new_shared(providers.clone(), errors.clone());
+    let provider_state = ProvidersState::new_shared(providers.clone(), errors.clone(), plugins_root.clone());
 
     // Connections: the hub-managed connections. Same secret store + instance
     // namespace as providers (one keychain namespace per hub instance).
