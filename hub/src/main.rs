@@ -76,6 +76,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mounted = selfcheck::mounted_surface();
     selfcheck::check_surface(&mounted, &contract_v1)
         .map_err(|e| format!("self-check failed: {e}"))?;
+    // The served-surface metadata for `/v1/surface` and `/v1/openapi.json`: the
+    // contract identity (with its sha256), the mounted routes, the event names and
+    // the generated OpenAPI - all read from the same files the self-check uses.
+    let contract_sha = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(contract_raw.as_bytes());
+        format!("{:x}", h.finalize())
+    };
+    let contract_meta = agent_hub_transport::ContractMeta {
+        file: "contract/v1.json".into(),
+        protocol: contract_v1.get("protocol").and_then(|v| v.as_str()).unwrap_or("").into(),
+        version: contract_v1.get("version").and_then(|v| v.as_str()).unwrap_or("").into(),
+        sha256: contract_sha,
+    };
+    let event_names: Vec<String> = contract_v1
+        .get("events")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let openapi_text = std::fs::read_to_string(contract_dir.join("openapi.json")).unwrap_or_default();
+
     let errors = ErrorRenderer::new(error_table);
 
     // The data layer and the plugins domain. Recovery runs before serving.
@@ -221,6 +247,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bearer = BearerToken::from_env_or_generate();
 
     // One axum app: the transport surface plus the domain routes.
+    let transport = transport.with_meta(
+        selfcheck::surface_rows(),
+        contract_meta,
+        event_names,
+        openapi_text,
+    );
+    // A watch receiver so POST /v1/shutdown can ask the process to stop.
+    let shutdown_rx = transport.shutdown.subscribe();
     let app = finish(routes(), transport)
         .merge(plugin_routes().with_state(plugin_state))
         .merge(session_routes().with_state(session_state))
@@ -255,11 +289,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{local}");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(shutdown_rx))
         .await?;
     Ok(())
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+async fn shutdown_signal(mut rx: tokio::sync::watch::Receiver<bool>) {
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = rx.changed() => {}
+    }
 }

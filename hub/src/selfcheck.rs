@@ -91,3 +91,29 @@ mod tests {
         assert!(check_error_codes(&["unknown_session", "made_up"], &table).is_err());
     }
 }
+
+/// The mounted surface as STRUCTURED rows (`/v1/surface` needs method/path/auth),
+/// from the same per-module tables `mounted_surface` unions.
+pub fn surface_rows() -> Vec<agent_hub_transport::SurfaceRow> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let collect = |v: Vec<String>, out: &mut Vec<(String, String)>| {
+        for s in v {
+            if let Some((m, p)) = s.split_once(' ') {
+                out.push((m.to_string(), p.to_string()));
+            }
+        }
+    };
+    collect(agent_hub_transport::surface(), &mut out);
+    collect(agent_hub_plugins::routes::surface(), &mut out);
+    collect(agent_hub_sessions::routes::surface(), &mut out);
+    collect(agent_hub_providers::routes::surface(), &mut out);
+    collect(agent_hub_connections::routes::surface(), &mut out);
+    collect(agent_hub_harnesses::routes::surface(), &mut out);
+    collect(agent_hub_skills::routes::surface(), &mut out);
+    collect(agent_hub_humans::routes::surface(), &mut out);
+    out.sort();
+    out.dedup();
+    out.into_iter()
+        .map(|(method, path)| agent_hub_transport::SurfaceRow { method, path, auth: true })
+        .collect()
+}

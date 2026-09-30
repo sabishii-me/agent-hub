@@ -9,6 +9,7 @@ name = "agent-hub"
 path = "src/main.rs"
 
 [dependencies]
+sha2 = "0.10"
 agent-hub-events = { path = "../crates/events" }
 agent-hub-contract = { path = "../crates/contract" }
 agent-hub-adapter = { path = "../crates/adapter" }

@@ -102,16 +102,68 @@ impl IntoResponse for Overloaded {
     }
 }
 
+/// One mounted route, as `/v1/surface` reports it.
+#[derive(Clone)]
+pub struct SurfaceRow {
+    pub method: String,
+    pub path: String,
+    pub auth: bool,
+}
+
+/// The identity of the contract this process serves (`/v1/surface.contract`).
+#[derive(Clone, Default)]
+pub struct ContractMeta {
+    pub file: String,
+    pub protocol: String,
+    pub version: String,
+    pub sha256: String,
+}
+
 /// Shared transport state.
 #[derive(Clone)]
 pub struct Transport {
     pub bus: Bus,
     pub admission: Admission,
+    /// The mounted surface, collected from every domain's table (one source: the
+    /// same registration the router is built from).
+    pub surface: Arc<Vec<SurfaceRow>>,
+    /// The contract this process claims to keep.
+    pub contract: ContractMeta,
+    /// Every SSE event name the hub can emit.
+    pub events: Arc<Vec<String>>,
+    /// The OpenAPI document, byte for byte as generated from the contract.
+    pub openapi: Arc<String>,
+    /// Fired by `POST /v1/shutdown` to ask the process to stop.
+    pub shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl Transport {
     pub fn new(bus: Bus, admission: Admission) -> Self {
-        Transport { bus, admission }
+        let (shutdown, _) = tokio::sync::watch::channel(false);
+        Transport {
+            bus,
+            admission,
+            surface: Arc::new(Vec::new()),
+            contract: ContractMeta::default(),
+            events: Arc::new(Vec::new()),
+            openapi: Arc::new(String::new()),
+            shutdown,
+        }
+    }
+
+    /// Set the served-surface metadata (called once by the composition root).
+    pub fn with_meta(
+        mut self,
+        surface: Vec<SurfaceRow>,
+        contract: ContractMeta,
+        events: Vec<String>,
+        openapi: String,
+    ) -> Self {
+        self.surface = Arc::new(surface);
+        self.contract = contract;
+        self.events = Arc::new(events);
+        self.openapi = Arc::new(openapi);
+        self
     }
 }
 
@@ -122,6 +174,9 @@ fn table() -> crate::table::RouteTable<Transport> {
     crate::table::RouteTable::new()
         .get("/v1/status", status)
         .get("/v1/events", sse)
+        .get("/v1/surface", surface_route)
+        .get("/v1/openapi.json", openapi_route)
+        .post("/v1/shutdown", shutdown_route)
 }
 
 pub fn routes() -> Router<Transport> {
@@ -149,6 +204,43 @@ async fn status(State(t): State<Transport>) -> impl IntoResponse {
         "startedAt": now_rfc3339(),
         "events": { "currentId": t.bus.current_id() }
     }))
+}
+
+/// `GET /v1/surface`: what this process actually implements, as data (the same
+/// registration the router matches), plus the contract it claims to keep.
+async fn surface_route(State(t): State<Transport>) -> impl IntoResponse {
+    let routes: Vec<serde_json::Value> = t
+        .surface
+        .iter()
+        .map(|r| json!({ "method": r.method, "path": r.path, "auth": r.auth }))
+        .collect();
+    axum::Json(json!({
+        "contract": {
+            "file": t.contract.file,
+            "protocol": t.contract.protocol,
+            "version": t.contract.version,
+            "sha256": t.contract.sha256,
+        },
+        "routes": routes,
+        "events": t.events.as_ref(),
+    }))
+}
+
+/// `GET /v1/openapi.json`: the OpenAPI document as generated from the contract - a
+/// projection for tools, never a second source.
+async fn openapi_route(State(t): State<Transport>) -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))],
+        t.openapi.as_str().to_string(),
+    )
+        .into_response()
+}
+
+/// `POST /v1/shutdown`: ask the process to stop (the composition root watches this).
+async fn shutdown_route(State(t): State<Transport>) -> impl IntoResponse {
+    let _ = t.shutdown.send(true);
+    axum::Json(json!({ "ok": true }))
 }
 
 fn now_rfc3339() -> String {

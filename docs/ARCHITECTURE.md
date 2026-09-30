@@ -652,7 +652,9 @@ follows distinguishes a real, narrow component fact from a product capability.
   the service exists), `GET /v1/model-providers/types` (the provider-type data surface),
   `POST /v1/model-providers/{id}/auth` + `GET`/`cancel` (the OAuth/device-code flow).
 - **the served binary** (now): every route requires a **bearer token** (the inbound boundary
-  exists). That is a possession check, not an authorization boundary (§7).
+  exists). That is a possession check, not an authorization boundary (§7). It also serves its own
+  metadata: `/v1/surface` (the mounted routes + contract identity with its sha256 + the event
+  names), `/v1/openapi.json` (byte for byte as generated from the contract) and `/v1/shutdown`.
 - **skills / humans**: the hub stores skills and lists/removes them; approvals and questions are
   routed to the adapter. Neither is a finished product surface (skills file read/write is `501`).
 - **connections** (now): the hub-managed connections are real (rows in the `connections` table,
@@ -816,7 +818,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 46
+### Real (mounted, real handler) - 49
 
 ```
 DELETE /v1/connections/{id}
@@ -835,6 +837,7 @@ GET /v1/model-providers
 GET /v1/model-providers/{id}
 GET /v1/model-providers/{id}/models
 GET /v1/models
+GET /v1/openapi.json
 GET /v1/plugins
 GET /v1/plugins/{id}
 GET /v1/sessions
@@ -847,6 +850,7 @@ GET /v1/sessions/{id}/stats
 GET /v1/sessions/{id}/turns
 GET /v1/skills
 GET /v1/status
+GET /v1/surface
 PATCH /v1/connections/{id}
 PATCH /v1/model-providers/{id}
 PATCH /v1/sessions/{id}
@@ -865,6 +869,7 @@ POST /v1/sessions/{id}/fork
 POST /v1/sessions/{id}/questions/{qid}
 POST /v1/sessions/{id}/reopen
 POST /v1/sessions/{id}/turns
+POST /v1/shutdown
 ```
 
 ### Mounted but `501` - 9
@@ -881,18 +886,16 @@ POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted - 19
+### Not mounted - 16
 
 ```
 DELETE /v1/harnesses/{id}/connections/{cid}
 GET /v1/harnesses/{id}/auth/{op}
 GET /v1/harnesses/{id}/connections
 GET /v1/harnesses/{id}/connections/schema
-GET /v1/openapi.json
 GET /v1/plugins/catalog
 GET /v1/plugins/{id}/icon/{variant}
 GET /v1/skills/{id}/files/{file...}
-GET /v1/surface
 PATCH /v1/harnesses/{id}/extensions
 POST /v1/harnesses/{id}/auth
 POST /v1/harnesses/{id}/auth/{op}/cancel
@@ -901,7 +904,6 @@ POST /v1/harnesses/{id}/connections/validate
 POST /v1/plugins/registry/refresh
 POST /v1/plugins/{id}/disable
 POST /v1/plugins/{id}/enable
-POST /v1/shutdown
 PUT /v1/skills/{id}/files/{file...}
 ```
 
