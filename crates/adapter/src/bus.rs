@@ -26,7 +26,7 @@ pub enum BusError {
     #[error("the adapter closed its stdout")]
     Closed,
     #[error("rpc error {code}: {message}")]
-    Rpc { code: i64, message: String },
+    Rpc { code: i64, message: String, data: Value },
     #[error("invalid message: {0}")]
     Protocol(String),
 }
@@ -161,7 +161,10 @@ impl AgentBus {
                                 .and_then(Value::as_str)
                                 .unwrap_or("adapter error")
                                 .to_string();
-                            let _ = sender.send(Err(BusError::Rpc { code, message }));
+                            // Keep the adapter's typed `data` (its contract code), so
+                            // the identity is not lost (TASK-048 F5).
+                            let data = err.get("data").cloned().unwrap_or(Value::Null);
+                            let _ = sender.send(Err(BusError::Rpc { code, message, data }));
                         } else {
                             let _ = sender.send(Ok(msg.get("result").cloned().unwrap_or(Value::Null)));
                         }

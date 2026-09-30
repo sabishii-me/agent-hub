@@ -184,16 +184,28 @@ CREATE TABLE IF NOT EXISTS provider_ops (
 "#;
 
 impl crate::Db {
-    /// Record an in-flight credential transition (delete a pre-existing op with
-    /// the same provider first, so one provider has at most one in-flight op).
+    /// Record an in-flight credential transition. It REFUSES (Conflict) when a
+    /// pending op already exists for this provider: an unrelated write must never
+    /// overwrite an unresolved intent (TASK-048 F1). The caller resolves the
+    /// pending op first (boot sweep or an explicit resolution), then begins.
+    ///
+    /// The insert and the duplicate check are one transaction.
     pub fn begin_provider_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<String, DbError> {
         let mut conn = self.conn.lock().expect("db mutex");
-        // ONE transaction: replacing the previous entry and inserting the new one
-        // either both happen or neither does, so a failure cannot silently drop
-        // the ownership of an earlier unfinished operation (TASK-048 F1).
         let tx = conn.transaction()?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT id FROM provider_ops WHERE provider = ?1",
+                params![provider],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if existing.is_some() {
+            return Err(DbError::Conflict(format!(
+                "provider `{provider}` has an unresolved credential transition; resolve it before a new write"
+            )));
+        }
         let id = format!("{provider}:{op}");
-        tx.execute("DELETE FROM provider_ops WHERE provider = ?1", params![provider])?;
         tx.execute(
             "INSERT INTO provider_ops (id, provider, op, secret_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, provider, op, secret_ref, crate::now_utc()],
@@ -202,18 +214,33 @@ impl crate::Db {
         Ok(id)
     }
 
-    pub fn finish_provider_op(&self, provider: &str) -> Result<(), DbError> {
+    /// Clear the op the caller actually began, by ITS id. A different pending op
+    /// (a later write that began after ours, or an unresolved one) is untouched.
+    pub fn finish_provider_op_id(&self, id: &str) -> Result<(), DbError> {
         let conn = self.lock();
-        conn.execute("DELETE FROM provider_ops WHERE provider = ?1", params![provider])?;
+        conn.execute("DELETE FROM provider_ops WHERE id = ?1", params![id])?;
         Ok(())
     }
 
-    /// Every in-flight credential transition (for the boot sweep).
-    pub fn pending_provider_ops(&self) -> Result<Vec<(String, String, String)>, DbError> {
+    /// Whether this provider has an unresolved credential transition.
+    pub fn has_pending_provider_op(&self, provider: &str) -> Result<bool, DbError> {
         let conn = self.lock();
-        let mut stmt = conn.prepare("SELECT provider, op, secret_ref FROM provider_ops")?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM provider_ops WHERE provider = ?1",
+            params![provider],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Every in-flight credential transition (for the boot sweep), as
+    /// `(id, provider, op, secret_ref)` so the sweep can finish the EXACT op it
+    /// resolved.
+    pub fn pending_provider_ops(&self) -> Result<Vec<(String, String, String, String)>, DbError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT id, provider, op, secret_ref FROM provider_ops")?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -221,28 +248,33 @@ impl crate::Db {
 
 #[cfg(test)]
 mod op_journal_tests {
+    use super::*;
     use crate::Db;
 
     #[test]
-    fn a_pending_op_is_visible_and_cleared() {
+    fn a_pending_op_is_visible_and_cleared_by_its_id() {
         let db = Db::open_in_memory().unwrap();
-        db.begin_provider_op("p1", "create", "ns:provider-p1").unwrap();
+        let id = db.begin_provider_op("p1", "create", "ns:provider-p1").unwrap();
         let pending = db.pending_provider_ops().unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].0, "p1");
-        db.finish_provider_op("p1").unwrap();
+        assert_eq!(pending[0].1, "p1");
+        db.finish_provider_op_id(&id).unwrap();
         assert!(db.pending_provider_ops().unwrap().is_empty());
     }
 
-    /// One provider has at most one in-flight op: beginning a new one replaces.
+    /// A new op is REFUSED while an unresolved op exists for the same provider: an
+    /// unrelated write must not overwrite an unresolved intent (F1).
     #[test]
-    fn a_provider_has_one_in_flight_op() {
+    fn a_second_op_is_refused_while_one_is_pending() {
         let db = Db::open_in_memory().unwrap();
         db.begin_provider_op("p1", "create", "r1").unwrap();
-        db.begin_provider_op("p1", "delete", "r1").unwrap();
+        assert!(matches!(
+            db.begin_provider_op("p1", "delete", "r1"),
+            Err(DbError::Conflict(_))
+        ));
         let pending = db.pending_provider_ops().unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].1, "delete");
+        assert_eq!(pending.len(), 1, "the unresolved op is not replaced");
+        assert_eq!(pending[0].2, "create");
     }
 }
 

@@ -816,6 +816,22 @@ we never record a knob the harness did not apply. `null` means "do not intervene
 Verified live: `{plan:true, review:true, presetId:standard}` -> active with
 `appliedPlan=true`, `appliedReview=true`, `appliedPreset=standard`.
 
+
+## 25. Review follow-up: PROVIDER-TURN-REVIEW-3b6730b3
+
+- **F1**: a second `begin_provider_op` is REFUSED while one is pending (no overwrite);
+  `finish_provider_op_id` clears the exact op; a no-token create begins/finishes
+  nothing; `patch` reads the row's reference and aborts on a read error.
+- **F2**: `resolve_grant` is async, holds the provider lock, and refuses while a
+  transition is pending — config+credential are one snapshot.
+- **F3**: the native route (`applied.connectionId`) must be present; `accept_turn` takes
+  the session lock a PATCH holds; a post-`config/set` failure quarantines the session
+  (stop + `needs-repair`).
+- **F4**: cancel takes the session lock; `run_turn` re-checks the durable cancel state
+  right before dispatch; a core cancel timeout stops the adapter and settles
+  `interrupted`.
+- **F5**: `internal_error` passes through; the bus keeps the adapter's typed `data`.
+
 ## 24. The remaining surface (single source of truth)
 
 Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables.
@@ -913,4 +929,3 @@ POST /v1/harnesses/{id}/connections
 POST /v1/harnesses/{id}/connections/validate
 PUT /v1/skills/{id}/files/{file...}
 ```
-

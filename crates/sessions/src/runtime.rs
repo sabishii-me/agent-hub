@@ -292,10 +292,15 @@ impl Sessions {
                 Some(m) => applied_model.as_deref() == Some(m),
                 None => true,
             };
-            if !applied.is_object() || !ok_provider || !ok_model {
+            // The adapter must also report the RESOLVED NATIVE ROUTE
+            // (`applied.connectionId`). It need not equal the request (the adapter
+            // names the injected provider `hub-<id>`); but it must be PRESENT, or
+            // the session is not started against a confirmed route.
+            let ok_route = applied_route.is_some();
+            if !applied.is_object() || !ok_provider || !ok_model || !ok_route {
                 let _ = bus.shutdown().await;
                 return Err(StartError::Protocol(format!(
-                    "the adapter did not confirm the requested provider/model: requested provider={:?} model={:?}, applied={}",
+                    "the adapter did not confirm the requested provider/model/route: requested provider={:?} model={:?}, applied={}",
                     want_provider, want_model, applied
                 )));
             }

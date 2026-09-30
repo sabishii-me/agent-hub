@@ -203,19 +203,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // session. `sessions` never links `providers`; the composition root injects
     // this closure, which reads the row + the keychain value.
     let resolver_providers = providers.clone();
-    let provider_resolver = move |id: &str| -> Result<agent_hub_sessions::runtime::Grant, String> {
-        let g = resolver_providers
-            .resolve_grant(id)
-            .map_err(|e| format!("{}|{}", e.code(), e))?;
-        Ok(agent_hub_sessions::runtime::Grant {
-            connection_id: g.connection_id,
-            value: g.value,
-            url: g.url,
-            api: g.api,
-            declarations: g.declarations,
-            requested_provider_id: g.requested_provider_id,
-            requested_model_id: None,
-        })
+    let provider_resolver = move |id: String| {
+        let providers = resolver_providers.clone();
+        Box::pin(async move {
+            let g = providers
+                .resolve_grant(&id)
+                .await
+                .map_err(|e| format!("{}|{}", e.code(), e))?;
+            Ok(agent_hub_sessions::runtime::Grant {
+                connection_id: g.connection_id,
+                value: g.value,
+                url: g.url,
+                api: g.api,
+                declarations: g.declarations,
+                requested_provider_id: g.requested_provider_id,
+                requested_model_id: None,
+            })
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<agent_hub_sessions::runtime::Grant, String>> + Send>>
     };
     let sessions = std::sync::Arc::new(
         Sessions::new(
@@ -244,6 +248,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(n) if n > 0 => tracing::info!(stalled = n, "settled stalled cancels as interrupted"),
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "stalled-cancel reconciliation failed"),
+        }
+        // The core cancel timeout: an abort delivered but never confirmed is
+        // settled `interrupted` (and the adapter stopped) after the timeout, so the
+        // execution occupancy is released on a real action (adapter-v1:385).
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            tick.tick().await;
+            match sessions.timeout_unconfirmed_cancels(30).await {
+                Ok(n) if n > 0 => tracing::info!(timed_out = n, "settled unconfirmed cancels as interrupted"),
+                Ok(_) => {}
+                Err(e) => tracing::error!(error = %e, "cancel-timeout sweep failed"),
+            }
         }
     });
 

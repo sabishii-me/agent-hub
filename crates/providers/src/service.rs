@@ -40,6 +40,7 @@ impl ProviderError {
         match self {
             ProviderError::Store(StoreError::NotFound(_)) => "provider_not_found",
             ProviderError::Store(StoreError::Exists(_)) => "already_exists",
+            ProviderError::Store(StoreError::Pending(_)) => "revision_conflict",
             ProviderError::Store(StoreError::Db(_)) => "internal_error",
             ProviderError::Validation(_) => "validation_failed",
             ProviderError::Catalog(_) => "provider_catalog_failed",
@@ -185,8 +186,9 @@ impl Providers {
         //    the row actually records where its credential lives.
         if let Some(t) = &req.token {
             // Record the transition BEFORE the credential write: a crash between
-            // the two stores leaves a visible, recoverable marker.
-            self.store.begin_op(&id, "create", &self.secret_ref(&id))?;
+            // the two stores leaves a visible, recoverable marker. begin_op
+            // REFUSES when an unresolved transition exists for this provider.
+            let op = self.store.begin_op(&id, "create", &self.secret_ref(&id))?;
             if let Err(e) = self.secrets.set(&self.secret_ref(&id), t) {
                 // Roll back the row so a failed credential does not leave a
                 // half-created provider. If the rollback ITSELF fails, the error
@@ -219,8 +221,10 @@ impl Providers {
                 }
                 return Err(ProviderError::Store(e));
             }
+            // The credential and its reference are both in place: finish THIS op.
+            self.store.finish_op(&op)?;
         }
-        self.store.finish_op(&id)?;
+        // A create with no token begins no op and must NOT finish someone else's.
         Ok(record)
     }
 
@@ -244,23 +248,29 @@ impl Providers {
             }
             rec.api = v;
         }
+        // The credential LOCATION is the row's own reference, never a re-derived
+        // key (a rebuilt id must not re-acquire an old credential).
+        let reference = rec.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
+        let mut op: Option<String> = None;
         if let Some(tok) = req.token {
             match tok {
                 Some(t) => {
                     if !self.secrets.is_available() {
                         return Err(ProviderError::NoSecretStore);
                     }
-                    self.store.begin_op(id, "patch", &self.secret_ref(id))?;
+                    op = Some(self.store.begin_op(id, "patch", &reference)?);
                     self.secrets
-                        .set(&self.secret_ref(id), &t)
+                        .set(&reference, &t)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
+                    rec.secret_ref = Some(reference.clone());
                     bump = true;
                 }
                 None => {
-                    self.store.begin_op(id, "patch", &self.secret_ref(id))?;
+                    op = Some(self.store.begin_op(id, "patch", &reference)?);
                     self.secrets
-                        .delete(&self.secret_ref(id))
+                        .delete(&reference)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
+                    rec.secret_ref = None;
                     bump = true;
                 }
             }
@@ -271,12 +281,24 @@ impl Providers {
         if bump {
             rec.revision += 1;
         }
-        // The reference is owned by the row and persisted with it (do NOT clear:
-        // that is what made the "reference" column a lie).
-        rec.token_configured = self.secrets.get(&self.secret_ref(id)).map(|v| v.is_some()).unwrap_or(false);
-        rec.secret_ref = if rec.token_configured { Some(self.secret_ref(id)) } else { None };
+        // A read ERROR is an error, never read as "not configured" (only when the
+        // row claims a reference do we consult the store here; an unreadable one
+        // aborts the patch rather than silently clearing the reference).
+        if rec.secret_ref.is_some() {
+            let configured = self
+                .secrets
+                .get(rec.secret_ref.as_ref().unwrap())
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
+                .is_some();
+            rec.token_configured = configured;
+            if !configured {
+                rec.secret_ref = None;
+            }
+        }
         self.store.save(&rec)?;
-        self.store.finish_op(id)?;
+        if let Some(o) = op {
+            self.store.finish_op(&o)?;
+        }
         self.with_configured(rec)
     }
 
@@ -286,12 +308,14 @@ impl Providers {
         let _guard = lock.lock().await;
         // Journal first: if the credential is removed but the row delete fails, the
         // boot sweep finishes the row deletion (no orphan credential).
-        self.store.begin_op(id, "delete", &self.secret_ref(id))?;
+        let row = self.store.get(id)?;
+        let reference = row.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
+        let op = self.store.begin_op(id, "delete", &reference)?;
         self.secrets
-            .delete(&self.secret_ref(id))
+            .delete(&reference)
             .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
         self.store.delete(id)?;
-        self.store.finish_op(id)?;
+        self.store.finish_op(&op)?;
         Ok(())
     }
 
@@ -300,14 +324,15 @@ impl Providers {
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
         let mut rec = self.store.get(id)?;
-        self.store.begin_op(id, "logout", &self.secret_ref(id))?;
+        let reference = rec.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
+        let op = self.store.begin_op(id, "logout", &reference)?;
         self.secrets
-            .delete(&self.secret_ref(id))
+            .delete(&reference)
             .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
         // The row no longer points at a credential.
         rec.secret_ref = None;
         self.store.save(&rec)?;
-        self.store.finish_op(id)?;
+        self.store.finish_op(&op)?;
         self.with_configured(rec)
     }
 
@@ -329,12 +354,16 @@ impl Providers {
         rec.enabled_model_ids = enabled;
         rec.revision += 1;
         // The reference is the ROW's own (never re-derived from the id).
-        let has = self
-            .secrets
-            .get(&self.secret_ref(id))
-            .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
-            .is_some();
-        rec.secret_ref = if has { Some(self.secret_ref(id)) } else { None };
+        if let Some(reference) = rec.secret_ref.clone() {
+            let has = self
+                .secrets
+                .get(&reference)
+                .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?
+                .is_some();
+            if !has {
+                rec.secret_ref = None;
+            }
+        }
         self.store.save(&rec)?;
         self.with_configured(rec)
     }
@@ -419,10 +448,10 @@ impl Providers {
                 return;
             }
         };
-        for (provider, op, secret_ref) in pending {
+        for (op_id, provider, op, secret_ref) in pending {
             match self.recover_one(&provider, &op, &secret_ref) {
                 Ok(()) => {
-                    if let Err(e) = self.store.finish_op(&provider) {
+                    if let Err(e) = self.store.finish_op(&op_id) {
                         tracing::warn!(provider, error = %e, "recovery finished but the journal entry could not be cleared");
                     }
                 }
@@ -508,7 +537,17 @@ impl Providers {
     /// * it has no url (an adapter cannot materialise an endpointless provider);
     /// * no credential is stored (a session would fail at the first turn anyway -
     ///   fail now, with a clear reason).
-    pub fn resolve_grant(&self, id: &str) -> Result<ResolvedGrant, ProviderError> {
+    pub async fn resolve_grant(&self, id: &str) -> Result<ResolvedGrant, ProviderError> {
+        // The provider lock makes the CONFIG and the CREDENTIAL one consistent
+        // snapshot: a concurrent delete+recreate or a URL/token patch cannot hand
+        // out an old endpoint with a new token (TASK-048 F2).
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
+        if self.store.has_pending_op(id)? {
+            return Err(ProviderError::RevisionConflict(format!(
+                "provider `{id}` has an unresolved credential transition; retry"
+            )));
+        }
         let rec = self.store.get(id)?;
         let url = rec
             .url
@@ -558,5 +597,37 @@ mod recovery_tests {
         // The entry is still there: the failure kept it for retry.
         let pending = p.store.pending_ops().unwrap();
         assert_eq!(pending.len(), 1, "an unresolvable recovery keeps its journal");
+    }
+
+    fn arecord(id: &str, url: Option<&str>) -> crate::record::ProviderRecord {
+        crate::record::ProviderRecord {
+            id: id.into(),
+            label: None,
+            url: url.map(str::to_string),
+            api: None,
+            secret_ref: None,
+            provider_type: None,
+            provider_type_version: None,
+            declarations: Default::default(),
+            enabled_model_ids: Vec::new(),
+            revision: 1,
+            catalog: None,
+            token_configured: false,
+            incarnation: String::new(),
+        }
+    }
+
+    /// A pending transition makes the resolver REFUSE (F2): it never hands out a
+    /// config/credential pair across an unresolved write.
+    #[tokio::test]
+    async fn resolve_grant_refuses_while_a_transition_is_pending() {
+        let db = agent_hub_db::Db::open_in_memory().unwrap();
+        let store = ProviderStore::new(db);
+        let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe_unavailable_for_test());
+        let p = Providers::new(store, secrets, "test-instance");
+        p.store.create(&arecord("p1", Some("https://x.test"))).unwrap();
+        p.store.begin_op("p1", "patch", "test-instance:provider-p1").unwrap();
+        let e = p.resolve_grant("p1").await;
+        assert!(matches!(e, Err(ProviderError::RevisionConflict(_))));
     }
 }

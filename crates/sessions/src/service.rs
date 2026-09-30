@@ -77,6 +77,8 @@ impl SessionError {
                     "revision_conflict" => "revision_conflict",
                     "catalog_not_loaded" => "catalog_not_loaded",
                     "not_implemented" => "not_implemented",
+                    // A storage failure is NOT a request-body error.
+                    "internal_error" => "internal_error",
                     _ => "validation_failed",
                 }
             }
@@ -197,7 +199,16 @@ pub struct Sessions {
     /// providers-domain boundary: `sessions` does not depend on `providers`; the
     /// composition root injects the resolver. `None` = no provider injection
     /// configured, so a session with `modelProviderId` is refused (honest).
-    provider_resolver: Option<Box<dyn Fn(&str) -> Result<crate::runtime::Grant, String> + Send + Sync>>,
+    provider_resolver: Option<
+        Box<
+            dyn Fn(
+                    String,
+                ) -> std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<crate::runtime::Grant, String>> + Send>,
+                > + Send
+                + Sync,
+        >,
+    >,
     /// Resolve the hub-managed connections' credentials for a session's adapter, as
     /// `(envName, value)` for ENABLED connections only. Injected by the composition
     /// root so `sessions` does not depend on `connections`.
@@ -259,7 +270,14 @@ impl Sessions {
     /// ONLY way a hub-managed provider reaches a session.
     pub fn with_provider_resolver(
         mut self,
-        resolver: Box<dyn Fn(&str) -> Result<crate::runtime::Grant, String> + Send + Sync>,
+        resolver: Box<
+            dyn Fn(
+                    String,
+                ) -> std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<crate::runtime::Grant, String>> + Send>,
+                > + Send
+                + Sync,
+        >,
     ) -> Self {
         self.provider_resolver = Some(resolver);
         self
@@ -287,7 +305,7 @@ impl Sessions {
     /// Resolve the session's requested provider/model/preset into a grant and the
     /// `config/set` payload. The config selects the adapter's injected provider
     /// (`hub-<id>`), the model within it, and the session preset.
-    fn resolve_grant(
+    async fn resolve_grant(
         &self,
         provider_id: Option<&str>,
         model_id: Option<&str>,
@@ -321,7 +339,7 @@ impl Sessions {
         let resolver = self.provider_resolver.as_ref().ok_or_else(|| {
             SessionError::Unsupported("this hub has no provider resolver; a managed provider is refused".into())
         })?;
-        let mut grant = resolver(pid).map_err(SessionError::provider)?;
+        let mut grant = resolver(pid.to_string()).await.map_err(SessionError::provider)?;
         grant.requested_model_id = model_id.map(str::to_string);
         // The owning contract (`adapter-v1:386`) selects the provider by
         // `config.connectionId`; the model is selected WITHIN that route by
@@ -346,7 +364,7 @@ impl Sessions {
 
     /// The body validation for what this slice supports. Called AFTER the
     /// reservation, so a conflict is decided first (R1/R2).
-    fn validate_supported(&self, req: &CreateSession) -> Result<(), SessionError> {
+    async fn validate_supported(&self, req: &CreateSession) -> Result<(), SessionError> {
         // A managed provider is supported only when a resolver is injected; the
         // resolution (and its failures) happen here, at "accept", so a bad
         // provider is refused before any process is spawned.
@@ -356,7 +374,8 @@ impl Sessions {
             req.preset_id.as_deref(),
             req.plan,
             req.review,
-        )?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -374,7 +393,7 @@ impl Sessions {
     /// The command -> session association is reserved durably BEFORE any side
     /// effect (R1/R2): a retry returns the original; a different request with the
     /// same key is a conflict; a new key is a new command.
-    pub fn accept_create(
+    pub async fn accept_create(
         &self,
         command_id: &str,
         req: CreateSession,
@@ -441,7 +460,7 @@ impl Sessions {
         // The reservation is committed. Now validate the body; if it is not
         // supported, UNDO the reservation (drop the row and the command key) and
         // return the refusal - never leave a `starting` row for a refused command.
-        if let Err(e) = self.validate_supported(&req) {
+        if let Err(e) = self.validate_supported(&req).await {
             let _ = self.db.delete_session_row(&id);
             let _ = self.db.remove_session_command(command_id);
             return Err(e);
@@ -489,13 +508,16 @@ impl Sessions {
         // config that selects the injected provider. A resolution failure here
         // fails the start honestly; it is never silently dropped.
         let (grant, config) =
-            match self.resolve_grant(
-                row.model_provider_id.as_deref(),
-                row.model_id.as_deref(),
-                row.preset_id.as_deref(),
-                row.plan,
-                row.review,
-            ) {
+            match self
+                .resolve_grant(
+                    row.model_provider_id.as_deref(),
+                    row.model_id.as_deref(),
+                    row.preset_id.as_deref(),
+                    row.plan,
+                    row.review,
+                )
+                .await
+            {
                 Ok(v) => v,
                 Err(e) => return self.fail_start(&sid, &e.to_string()).await,
             };
@@ -547,6 +569,24 @@ impl Sessions {
             }
             Err(e) => self.fail_start(&sid, &e.to_string()).await,
         }
+    }
+
+    /// After a config/set has RUN in the adapter, a failure (an unconfirmed target
+    /// or a DB write failure) leaves the adapter in an UNKNOWN configuration. The
+    /// session must not keep serving prompts against its old applied identity: stop
+    /// the process and mark it `needs-repair`, so the next use reopens and re-grants
+    /// (TASK-048 F3).
+    async fn quarantine_session(&self, sid: &str, reason: &str) -> SessionError {
+        let _ = self.runtime.stop(sid).await;
+        if let Ok(Some(mut row)) = self.db.session(sid) {
+            row.status = "needs-repair".into();
+            row.start_error = Some(reason.to_string());
+            row.updated_at = now_utc();
+            let _ = self.db.update_session(&row);
+            self.bus
+                .publish("session.start_failed", serde_json::json!({ "session": self.view(&row) }));
+        }
+        SessionError::Start(reason.to_string())
     }
 
     async fn fail_start(&self, sid: &str, error: &str) {
@@ -738,13 +778,15 @@ impl Sessions {
                 req.model_provider_id.clone().or_else(|| row.model_provider_id.clone());
             let new_model = req.model_id.clone().or_else(|| row.model_id.clone());
             let new_preset = req.preset_id.clone().or_else(|| row.preset_id.clone());
-            let (grant, config) = self.resolve_grant(
-                new_provider.as_deref(),
-                new_model.as_deref(),
-                new_preset.as_deref(),
-                row.plan,
-                row.review,
-            )?;
+            let (grant, config) = self
+                .resolve_grant(
+                    new_provider.as_deref(),
+                    new_model.as_deref(),
+                    new_preset.as_deref(),
+                    row.plan,
+                    row.review,
+                )
+                .await?;
             if let Some(g) = &grant {
                 self.runtime
                     .grant(id, g)
@@ -760,27 +802,34 @@ impl Sessions {
             let ap = applied.get("modelProviderId").and_then(|v| v.as_str()).map(str::to_string);
             let am = applied.get("model").and_then(|v| v.as_str()).map(str::to_string);
             let ar = applied.get("connectionId").and_then(|v| v.as_str()).map(str::to_string);
+            let route_ok = ar.is_some();
+            let mut mismatch: Option<String> = None;
             if let Some(want) = new_provider.as_deref() {
                 if ap.as_deref() != Some(want) {
-                    return Err(SessionError::Validation(format!(
-                        "the adapter did not confirm provider `{want}`: applied={applied}"
-                    )));
+                    mismatch = Some(format!("the adapter did not confirm provider `{want}`: applied={applied}"));
                 }
             }
-            if let Some(want) = new_model.as_deref() {
-                if am.as_deref() != Some(want) {
-                    return Err(SessionError::Validation(format!(
-                        "the adapter did not confirm model `{want}`: applied={applied}"
-                    )));
+            if mismatch.is_none() {
+                if let Some(want) = new_model.as_deref() {
+                    if am.as_deref() != Some(want) {
+                        mismatch = Some(format!("the adapter did not confirm model `{want}`: applied={applied}"));
+                    }
                 }
             }
-            if let Some(want) = new_preset.as_deref() {
-                let apreset = applied.get("preset").and_then(|v| v.as_str());
-                if apreset != Some(want) {
-                    return Err(SessionError::Validation(format!(
-                        "the adapter did not confirm preset `{want}`: applied={applied}"
-                    )));
+            if mismatch.is_none() && !route_ok {
+                mismatch = Some(format!("the adapter did not confirm a native route: applied={applied}"));
+            }
+            if mismatch.is_none() {
+                if let Some(want) = new_preset.as_deref() {
+                    if applied.get("preset").and_then(|v| v.as_str()) != Some(want) {
+                        mismatch = Some(format!("the adapter did not confirm preset `{want}`: applied={applied}"));
+                    }
                 }
+            }
+            if let Some(msg) = mismatch {
+                // The config/set already ran; do not leave the session active with
+                // its old applied identity.
+                return Err(self.quarantine_session(id, &msg).await);
             }
             row.model_provider_id = new_provider;
             row.model_id = new_model;
@@ -807,7 +856,11 @@ impl Sessions {
         }
 
         row.updated_at = now_utc();
-        self.db.update_session(&row)?;
+        if let Err(e) = self.db.update_session(&row) {
+            return Err(self
+                .quarantine_session(id, &format!("the patched session could not be persisted: {e}"))
+                .await);
+        }
         let view = self.view(&row);
         self.bus.publish("session.patched", serde_json::json!({ "session": view }));
         Ok(PatchOutcome { session: view, warning })
@@ -852,13 +905,15 @@ impl Sessions {
         };
         // A restart RE-GRANTS: the adapter's grant is memory-only, so a reopened
         // session must receive the credential again before its config is applied.
-        let (grant, config) = self.resolve_grant(
-            row.model_provider_id.as_deref(),
-            row.model_id.as_deref(),
-            row.preset_id.as_deref(),
-            row.plan,
-            row.review,
-        )?;
+        let (grant, config) = self
+            .resolve_grant(
+                row.model_provider_id.as_deref(),
+                row.model_id.as_deref(),
+                row.preset_id.as_deref(),
+                row.plan,
+                row.review,
+            )
+            .await?;
         let spec = StartSpec {
             sid: row.id.clone(),
             harness_id: harness.id.clone(),
@@ -987,13 +1042,15 @@ impl Sessions {
                 .await
                 .map_err(|e| SessionError::Start(format!("placement task failed: {e}")))??
         };
-        let (grant, config) = self.resolve_grant(
-            row.model_provider_id.as_deref(),
-            row.model_id.as_deref(),
-            row.preset_id.as_deref(),
-            row.plan,
-            row.review,
-        )?;
+        let (grant, config) = self
+            .resolve_grant(
+                row.model_provider_id.as_deref(),
+                row.model_id.as_deref(),
+                row.preset_id.as_deref(),
+                row.plan,
+                row.review,
+            )
+            .await?;
         let spec = StartSpec {
             sid: child_id.clone(),
             harness_id: harness.id.clone(),
@@ -1225,11 +1282,16 @@ impl Sessions {
     /// (session, idempotencyKey) is the decision point), refuse a second turn
     /// while one runs (`session_busy`, never queued), and reject an empty body.
     /// An **unknown** turn is never replayed.
-    pub fn accept_turn(
-        &self,
+    pub async fn accept_turn(
+        self: Arc<Self>,
         session_id: &str,
         req: TurnRequest,
     ) -> Result<TurnOutcome, SessionError> {
+        // Admission takes the SAME session lock a PATCH holds for its whole
+        // grant/config transition, so a turn cannot be admitted while a config
+        // switch is in flight (TASK-048 F3).
+        let lock = self.lock_for(session_id).await;
+        let _guard = lock.lock().await;
         if req.idempotency_key.trim().is_empty() {
             return Err(SessionError::Validation("idempotencyKey is required".into()));
         }
@@ -1304,6 +1366,18 @@ impl Sessions {
             "turn.running",
             serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
         );
+        // The DISPATCH gate: right before sending the prompt, re-read BOTH the
+        // durable turn state (a cancel writes `cancelling`) and the in-memory cancel
+        // set. If a cancel landed between the `running` commit and here, do NOT
+        // send - the turn is cancelled, not dispatched (TASK-048 F4).
+        {
+            let cur = self.db.turn(&turn_id).ok().flatten().map(|t| t.state).unwrap_or_default();
+            let cancelled = self.cancelled.lock().await.contains(&turn_id);
+            if cancelled || cur == "cancelling" {
+                self.settle_turn(&turn_id, "cancelled", None).await;
+                return;
+            }
+        }
         let params = serde_json::json!({
             "sid": session_id,
             "message": text,
@@ -1369,9 +1443,11 @@ impl Sessions {
     /// (TASK-048 F4).
     pub async fn reconcile_stalled_cancels(&self) -> Result<usize, SessionError> {
         let mut n = 0;
+        // (a) A cancelling turn in a session with NO live process: the cancel can
+        // never be confirmed now; settle `interrupted`.
         for row in self.db.sessions_with_cancelling_turns()? {
             if self.runtime.is_running(&row) {
-                continue; // still alive: let run_turn settle it
+                continue;
             }
             if let Some(t) = self.db.active_turn(&row)? {
                 if t.state == "cancelling" {
@@ -1379,6 +1455,24 @@ impl Sessions {
                     n += 1;
                 }
             }
+        }
+        Ok(n)
+    }
+
+    /// The core-side CANCEL TIMEOUT (adapter-v1:385): an abort that was delivered
+    /// but never confirmed must not hold the execution occupancy forever. After
+    /// `timeout_secs`, the hub STOPS the adapter (a deliberate, performed stop, not
+    /// a send failure) and settles the turn `interrupted`. This releases occupancy
+    /// on a real action rather than a hope.
+    pub async fn timeout_unconfirmed_cancels(&self, timeout_secs: i64) -> Result<usize, SessionError> {
+        let mut n = 0;
+        for (turn_id, session_id) in self.db.cancelling_turns_older_than(timeout_secs)? {
+            // Stop the adapter so no late events from the old turn can arrive; the
+            // stop is best-effort, the settle is what releases occupancy.
+            let _ = self.runtime.stop(&session_id).await;
+            self.settle_turn(&turn_id, "interrupted", Some("the cancel was not confirmed within the timeout"))
+                .await;
+            n += 1;
         }
         Ok(n)
     }
@@ -1393,6 +1487,11 @@ impl Sessions {
     /// Cancel: idempotent. Sends `session/abort`; the turn ends when the adapter
     /// confirms (an adapter ACK is NOT "stopped").
     pub async fn cancel_turn(self: Arc<Self>, session_id: &str) -> Result<TurnView, SessionError> {
+        // Serialize the cancel INTENT with admission and dispatch on the session
+        // lock, so the `running` commit and the `cancelling` write cannot interleave
+        // (TASK-048 F4).
+        let lock = self.lock_for(session_id).await;
+        let _guard = lock.lock().await;
         // Idempotent: no running turn -> return the current (terminal) state.
         let active = match self.db.active_turn(session_id)? {
             Some(t) => t,
@@ -1408,7 +1507,16 @@ impl Sessions {
         // not yet been dispatched sees it (run_turn) and a restart can reconcile.
         // `cancelling` is a NON-terminal move: the busy state is NOT released.
         self.cancelled.lock().await.insert(active.id.clone());
-        let _ = self.db.set_turn_state(&active.id, "cancelling");
+        // The intent MUST be durable: if the durable write fails, the cancel is NOT
+        // recorded and the caller must not believe it was.
+        if !self.db.set_turn_state(&active.id, "cancelling")? {
+            // The turn is already terminal (or gone): nothing to cancel.
+            let t = self
+                .db
+                .turn(&active.id)?
+                .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+            return Ok(turn_view(&t));
+        }
         // Deliver the abort. A send failure does NOT settle the turn: the prompt
         // may still be running, so releasing busy would be a lie. The turn stays
         // held; the caller sees `abort-failed` and can retry. The terminal is

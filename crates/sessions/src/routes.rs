@@ -206,7 +206,7 @@ async fn create(
         .filter(|k| !k.is_empty())
         .unwrap_or_else(|| crate::service::new_id("create"));
 
-    let view = match s.sessions.accept_create(&command_id, req) {
+    let view = match s.sessions.accept_create(&command_id, req).await {
         Ok(CreateOutcome::Accepted(view)) => {
             // Detached start: the caller is answered 202 at once.
             let sessions = s.sessions.clone();
@@ -283,7 +283,8 @@ async fn send_turn(
     Json(req): Json<TurnRequest>,
 ) -> Response {
     let text = crate::service::text_of_request(&req.content);
-    match s.sessions.accept_turn(&id, req) {
+    let sessions = s.sessions.clone();
+    match sessions.accept_turn(&id, req).await {
         Ok(TurnOutcome::Accepted(turn)) => {
             let sessions = s.sessions.clone();
             let sid = id.clone();

@@ -13,6 +13,8 @@ pub enum StoreError {
     NotFound(String),
     #[error("provider `{0}` already exists")]
     Exists(String),
+    #[error("{0}")]
+    Pending(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),
 }
@@ -54,19 +56,30 @@ impl ProviderStore {
         Ok(())
     }
 
-    /// Record an in-flight credential transition (see `db::providers`).
-    pub fn begin_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<(), StoreError> {
-        self.db.begin_provider_op(provider, op, secret_ref)?;
+    /// Record an in-flight credential transition (see `db::providers`). Returns
+    /// the op id; it REFUSES when an unresolved transition already exists.
+    pub fn begin_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<String, StoreError> {
+        match self.db.begin_provider_op(provider, op, secret_ref) {
+            Ok(id) => Ok(id),
+            Err(agent_hub_db::DbError::Conflict(m)) => Err(StoreError::Pending(m)),
+            Err(e) => Err(StoreError::Db(e)),
+        }
+    }
+
+    /// Whether this provider has an unresolved credential transition.
+    pub fn has_pending_op(&self, provider: &str) -> Result<bool, StoreError> {
+        Ok(self.db.has_pending_provider_op(provider)?)
+    }
+
+    /// Clear the op the caller actually began, by its id.
+    pub fn finish_op(&self, id: &str) -> Result<(), StoreError> {
+        self.db.finish_provider_op_id(id)?;
         Ok(())
     }
 
-    pub fn finish_op(&self, provider: &str) -> Result<(), StoreError> {
-        self.db.finish_provider_op(provider)?;
-        Ok(())
-    }
-
-    /// In-flight credential transitions (for the boot sweep).
-    pub fn pending_ops(&self) -> Result<Vec<(String, String, String)>, StoreError> {
+    /// In-flight credential transitions (for the boot sweep), as
+    /// `(id, provider, op, secret_ref)`.
+    pub fn pending_ops(&self) -> Result<Vec<(String, String, String, String)>, StoreError> {
         Ok(self.db.pending_provider_ops()?)
     }
 

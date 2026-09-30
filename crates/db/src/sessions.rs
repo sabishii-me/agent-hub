@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS turns (
   intent           TEXT NOT NULL DEFAULT '',
   created_at       TEXT NOT NULL,
   ended_at         TEXT,
+  cancel_requested_at TEXT,
   UNIQUE(session_id, idempotency_key)
 );
 "#;
@@ -410,11 +411,36 @@ impl crate::Db {
     /// cancel write `cancelling` after the terminal had been written).
     pub fn set_turn_state(&self, id: &str, state: &str) -> Result<bool, DbError> {
         let conn = self.lock();
-        let n = conn.execute(
-            "UPDATE turns SET state = ?2 WHERE id = ?1 AND ended IS NULL",
-            params![id, state],
-        )?;
+        // Entering `cancelling` records WHEN, so a core-side cancel timeout can see
+        // an unconfirmed stop (TASK-048 F4).
+        let n = if state == "cancelling" {
+            conn.execute(
+                "UPDATE turns SET state = ?2, cancel_requested_at = ?3 WHERE id = ?1 AND ended IS NULL",
+                params![id, state, crate::now_utc()],
+            )?
+        } else {
+            conn.execute(
+                "UPDATE turns SET state = ?2 WHERE id = ?1 AND ended IS NULL",
+                params![id, state],
+            )?
+        };
         Ok(n > 0)
+    }
+
+    /// Cancelling turns whose cancel was requested LONGER than `seconds` ago and is
+    /// still unconfirmed (for the core cancel timeout).
+    pub fn cancelling_turns_older_than(&self, seconds: i64) -> Result<Vec<(String, String)>, DbError> {
+        let conn = self.lock();
+        let cutoff = (chrono::Utc::now() - chrono::Duration::seconds(seconds))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id FROM turns WHERE state = 'cancelling' AND ended IS NULL AND cancel_requested_at IS NOT NULL AND cancel_requested_at < ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Commit the terminal state **once**. The guard is in the SQL: only a turn
@@ -481,6 +507,7 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     add("sessions", "applied_plan", "INTEGER")?;
     add("sessions", "applied_review", "INTEGER")?;
     add("turns", "intent", "TEXT NOT NULL DEFAULT ''")?;
+    add("turns", "cancel_requested_at", "TEXT")?;
     Ok(())
 }
 
