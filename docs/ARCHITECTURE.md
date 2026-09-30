@@ -749,3 +749,23 @@ still unresolved and tracked in `docs/review/VERIFICATION-TASKS.md`.
   existence check with no side effect. The blocking placement (deleting/creating
   the shared harness dir) runs in `spawn_blocking` inside the detached start/reopen,
   so it never stalls the async runtime.
+
+## 22. Session presets (TASK-048)
+
+`presetId` is a session composition (which tools/persona the agent runs), not a
+knob. The hub:
+
+- lists a harness's declared presets (`GET /v1/harnesses/{id}/presets` ->
+  `presets/list`), pointing the adapter at the plugin's own `<plugin>/presets/` dir
+  via `AGENT_HUB_PRESETS_DIR` (the harness declares the `presets` capability);
+- accepts `presetId` on create and sends it in the first `config/set`
+  (`config.presetId`);
+- **confirms** `applied.preset` equals the requested id before the session is
+  `active`; a mismatch or a missing confirmation fails the start;
+- persists `preset_id`/`applied_preset` and exposes them on the session view;
+- a reopen re-sends the preset the same way.
+
+A preset is fixed once a turn has run (the adapter answers `agent-preset-locked`
+and the hub surfaces it as a start failure), never a silent keep of the old one.
+An unknown preset is refused by the adapter and the session ends `starting_failed`
+with the adapter's reason.

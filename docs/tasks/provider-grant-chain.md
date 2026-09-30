@@ -29,3 +29,12 @@ adapter's reason — honest, and not a fake `completed`.
 - The confirmed identity is persisted (`applied_provider`/`applied_route`/
   `applied_model`) and shown on the session view; a reopen re-grants and re-checks.
 - Grant errors keep their contract code (`provider_unauthorized`, ...).
+
+## Session presets (TASK-048)
+
+`presetId` accepted -> first `config/set` (`config.presetId`) -> `applied.preset`
+confirmed -> persisted (`preset_id`/`applied_preset`) and shown on the session view.
+The adapter reads `<plugin>/presets/` via `AGENT_HUB_PRESETS_DIR` (declared
+`presets` capability). Verified live: `presets/list` returns `standard` and
+`heavy-review`; a valid preset applies (`appliedPreset=standard`); an unknown preset
+is refused (`starting_failed`, adapter reason).

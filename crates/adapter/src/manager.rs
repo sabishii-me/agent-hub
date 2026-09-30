@@ -123,7 +123,16 @@ impl Adapters {
         let _ = std::fs::remove_dir_all(&extensions_dir);
         std::fs::create_dir_all(&extensions_dir)?;
 
+        // A harness that declares `presets` reads definitions from its own
+        // `<plugin>/presets/` dir; point the adapter there.
+        let mut presets_dir = None;
         if let Ok(harness) = self.get(id) {
+            if harness.manifest.capabilities.iter().any(|c| c == "presets") {
+                let p = harness.directory.join("presets");
+                if p.is_dir() {
+                    presets_dir = Some(p);
+                }
+            }
             // ONE placement implementation: the extensions crate's rule. It
             // refuses a declared id with no directory (SourceMissing); the start
             // does not swallow it.
@@ -150,7 +159,7 @@ impl Adapters {
             cwd: self.data_dir.clone(),
             session_id,
             additional_dirs: Vec::new(),
-            presets_dir: None,
+            presets_dir,
             connection_env: Vec::new(),
         })
     }
@@ -269,6 +278,9 @@ impl Adapters {
         env.push(("AGENT_HUB_INSTALLED_EXTENSIONS_DIR".into(), he.extensions_dir.to_string_lossy().into()));
         if !he.additional_dirs.is_empty() {
             env.push(("AGENT_HUB_ADDITIONAL_DIRS".into(), serde_json::to_string(&he.additional_dirs).unwrap()));
+        }
+        if let Some(p) = &he.presets_dir {
+            env.push(("AGENT_HUB_PRESETS_DIR".into(), p.to_string_lossy().into()));
         }
         if let Some(argv) = harness.manifest.runtime_argv(&harness.directory) {
             env.push(("AGENT_HUB_RUNTIME_COMMAND".into(), serde_json::to_string(&argv).unwrap()));

@@ -35,6 +35,8 @@ pub struct SessionProcess {
     /// The resolved native route the adapter confirmed (`applied.connectionId` /
     /// native route), when it reports one.
     pub applied_route: Option<String>,
+    /// The preset the adapter confirmed (`applied.preset`).
+    pub applied_preset: Option<String>,
 }
 
 impl SessionProcess {
@@ -79,12 +81,16 @@ pub struct StartSpec {
     pub harness_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub extensions_dir: PathBuf,
+    /// The plugin's presets dir (`AGENT_HUB_PRESETS_DIR`), when declared.
+    pub presets_dir: Option<PathBuf>,
     /// The runtime argv, absolute (`AGENT_HUB_RUNTIME_COMMAND`).
     pub runtime_argv: Option<Vec<String>>,
     /// A native ref to resume, when reopening.
     pub resume: Option<String>,
     /// The `config/set` payload (may be `{}`).
     pub config: Value,
+    /// The preset that was requested (confirmed against `applied.preset`).
+    pub requested_preset_id: Option<String>,
     /// The credential grant for a hub-managed provider (`credentials/grant`),
     /// sent AFTER `session/start` and BEFORE `config/set` (`adapter-v1:345-353`).
     /// Memory-only: the adapter does not persist it, so it is re-sent on every
@@ -204,6 +210,21 @@ impl Sessions {
             .or_else(|| applied.get("nativeRoute"))
             .and_then(Value::as_str)
             .map(str::to_string);
+        let applied_preset = applied
+            .get("preset")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // Confirm the requested preset was applied. A requested preset that the
+        // adapter did not confirm applied is a start failure (never a silent
+        // default): the session would otherwise run the wrong composition.
+        if let Some(want) = spec.requested_preset_id.as_deref() {
+            if applied_preset.as_deref() != Some(want) {
+                let _ = bus.shutdown().await;
+                return Err(StartError::Protocol(format!(
+                    "the adapter did not confirm the requested preset `{want}`: applied={applied}"
+                )));
+            }
+        }
 
         // Confirm the adapter applied WHAT WE ASKED (TASK-048 F3). If the adapter
         // answers a different provider/model - or no `applied` at all - the
@@ -229,6 +250,7 @@ impl Sessions {
         let applied_provider_out = applied_provider.clone();
         let applied_model_out = applied_model.clone();
         let applied_route_out = applied_route.clone();
+        let applied_preset_out = applied_preset.clone();
         let bus_requests = bus.requests.clone();
         let requests_out = bus_requests.clone();
         // Pump this session's notifications into the event bus. Every frame names
@@ -260,6 +282,7 @@ impl Sessions {
             applied_provider,
             applied_model,
             applied_route,
+            applied_preset,
         };
         self.requests.lock().expect("requests").insert(sid.clone(), bus_requests.clone());
         self.running
@@ -278,6 +301,7 @@ impl Sessions {
             applied_provider: applied_provider_out,
             applied_model: applied_model_out,
             applied_route: applied_route_out,
+            applied_preset: applied_preset_out,
         })
     }
 
@@ -334,6 +358,9 @@ fn build_env(spec: &StartSpec) -> Vec<(String, String)> {
     env.push(("AGENT_HUB_SESSION_ID".into(), spec.sid.clone()));
     env.push(("AGENT_HUB_INSTALLED_SKILLS_DIR".into(), spec.skills_dir.to_string_lossy().into()));
     env.push(("AGENT_HUB_INSTALLED_EXTENSIONS_DIR".into(), spec.extensions_dir.to_string_lossy().into()));
+    if let Some(p) = &spec.presets_dir {
+        env.push(("AGENT_HUB_PRESETS_DIR".into(), p.to_string_lossy().into()));
+    }
     if let Some(argv) = &spec.runtime_argv {
         env.push(("AGENT_HUB_RUNTIME_COMMAND".into(), serde_json::to_string(argv).unwrap()));
     }

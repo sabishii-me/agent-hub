@@ -98,6 +98,10 @@ pub struct SessionView {
     pub model_provider_id: Option<String>,
     #[serde(rename = "modelId")]
     pub model_id: Option<String>,
+    #[serde(rename = "presetId", skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
+    #[serde(rename = "appliedPreset", skip_serializing_if = "Option::is_none")]
+    pub applied_preset: Option<String>,
     #[serde(rename = "appliedModel")]
     pub applied_model: Option<String>,
     /// The provider the adapter CONFIRMED applied (`applied.modelProviderId`).
@@ -157,6 +161,10 @@ pub struct HarnessSpec {
     pub harness_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub extensions_dir: PathBuf,
+    /// The plugin's declared presets directory (`<plugin>/presets/`), when the
+    /// harness declares the `presets` capability. The adapter reads definitions
+    /// from it via `AGENT_HUB_PRESETS_DIR`.
+    pub presets_dir: Option<PathBuf>,
 }
 
 /// What `create` returns: the reserved session (to be answered 202) or a replay.
@@ -245,21 +253,29 @@ impl Sessions {
         self
     }
 
-    /// Resolve the session's requested provider/model into a grant and the
+    /// Resolve the session's requested provider/model/preset into a grant and the
     /// `config/set` payload. The config selects the adapter's injected provider
-    /// (`hub-<id>`) and the model within it.
+    /// (`hub-<id>`), the model within it, and the session preset.
     fn resolve_grant(
         &self,
         provider_id: Option<&str>,
         model_id: Option<&str>,
+        preset_id: Option<&str>,
     ) -> Result<(Option<crate::runtime::Grant>, serde_json::Value), SessionError> {
+        let mut config = serde_json::json!({});
+        // A preset is a session composition: it is set at the first config and is
+        // locked once the session has turns (the adapter enforces that; a locked
+        // preset comes back as an error, never silently kept).
+        if let Some(p) = preset_id {
+            config["presetId"] = serde_json::json!(p);
+        }
         let Some(pid) = provider_id else {
             if model_id.is_some() {
                 return Err(SessionError::Validation(
                     "modelId requires modelProviderId: a model is chosen within a provider's route".into(),
                 ));
             }
-            return Ok((None, serde_json::json!({})));
+            return Ok((None, config));
         };
         let resolver = self.provider_resolver.as_ref().ok_or_else(|| {
             SessionError::Unsupported("this hub has no provider resolver; a managed provider is refused".into())
@@ -271,10 +287,8 @@ impl Sessions {
         // `config.model`. The adapter then reports `applied.modelProviderId` (the
         // requested identity) and `applied.connectionId` (its resolved native
         // route).
-        let mut config = serde_json::json!({
-            "connectionId": grant.connection_id,
-            "modelProviderId": grant.connection_id,
-        });
+        config["connectionId"] = serde_json::json!(grant.connection_id);
+        config["modelProviderId"] = serde_json::json!(grant.connection_id);
         if let Some(m) = model_id {
             config["model"] = serde_json::json!(m);
         }
@@ -295,10 +309,11 @@ impl Sessions {
         // A managed provider is supported only when a resolver is injected; the
         // resolution (and its failures) happen here, at "accept", so a bad
         // provider is refused before any process is spawned.
-        self.resolve_grant(req.model_provider_id.as_deref(), req.model_id.as_deref())?;
-        if req.preset_id.is_some() {
-            return Err(SessionError::Unsupported("presetId is not supported yet".into()));
-        }
+        self.resolve_grant(
+            req.model_provider_id.as_deref(),
+            req.model_id.as_deref(),
+            req.preset_id.as_deref(),
+        )?;
         if req.plan.is_some() || req.review.is_some() {
             return Err(SessionError::Unsupported("plan/review are not supported yet".into()));
         }
@@ -350,6 +365,8 @@ impl Sessions {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            preset_id: req.preset_id.clone(),
+            applied_preset: None,
             plan: None,
             review: None,
             cwd: Some(cwd),
@@ -432,7 +449,11 @@ impl Sessions {
         // config that selects the injected provider. A resolution failure here
         // fails the start honestly; it is never silently dropped.
         let (grant, config) =
-            match self.resolve_grant(row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+            match self.resolve_grant(
+                row.model_provider_id.as_deref(),
+                row.model_id.as_deref(),
+                row.preset_id.as_deref(),
+            ) {
                 Ok(v) => v,
                 Err(e) => return self.fail_start(&sid, &e.to_string()).await,
             };
@@ -445,10 +466,12 @@ impl Sessions {
             harness_dir: harness.harness_dir.clone(),
             skills_dir: harness.skills_dir.clone(),
             extensions_dir: harness.extensions_dir.clone(),
+            presets_dir: harness.presets_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
             config,
             grant,
+            requested_preset_id: row.preset_id.clone(),
         };
         match self.runtime.start(spec).await {
             Ok(process) => {
@@ -461,6 +484,7 @@ impl Sessions {
                 row.applied_model = process.applied_model.clone();
                 row.applied_provider = process.applied_provider.clone();
                 row.applied_route = process.applied_route.clone();
+                row.applied_preset = process.applied_preset.clone();
                 row.start_error = None;
                 row.updated_at = now_utc();
                 if let Err(e) = self.db.update_session(&row) {
@@ -599,8 +623,11 @@ impl Sessions {
         };
         // A restart RE-GRANTS: the adapter's grant is memory-only, so a reopened
         // session must receive the credential again before its config is applied.
-        let (grant, config) =
-            self.resolve_grant(row.model_provider_id.as_deref(), row.model_id.as_deref())?;
+        let (grant, config) = self.resolve_grant(
+            row.model_provider_id.as_deref(),
+            row.model_id.as_deref(),
+            row.preset_id.as_deref(),
+        )?;
         let spec = StartSpec {
             sid: row.id.clone(),
             harness_id: harness.id.clone(),
@@ -610,10 +637,12 @@ impl Sessions {
             harness_dir: harness.harness_dir.clone(),
             skills_dir: harness.skills_dir.clone(),
             extensions_dir: harness.extensions_dir.clone(),
+            presets_dir: harness.presets_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: row.native_ref.clone(),
             config,
             grant,
+            requested_preset_id: row.preset_id.clone(),
         };
         let process = self
             .runtime
@@ -625,6 +654,7 @@ impl Sessions {
         row.applied_model = process.applied_model.clone();
         row.applied_provider = process.applied_provider.clone();
         row.applied_route = process.applied_route.clone();
+        row.applied_preset = process.applied_preset.clone();
         row.updated_at = now_utc();
         if let Err(e) = self.db.update_session(&row) {
             // The process started but the row could not be persisted: stop it and
@@ -668,6 +698,8 @@ impl Sessions {
             harness_id: row.harness_id.clone(),
             model_provider_id: row.model_provider_id.clone(),
             model_id: row.model_id.clone(),
+            preset_id: row.preset_id.clone(),
+            applied_preset: row.applied_preset.clone(),
             applied_model: row.applied_model.clone(),
             applied_provider: row.applied_provider.clone(),
             applied_route: row.applied_route.clone(),
@@ -1041,6 +1073,7 @@ mod reconcile_tests {
                     harness_dir: std::path::PathBuf::from("."),
                     skills_dir: std::path::PathBuf::from("."),
                     extensions_dir: std::path::PathBuf::from("."),
+                    presets_dir: None,
                 })
             }),
         )
@@ -1055,6 +1088,8 @@ mod reconcile_tests {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            preset_id: None,
+            applied_preset: None,
             plan: None,
             review: None,
             cwd: None,

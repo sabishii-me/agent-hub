@@ -221,7 +221,6 @@ impl crate::Db {
 
 #[cfg(test)]
 mod op_journal_tests {
-    use super::*;
     use crate::Db;
 
     #[test]

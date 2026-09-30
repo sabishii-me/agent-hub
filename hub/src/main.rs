@@ -130,6 +130,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let env = registry
             .harness_env(&h.id, None)
             .map_err(|e| format!("placement for `{id}` failed: {e}"))?;
+        // A harness that declares the `presets` capability reads definitions from
+        // its own `<plugin>/presets/` dir; the hub points it there.
+        let presets_dir = if h.manifest.capabilities.iter().any(|c| c == "presets") {
+            let p = h.directory.join("presets");
+            if p.is_dir() { Some(p) } else { None }
+        } else {
+            None
+        };
         Ok(HarnessSpec {
             id: h.id.clone(),
             command,
@@ -138,6 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             harness_dir: env.harness_dir,
             skills_dir: env.skills_dir,
             extensions_dir: env.extensions_dir,
+            presets_dir,
         })
     };
     // The provider resolver: the ONLY path a hub-managed provider reaches a

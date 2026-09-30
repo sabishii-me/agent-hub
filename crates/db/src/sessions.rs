@@ -18,6 +18,10 @@ pub struct SessionRow {
     pub applied_provider: Option<String>,
     /// The native route the adapter resolved (`applied.connectionId`).
     pub applied_route: Option<String>,
+    /// The preset the session was created with (opaque id; null = harness default).
+    pub preset_id: Option<String>,
+    /// The preset the harness confirmed it applied (`applied.preset`).
+    pub applied_preset: Option<String>,
     pub plan: Option<bool>,
     pub review: Option<bool>,
     pub cwd: Option<String>,
@@ -58,6 +62,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   applied_model          TEXT,
   applied_provider       TEXT,
   applied_route          TEXT,
+  preset_id              TEXT,
+  applied_preset         TEXT,
   plan                   INTEGER,
   review                 INTEGER,
   cwd                    TEXT,
@@ -109,10 +115,10 @@ impl crate::Db {
 
     fn insert_session_tx(conn: &Connection, s: &SessionRow) -> Result<(), rusqlite::Error> {
         conn.execute(
-            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
             params![
-                s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route,
+                s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.preset_id, s.applied_preset,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.cwd, s.title,
                 s.status, s.created_at, s.updated_at, s.deleted as i64,
                 s.forked_from_session, s.forked_from_turn, s.native_ref, s.start_error
@@ -130,22 +136,24 @@ impl crate::Db {
             applied_model: r.get(4)?,
             applied_provider: r.get(5)?,
             applied_route: r.get(6)?,
-            plan: r.get::<_, Option<i64>>(7)?.map(|v| v != 0),
-            review: r.get::<_, Option<i64>>(8)?.map(|v| v != 0),
-            cwd: r.get(9)?,
-            title: r.get(10)?,
-            status: r.get(11)?,
-            created_at: r.get(12)?,
-            updated_at: r.get(13)?,
-            deleted: r.get::<_, i64>(14)? != 0,
-            forked_from_session: r.get(15)?,
-            forked_from_turn: r.get(16)?,
-            native_ref: r.get(17)?,
-            start_error: r.get(18)?,
+            preset_id: r.get(7)?,
+            applied_preset: r.get(8)?,
+            plan: r.get::<_, Option<i64>>(9)?.map(|v| v != 0),
+            review: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
+            cwd: r.get(11)?,
+            title: r.get(12)?,
+            status: r.get(13)?,
+            created_at: r.get(14)?,
+            updated_at: r.get(15)?,
+            deleted: r.get::<_, i64>(16)? != 0,
+            forked_from_session: r.get(17)?,
+            forked_from_turn: r.get(18)?,
+            native_ref: r.get(19)?,
+            start_error: r.get(20)?,
         })
     }
 
-    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
+    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, DbError> {
         let conn = self.lock();
@@ -164,9 +172,9 @@ impl crate::Db {
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, plan=?7, review=?8, title=?9, status=?10, updated_at=?11, native_ref=?12, start_error=?13 WHERE id=?1",
+            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, preset_id=?7, applied_preset=?8, plan=?9, review=?10, title=?11, status=?12, updated_at=?13, native_ref=?14, start_error=?15 WHERE id=?1",
             params![
-                s.id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route,
+                s.id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.preset_id, s.applied_preset,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64), s.title, s.status, s.updated_at,
                 s.native_ref, s.start_error
             ],
@@ -447,6 +455,8 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     add("sessions", "start_error", "TEXT")?;
     add("sessions", "applied_provider", "TEXT")?;
     add("sessions", "applied_route", "TEXT")?;
+    add("sessions", "preset_id", "TEXT")?;
+    add("sessions", "applied_preset", "TEXT")?;
     add("turns", "intent", "TEXT NOT NULL DEFAULT ''")?;
     Ok(())
 }
@@ -500,6 +510,8 @@ mod turn_admission_tests {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            preset_id: None,
+            applied_preset: None,
             plan: None,
             review: None,
             cwd: None,
@@ -591,6 +603,8 @@ mod cancel_hold_tests {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            preset_id: None,
+            applied_preset: None,
             plan: None,
             review: None,
             cwd: None,
