@@ -821,6 +821,9 @@ Verified live: `{plan:true, review:true, presetId:standard}` -> active with
 Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables.
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
+**`docs/tasks/remaining-surface.md` records, per group, which work OUTSIDE the hub blocks each
+remaining route** (adapter protocol, the provider-type data model, the plugin-sourced skills
+model, artifact recording).
 
 ### Real (mounted, real handler) - 56
 

@@ -73,7 +73,9 @@ pass.
   status and the remaining surface. **§17 is the plan of record.**
 - `docs/tasks/minimal-secret-store.md` - the OS secret store (instance identity, recovery).
 - `docs/tasks/turn-lifecycle.md` - the turn lifecycle, terminal semantics, restart reconciliation.
-- `docs/tasks/provider-grant-chain.md` - the provider->session grant chain and presets.
+- `docs/tasks/provider-grant-chain.md` - the provider->session grant chain, presets and model
+  selection; `docs/tasks/connections.md`, `docs/tasks/plugin-lifecycle.md`,
+  `docs/tasks/metadata-routes.md`, `docs/tasks/remaining-surface.md`.
 
 ## Authorization boundary
 
