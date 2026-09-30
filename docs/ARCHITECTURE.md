@@ -648,8 +648,9 @@ follows distinguishes a real, narrow component fact from a product capability.
   persisted flag). A provider row carries an **`incarnation`** (minted on insert) and a
   **`revision`**; `save_provider` is guarded by `(id, incarnation)` and `refresh` re-reads after
   its network await and refuses a changed incarnation/revision, so a stale writer cannot overwrite
-  a rebuilt provider. Still `501`: `PATCH /v1/model-providers/{id}/models` (the selection mutator;
-  the service exists), `GET /v1/model-providers/types` (the provider-type data surface),
+  a rebuilt provider. `PATCH /v1/model-providers/{id}/models`
+  replaces the enabled selection (stored on the provider, so a refresh never changes it).
+  Still `501`: `GET /v1/model-providers/types` (the provider-type data surface) and
   `POST /v1/model-providers/{id}/auth` + `GET`/`cancel` (the OAuth/device-code flow).
 - **the served binary** (now): every route requires a **bearer token** (the inbound boundary
   exists). That is a possession check, not an authorization boundary (§7). It also serves its own
@@ -821,7 +822,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 55
+### Real (mounted, real handler) - 56
 
 ```
 DELETE /v1/connections/{id}
@@ -859,6 +860,7 @@ GET /v1/surface
 PATCH /v1/connections/{id}
 PATCH /v1/harnesses/{id}/extensions
 PATCH /v1/model-providers/{id}
+PATCH /v1/model-providers/{id}/models
 PATCH /v1/sessions/{id}
 POST /v1/connections
 POST /v1/model-providers
@@ -881,14 +883,13 @@ POST /v1/sessions/{id}/turns
 POST /v1/shutdown
 ```
 
-### Mounted but `501` - 9
+### Mounted but `501` - 8
 
 ```
 GET /v1/model-providers/types
 GET /v1/model-providers/{id}/auth/{op}
 GET /v1/sessions/{id}/artifacts
 GET /v1/sessions/{id}/resources
-PATCH /v1/model-providers/{id}/models
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel
 POST /v1/sessions/{id}/repair

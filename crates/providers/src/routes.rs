@@ -46,7 +46,7 @@ fn table() -> RouteTable<ProvidersState> {
         .delete("/v1/model-providers/{id}", remove)
         .post("/v1/model-providers/{id}/logout", logout)
         .get("/v1/model-providers/{id}/models", models)
-        .patch("/v1/model-providers/{id}/models", not_implemented)
+        .patch("/v1/model-providers/{id}/models", patch_models)
         .post("/v1/model-providers/{id}/models/refresh", refresh)
         .get("/v1/models", list_models)
         .get("/v1/model-providers/types", not_implemented)
@@ -147,6 +147,26 @@ fn models_body(rec: &crate::record::ProviderRecord) -> serde_json::Value {
         "stale": rec.catalog_stale(),
         "models": rec.merged_models(),
     })
+}
+
+#[derive(serde::Deserialize)]
+struct SelectionBody {
+    #[serde(rename = "enabledModelIds", default)]
+    enabled_model_ids: Vec<String>,
+}
+
+/// PATCH /v1/model-providers/{id}/models - replace the enabled selection. `[]`
+/// disables all; an unknown id is refused. The selection lives on the provider, not
+/// in the fetched catalog, so a refresh never changes it.
+async fn patch_models(
+    State(s): State<ProvidersState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<SelectionBody>,
+) -> Response {
+    match s.providers.set_selection(&id, body.enabled_model_ids).await {
+        Ok(rec) => Json(models_body(&rec)).into_response(),
+        Err(e) => err(&s, e),
+    }
 }
 
 async fn refresh(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {

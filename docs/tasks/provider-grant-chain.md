@@ -58,3 +58,11 @@ Verified live: title rename (`title=Renamed Via Patch`); `plan`/`review` ->
 `appliedPlan`/`appliedReview` true; a model change during a running turn ->
 `409 session_busy`; a plan change during a running turn -> `200`; an unknown session
 -> `unknown_session`. Real-hub gated test `a_session_patch_renames_and_sets_policy`.
+
+## Model selection (PATCH /v1/model-providers/{id}/models)
+
+Replaces the enabled selection (`{enabledModelIds}`; `[]` disables all; an unknown id
+is refused). The selection lives on the PROVIDER, not in the fetched catalog, so a
+refresh never changes it. Returns the same model list shape as `GET .../models`.
+Verified live: `[m2]` enables only m2; an unknown id -> `validation_failed`; `[]`
+disables all.
