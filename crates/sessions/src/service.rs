@@ -102,6 +102,10 @@ pub struct SessionView {
     pub preset_id: Option<String>,
     #[serde(rename = "appliedPreset", skip_serializing_if = "Option::is_none")]
     pub applied_preset: Option<String>,
+    #[serde(rename = "appliedPlan", skip_serializing_if = "Option::is_none")]
+    pub applied_plan: Option<bool>,
+    #[serde(rename = "appliedReview", skip_serializing_if = "Option::is_none")]
+    pub applied_review: Option<bool>,
     #[serde(rename = "appliedModel")]
     pub applied_model: Option<String>,
     /// The provider the adapter CONFIRMED applied (`applied.modelProviderId`).
@@ -261,8 +265,18 @@ impl Sessions {
         provider_id: Option<&str>,
         model_id: Option<&str>,
         preset_id: Option<&str>,
+        plan: Option<bool>,
+        review: Option<bool>,
     ) -> Result<(Option<crate::runtime::Grant>, serde_json::Value), SessionError> {
         let mut config = serde_json::json!({});
+        // plan/review are session-scoped knobs the adapter answers with
+        // applied.plan / applied.review. null = do not intervene.
+        if let Some(v) = plan {
+            config["plan"] = serde_json::json!(v);
+        }
+        if let Some(v) = review {
+            config["review"] = serde_json::json!(v);
+        }
         // A preset is a session composition: it is set at the first config and is
         // locked once the session has turns (the adapter enforces that; a locked
         // preset comes back as an error, never silently kept).
@@ -313,10 +327,9 @@ impl Sessions {
             req.model_provider_id.as_deref(),
             req.model_id.as_deref(),
             req.preset_id.as_deref(),
+            req.plan,
+            req.review,
         )?;
-        if req.plan.is_some() || req.review.is_some() {
-            return Err(SessionError::Unsupported("plan/review are not supported yet".into()));
-        }
         if req.additional_directories.as_ref().map(|d| !d.is_empty()).unwrap_or(false) {
             return Err(SessionError::Unsupported("additionalDirectories are not supported yet".into()));
         }
@@ -367,8 +380,10 @@ impl Sessions {
             applied_route: None,
             preset_id: req.preset_id.clone(),
             applied_preset: None,
-            plan: None,
-            review: None,
+            plan: req.plan,
+            review: req.review,
+            applied_plan: None,
+            applied_review: None,
             cwd: Some(cwd),
             title: req.title.clone(),
             status: "starting".into(),
@@ -453,6 +468,8 @@ impl Sessions {
                 row.model_provider_id.as_deref(),
                 row.model_id.as_deref(),
                 row.preset_id.as_deref(),
+                row.plan,
+                row.review,
             ) {
                 Ok(v) => v,
                 Err(e) => return self.fail_start(&sid, &e.to_string()).await,
@@ -472,6 +489,8 @@ impl Sessions {
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),
+            requested_plan: row.plan,
+            requested_review: row.review,
         };
         match self.runtime.start(spec).await {
             Ok(process) => {
@@ -485,6 +504,8 @@ impl Sessions {
                 row.applied_provider = process.applied_provider.clone();
                 row.applied_route = process.applied_route.clone();
                 row.applied_preset = process.applied_preset.clone();
+                row.applied_plan = process.applied_plan;
+                row.applied_review = process.applied_review;
                 row.start_error = None;
                 row.updated_at = now_utc();
                 if let Err(e) = self.db.update_session(&row) {
@@ -627,6 +648,8 @@ impl Sessions {
             row.model_provider_id.as_deref(),
             row.model_id.as_deref(),
             row.preset_id.as_deref(),
+            row.plan,
+            row.review,
         )?;
         let spec = StartSpec {
             sid: row.id.clone(),
@@ -643,6 +666,8 @@ impl Sessions {
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),
+            requested_plan: row.plan,
+            requested_review: row.review,
         };
         let process = self
             .runtime
@@ -655,6 +680,8 @@ impl Sessions {
         row.applied_provider = process.applied_provider.clone();
         row.applied_route = process.applied_route.clone();
         row.applied_preset = process.applied_preset.clone();
+        row.applied_plan = process.applied_plan;
+        row.applied_review = process.applied_review;
         row.updated_at = now_utc();
         if let Err(e) = self.db.update_session(&row) {
             // The process started but the row could not be persisted: stop it and
@@ -700,6 +727,8 @@ impl Sessions {
             model_id: row.model_id.clone(),
             preset_id: row.preset_id.clone(),
             applied_preset: row.applied_preset.clone(),
+            applied_plan: row.applied_plan,
+            applied_review: row.applied_review,
             applied_model: row.applied_model.clone(),
             applied_provider: row.applied_provider.clone(),
             applied_route: row.applied_route.clone(),
@@ -1092,6 +1121,8 @@ mod reconcile_tests {
             applied_preset: None,
             plan: None,
             review: None,
+            applied_plan: None,
+            applied_review: None,
             cwd: None,
             title: None,
             status: status.into(),

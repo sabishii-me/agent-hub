@@ -37,6 +37,10 @@ pub struct SessionProcess {
     pub applied_route: Option<String>,
     /// The preset the adapter confirmed (`applied.preset`).
     pub applied_preset: Option<String>,
+    /// The plan state the adapter confirmed (`applied.plan`).
+    pub applied_plan: Option<bool>,
+    /// The review state the adapter confirmed (`applied.review`).
+    pub applied_review: Option<bool>,
 }
 
 impl SessionProcess {
@@ -91,6 +95,10 @@ pub struct StartSpec {
     pub config: Value,
     /// The preset that was requested (confirmed against `applied.preset`).
     pub requested_preset_id: Option<String>,
+    /// The plan mode requested (confirmed against `applied.plan`), if any.
+    pub requested_plan: Option<bool>,
+    /// The review switch requested (confirmed against `applied.review`), if any.
+    pub requested_review: Option<bool>,
     /// The credential grant for a hub-managed provider (`credentials/grant`),
     /// sent AFTER `session/start` and BEFORE `config/set` (`adapter-v1:345-353`).
     /// Memory-only: the adapter does not persist it, so it is re-sent on every
@@ -225,6 +233,20 @@ impl Sessions {
                 )));
             }
         }
+        let applied_plan = applied.get("plan").and_then(Value::as_bool);
+        let applied_review = applied.get("review").and_then(Value::as_bool);
+        // plan/review are confirmed like the preset: a requested value the adapter
+        // did not confirm is not recorded as applied. (These are advisory - a
+        // harness that does not report the switch is not a start failure, but we
+        // must not claim the requested value either: applied stays null.)
+        let plan_confirmed = spec.requested_plan.is_none() || applied_plan == spec.requested_plan;
+        let review_confirmed = spec.requested_review.is_none() || applied_review == spec.requested_review;
+        if !plan_confirmed || !review_confirmed {
+            let _ = bus.shutdown().await;
+            return Err(StartError::Protocol(format!(
+                "the adapter did not confirm the requested plan/review: applied={applied}"
+            )));
+        }
 
         // Confirm the adapter applied WHAT WE ASKED (TASK-048 F3). If the adapter
         // answers a different provider/model - or no `applied` at all - the
@@ -251,6 +273,8 @@ impl Sessions {
         let applied_model_out = applied_model.clone();
         let applied_route_out = applied_route.clone();
         let applied_preset_out = applied_preset.clone();
+        let applied_plan_out = applied_plan;
+        let applied_review_out = applied_review;
         let bus_requests = bus.requests.clone();
         let requests_out = bus_requests.clone();
         // Pump this session's notifications into the event bus. Every frame names
@@ -283,6 +307,8 @@ impl Sessions {
             applied_model,
             applied_route,
             applied_preset,
+            applied_plan,
+            applied_review,
         };
         self.requests.lock().expect("requests").insert(sid.clone(), bus_requests.clone());
         self.running
@@ -302,6 +328,8 @@ impl Sessions {
             applied_model: applied_model_out,
             applied_route: applied_route_out,
             applied_preset: applied_preset_out,
+            applied_plan: applied_plan_out,
+            applied_review: applied_review_out,
         })
     }
 

@@ -769,3 +769,13 @@ A preset is fixed once a turn has run (the adapter answers `agent-preset-locked`
 and the hub surfaces it as a start failure), never a silent keep of the old one.
 An unknown preset is refused by the adapter and the session ends `starting_failed`
 with the adapter's reason.
+
+## 23. plan / review at create (TASK-048)
+
+`plan` and `review` are session-scoped knobs (`config.plan` / `config.review`),
+confirmed against the adapter's `applied.plan` / `applied.review` and persisted
+(`applied_plan` / `applied_review`, exposed as `appliedPlan` / `appliedReview` on
+the session view). A requested value the adapter does not confirm fails the start -
+we never record a knob the harness did not apply. `null` means "do not intervene".
+Verified live: `{plan:true, review:true, presetId:standard}` -> active with
+`appliedPlan=true`, `appliedReview=true`, `appliedPreset=standard`.
