@@ -265,6 +265,24 @@ impl Providers {
         // The credential LOCATION is the row's own reference, never a re-derived
         // key (a rebuilt id must not re-acquire an old credential).
         let reference = rec.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
+        // Merge the non-credential fields first, so the INTENDED post-write revision
+        // is known before we journal the operation.
+        if let Some(v) = req.declarations {
+            rec.declarations = v;
+        }
+        let changing_token = req.token.is_some();
+        if changing_token {
+            bump = true;
+        }
+        if bump {
+            rec.revision += 1;
+        }
+        // The intended row state AFTER this operation saves. Recovery confirms the
+        // credential ONLY when the row matches THIS (TASK-048 F1): a row at a
+        // different revision means the save never landed, so we must not bless the
+        // credential with it.
+        let intended_incarnation = rec.incarnation.clone();
+        let intended_revision = rec.revision;
         let mut op: Option<String> = None;
         if let Some(tok) = req.token {
             match tok {
@@ -272,28 +290,32 @@ impl Providers {
                     if !self.secrets.is_available() {
                         return Err(ProviderError::NoSecretStore);
                     }
-                    op = Some(self.store.begin_op(id, "patch", &reference, &rec.incarnation, rec.revision)?);
+                    op = Some(self.store.begin_op(
+                        id,
+                        "patch",
+                        &reference,
+                        &intended_incarnation,
+                        intended_revision,
+                    )?);
                     self.secrets
                         .set(&reference, &t)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
                     rec.secret_ref = Some(reference.clone());
-                    bump = true;
                 }
                 None => {
-                    op = Some(self.store.begin_op(id, "patch", &reference, &rec.incarnation, rec.revision)?);
+                    op = Some(self.store.begin_op(
+                        id,
+                        "patch",
+                        &reference,
+                        &intended_incarnation,
+                        intended_revision,
+                    )?);
                     self.secrets
                         .delete(&reference)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
                     rec.secret_ref = None;
-                    bump = true;
                 }
             }
-        }
-        if let Some(v) = req.declarations {
-            rec.declarations = v;
-        }
-        if bump {
-            rec.revision += 1;
         }
         // A read ERROR is an error, never read as "not configured" (only when the
         // row claims a reference do we consult the store here; an unreadable one
@@ -520,8 +542,8 @@ impl Providers {
             };
             match row {
                 Some(mut r) if intent_matches(&r) => {
-                    // The row is the one the operation wrote (or a save that did not
-                    // land, so the row is unchanged and its reference is authoritative).
+                    // The row landed at the revision the operation intended to save:
+                    // the credential now belongs to THIS row.
                     r.secret_ref = if has { Some(secret_ref.to_string()) } else { None };
                     self.store.save(&r)?;
                     Ok(())
@@ -674,5 +696,63 @@ mod recovery_tests {
         p.store.begin_op("p1", "patch", "test-instance:provider-p1", "inc", 1).unwrap();
         let e = p.resolve_grant("p1").await;
         assert!(matches!(e, Err(ProviderError::RevisionConflict(_))));
+    }
+}
+
+#[cfg(test)]
+mod recovery_intent_tests {
+    use super::*;
+
+    fn record(id: &str, url: &str) -> crate::record::ProviderRecord {
+        crate::record::ProviderRecord {
+            id: id.into(),
+            label: None,
+            url: Some(url.into()),
+            api: None,
+            secret_ref: None,
+            provider_type: None,
+            provider_type_version: None,
+            declarations: Default::default(),
+            enabled_model_ids: Vec::new(),
+            revision: 1,
+            catalog: None,
+            token_configured: false,
+            incarnation: String::new(),
+        }
+    }
+
+    /// Recovery confirms the credential ONLY when the row matches the intended
+    /// POST-write revision. When a patch's row save did NOT land (the row is still
+    /// at the old revision), recovery DROPS the credential rather than attaching a
+    /// new token to the old URL (TASK-048 F1).
+    #[tokio::test]
+    async fn recovery_drops_a_credential_whose_row_save_did_not_land() {
+        let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe(format!(
+            "agent-hub-test-{}",
+            std::process::id()
+        )));
+        if !secrets.is_available() {
+            eprintln!("SKIP: no OS secret store");
+            return;
+        }
+        let db = agent_hub_db::Db::open_in_memory().unwrap();
+        let store = ProviderStore::new(db);
+        let p = Providers::new(store, secrets.clone(), "itest");
+        let mut rec = p.store.create(&record("p1", "https://old.test")).unwrap();
+        let reference = p.secret_ref("p1");
+        // The credential lands in the keychain...
+        secrets.set(&reference, "TOKEN-NEW").unwrap();
+        // ...but the row save did NOT (the journal recorded intended revision 2; the
+        // row stayed at revision 1).
+        p.store
+            .begin_op("p1", "patch", &reference, &rec.incarnation, rec.revision + 1)
+            .unwrap();
+
+        p.recover_pending();
+
+        // The credential was dropped, NOT attached to the old-URL row.
+        assert_eq!(secrets.get(&reference).unwrap(), None, "the mismatched credential is dropped");
+        rec = p.store.get("p1").unwrap();
+        assert_eq!(rec.secret_ref, None, "the row does not point at a dropped credential");
     }
 }

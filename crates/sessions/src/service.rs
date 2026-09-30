@@ -60,6 +60,21 @@ impl SessionError {
         }
     }
 
+    /// Map an adapter interaction failure: when the adapter ANSWERED with a typed
+    /// refusal that names a contract code, keep that identity; otherwise it is a
+    /// start/transport failure (TASK-048 F5).
+    pub fn from_start(e: crate::runtime::StartError) -> Self {
+        if let crate::runtime::StartError::Refused { data, message, .. } = &e {
+            if let Some(code) = data.get("code").and_then(|c| c.as_str()) {
+                return SessionError::Provider {
+                    code: code.to_string(),
+                    message: message.clone(),
+                };
+            }
+        }
+        SessionError::Start(e.to_string())
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
             SessionError::NotFound(_) => "unknown_session",
@@ -802,9 +817,8 @@ impl Sessions {
             if let Some(g) = &grant {
                 if let Err(e) = self.runtime.grant(id, g).await {
                     // A grant may have reached the adapter: fail closed.
-                    return Err(self
-                        .quarantine_session(id, &format!("credentials/grant failed: {e}"))
-                        .await);
+                    let msg = format!("credentials/grant failed: {e}");
+                    return Err(self.quarantine_session(id, &msg).await);
                 }
             }
             let r = match self
@@ -1535,8 +1549,13 @@ impl Sessions {
                 continue;
             }
             // The adapter is gone: the session needs a repair before reuse. Mark it
-            // so no prompt runs against a stopped process.
+            // in memory AND durably (so a restart agrees).
             self.quarantined.lock().await.insert(session_id.clone());
+            if let Ok(Some(mut row)) = self.db.session(&session_id) {
+                row.status = "needs-repair".into();
+                row.updated_at = now_utc();
+                let _ = self.db.update_session(&row);
+            }
             let cause = if state == "cancelling" {
                 "the cancel was not confirmed within the timeout"
             } else {
@@ -1558,40 +1577,38 @@ impl Sessions {
     /// Cancel: idempotent. Sends `session/abort`; the turn ends when the adapter
     /// confirms (an adapter ACK is NOT "stopped").
     pub async fn cancel_turn(self: Arc<Self>, session_id: &str) -> Result<TurnView, SessionError> {
-        // Serialize the cancel INTENT with admission and dispatch on the session
-        // lock, so the `running` commit and the `cancelling` write cannot interleave
-        // (TASK-048 F4).
-        let lock = self.lock_for(session_id).await;
-        let _guard = lock.lock().await;
-        // Idempotent: no running turn -> return the current (terminal) state.
-        let active = match self.db.active_turn(session_id)? {
-            Some(t) => t,
-            None => {
-                let turns = self.db.list_turns(session_id)?;
-                return turns
-                    .last()
-                    .map(turn_view)
-                    .ok_or_else(|| SessionError::Validation("the session has no turns".into()));
+        // The cancel INTENT is recorded under the session lock (serialized with
+        // admission/dispatch), but the lock is RELEASED before the abort request:
+        // the abort waits for the adapter, and holding the lock across that wait
+        // would deadlock the timeout sweep that must rescue a non-answering adapter
+        // (TASK-048 F4/P3).
+        let active_id = {
+            let lock = self.lock_for(session_id).await;
+            let _guard = lock.lock().await;
+            let active = match self.db.active_turn(session_id)? {
+                Some(t) => t,
+                None => {
+                    let turns = self.db.list_turns(session_id)?;
+                    return turns
+                        .last()
+                        .map(turn_view)
+                        .ok_or_else(|| SessionError::Validation("the session has no turns".into()));
+                }
+            };
+            self.cancelled.lock().await.insert(active.id.clone());
+            if !self.db.set_turn_state(&active.id, "cancelling")? {
+                // Already terminal (or gone): nothing to cancel.
+                let t = self
+                    .db
+                    .turn(&active.id)?
+                    .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+                return Ok(turn_view(&t));
             }
+            active.id
         };
-        // Record the cancel INTENT durably (before the abort), so a prompt that has
-        // not yet been dispatched sees it (run_turn) and a restart can reconcile.
-        // `cancelling` is a NON-terminal move: the busy state is NOT released.
-        self.cancelled.lock().await.insert(active.id.clone());
-        // The intent MUST be durable: if the durable write fails, the cancel is NOT
-        // recorded and the caller must not believe it was.
-        if !self.db.set_turn_state(&active.id, "cancelling")? {
-            // The turn is already terminal (or gone): nothing to cancel.
-            let t = self
-                .db
-                .turn(&active.id)?
-                .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
-            return Ok(turn_view(&t));
-        }
-        // Deliver the abort. A send failure does NOT settle the turn: the prompt
-        // may still be running, so releasing busy would be a lie. The turn stays
-        // held; the caller sees `abort-failed` and can retry. The terminal is
-        // decided by the prompt's own return, or by reconciliation (TASK-048 F4).
+        // Deliver the abort WITHOUT the lock. A send failure does NOT settle the turn
+        // (the prompt may still run): the turn stays held; the caller sees
+        // `abort-failed`, and the timeout can still rescue it.
         if let Err(e) = self
             .runtime
             .request(session_id, "session/abort", serde_json::json!({ "sid": session_id }))
@@ -1599,8 +1616,8 @@ impl Sessions {
         {
             let t = self
                 .db
-                .turn(&active.id)?
-                .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+                .turn(&active_id)?
+                .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
             return Err(SessionError::AbortFailed(format!(
                 "{e}; the turn is still held (state {}), retry cancel",
                 t.state
@@ -1608,8 +1625,8 @@ impl Sessions {
         }
         let t = self
             .db
-            .turn(&active.id)?
-            .ok_or_else(|| SessionError::NotFound(active.id.clone()))?;
+            .turn(&active_id)?
+            .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
         Ok(turn_view(&t))
     }
 

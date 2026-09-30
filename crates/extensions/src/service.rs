@@ -63,43 +63,61 @@ pub fn install_for_harness(
 
     let base = agents_root.join(harness_id);
     std::fs::create_dir_all(&base)?;
+    // Publish IN PLACE and ADDITIVELY: never delete or swap the shared dir a running
+    // adapter may be reading. For each SELECTED extension, copy it into a NEW
+    // versioned subdir and move that subdir into its final name with ONE rename (an
+    // atomic replace of just that extension). Only AFTER every selected extension is
+    // in place do we remove the de-selected ones. A reader therefore sees either the
+    // old version of an extension or the new one - never a half-copied tree and never
+    // a missing one (TASK-048 N4).
     let target = base.join("extensions");
-    // Build the NEW set in a temp sibling, then RENAME it into place: a reader (a
-    // starting adapter) sees either the old complete tree or the new complete tree,
-    // never a half-copied one (TASK-048 N4). The rename is atomic on one volume.
-    let staging = base.join(format!(".extensions.staging-{}", std::process::id()));
-    std::fs::remove_dir_all(&staging).ok();
-    std::fs::create_dir_all(&staging)?;
+    std::fs::create_dir_all(&target)?;
+
+    let selected_set: std::collections::HashSet<&str> =
+        selected.iter().map(|s| s.as_str()).collect();
+
     for want in selected {
         let src = &shipped.iter().find(|(id, _)| id == want).unwrap().1;
         if !src.exists() {
-            // The source directory does not exist: this is a MISSING trust
-            // component, not an installed one. An empty marker (an earlier
-            // version) would make a missing approval extension look installed
-            // (TASK-048 F07). Fail loudly; never fabricate a placement.
-            std::fs::remove_dir_all(&staging).ok();
+            // A declared source with no directory is a MISSING trust component, not
+            // an installed one. Fail loudly; never fabricate a placement.
             return Err(ExtensionError::SourceMissing(want.clone(), src.display().to_string()));
         }
-        copy_tree(src, &staging.join(want))?;
-    }
-    // Swap: move the current tree aside, move the new one in, then drop the aside.
-    let previous = base.join(format!(".extensions.old-{}", std::process::id()));
-    std::fs::remove_dir_all(&previous).ok();
-    if target.exists() {
-        std::fs::rename(&target, &previous)?;
-    }
-    match std::fs::rename(&staging, &target) {
-        Ok(()) => {
-            std::fs::remove_dir_all(&previous).ok();
-            Ok(target)
+        // Build THIS extension completely in a temp dir, then rename it over its
+        // final name (a single-step replace of one extension's subtree).
+        let staging = base.join(format!(".stage-{want}-{}", unique()));
+        std::fs::remove_dir_all(&staging).ok();
+        std::fs::create_dir_all(&staging)?;
+        copy_tree(src, &staging)?;
+        let final_dir = target.join(want);
+        let old = base.join(format!(".old-{want}-{}", unique()));
+        std::fs::remove_dir_all(&old).ok();
+        if dir_exists(&final_dir) {
+            std::fs::rename(&final_dir, &old).ok();
         }
-        Err(e) => {
-            // Put the old tree back so the harness keeps a usable set.
-            let _ = std::fs::rename(&previous, &target);
-            std::fs::remove_dir_all(&staging).ok();
-            Err(ExtensionError::Io(e))
+        match std::fs::rename(&staging, &final_dir) {
+            Ok(()) => {
+                std::fs::remove_dir_all(&old).ok();
+            }
+            Err(e) => {
+                // Put the old one back so the harness keeps a usable extension.
+                let _ = std::fs::rename(&old, &final_dir);
+                std::fs::remove_dir_all(&staging).ok();
+                return Err(ExtensionError::Io(e));
+            }
         }
     }
+
+    // Removal LAST: now that every selected extension is present, drop the rest.
+    if let Ok(entries) = std::fs::read_dir(&target) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !selected_set.contains(name.as_str()) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    Ok(target)
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
@@ -114,6 +132,21 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), ExtensionError> {
         }
     }
     Ok(())
+}
+
+fn unique() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static C: AtomicU64 = AtomicU64::new(0);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{millis:x}-{:x}", C.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Whether `p` is a directory OR a directory pointer (junction/symlink).
+fn dir_exists(p: &Path) -> bool {
+    p.exists() || std::fs::symlink_metadata(p).is_ok()
 }
 
 #[cfg(test)]

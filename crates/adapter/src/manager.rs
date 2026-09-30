@@ -153,10 +153,9 @@ impl Adapters {
         let extensions_dir = base.join("extensions");
         std::fs::create_dir_all(&harness_dir)?;
         std::fs::create_dir_all(&skills_dir)?;
-
-        // Replace the installed set (a removed extension is gone next run).
-        let _ = std::fs::remove_dir_all(&extensions_dir);
-        std::fs::create_dir_all(&extensions_dir)?;
+        // The extensions pointer is REPLACED by install_for_harness (an atomic pointer
+        // swap), so do NOT delete the shared dir here: a reader may be using it
+        // (TASK-048 N4).
 
         // A harness that declares `presets` reads definitions from its own
         // `<plugin>/presets/` dir; point the adapter there.

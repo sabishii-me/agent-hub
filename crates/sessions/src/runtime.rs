@@ -222,7 +222,7 @@ impl Sessions {
             });
             if let Err(e) = bus.requests.request("credentials/grant", params).await {
                 let _ = bus.shutdown().await;
-                return Err(StartError::Protocol(format!("credentials/grant failed: {e}")));
+                return Err(bus_error(e, "credentials/grant"));
             }
         }
 
@@ -235,7 +235,7 @@ impl Sessions {
             Ok(v) => v.get("applied").cloned().unwrap_or(Value::Null),
             Err(e) => {
                 let _ = bus.shutdown().await;
-                return Err(StartError::Protocol(format!("config/set failed: {e}")));
+                return Err(bus_error(e, "config/set"));
             }
         };
 
@@ -575,5 +575,19 @@ mod env_tests {
         assert_eq!(v.as_deref(), Some("[\"E:/one\",\"E:/two\"]"));
         let empty = build_env(&spec(vec![]));
         assert!(!empty.iter().any(|(k, _)| k == "AGENT_HUB_ADDITIONAL_DIRS"));
+    }
+}
+
+/// Turn a bus error into a StartError, KEEPING the adapter's typed `data.code` when
+/// it answered (so a grant/config refusal carries its contract identity, not a
+/// stringified `adapter_crash`).
+fn bus_error(e: agent_hub_adapter::BusError, what: &str) -> StartError {
+    match e {
+        agent_hub_adapter::BusError::Rpc { code, message, data } => StartError::Refused {
+            code: format!("{what}:{code}"),
+            message,
+            data,
+        },
+        other => StartError::Protocol(format!("{what} failed: {other}")),
     }
 }

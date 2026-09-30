@@ -350,21 +350,35 @@ fn new_incarnation() -> String {
 /// Additive upgrade: an existing `providers` table gains `incarnation` (empty for
 /// rows that predate it; the next save mints one through a re-read).
 pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
-    let exists: bool = conn
-        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='providers'", [], |_| Ok(true))
-        .optional()?
-        .unwrap_or(false);
-    if !exists {
-        return Ok(());
-    }
-    let has: bool = conn
-        .prepare("PRAGMA table_info(providers)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .filter_map(Result::ok)
-        .any(|n| n == "incarnation");
-    if !has {
-        conn.execute("ALTER TABLE providers ADD COLUMN incarnation TEXT NOT NULL DEFAULT ''", [])?;
-    }
+    // Additive, per-table: each table is upgraded independently, so an existing DB
+    // from any prior version gains exactly the columns it is missing (TASK-048 F1).
+    let add = |table: &str, column: &str, decl: &str| -> Result<(), rusqlite::Error> {
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                params![table],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Ok(());
+        }
+        let has: bool = conn
+            .prepare(&format!("PRAGMA table_info({table})"))?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|n| n == column);
+        if !has {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        }
+        Ok(())
+    };
+    add("providers", "incarnation", "TEXT NOT NULL DEFAULT ''")?;
+    // The provider journal gained the intended ROW STATE it records; an upgraded DB
+    // must gain it too or recovery cannot distinguish a landed write.
+    add("provider_ops", "expected_incarnation", "TEXT")?;
+    add("provider_ops", "expected_revision", "INTEGER")?;
     Ok(())
 }
 
@@ -413,5 +427,36 @@ mod incarnation_tests {
         ok.revision += 1;
         db.save_provider(&ok).unwrap();
         assert_eq!(db.provider("p").unwrap().unwrap().revision, 2);
+    }
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+
+    /// An OLD database (a `providers` table without `incarnation`, a `provider_ops`
+    /// table without the intent columns) gains them on open, so the new recovery can
+    /// run. This is the upgrade path, not a fresh-create path (TASK-048 F1).
+    #[test]
+    fn an_old_provider_ops_gains_the_intent_columns() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Simulate the previous schema.
+        conn.execute_batch(
+            "CREATE TABLE providers (id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE provider_ops (id TEXT PRIMARY KEY, provider TEXT NOT NULL, op TEXT NOT NULL, secret_ref TEXT, created_at TEXT NOT NULL);",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let cols = |t: &str| -> Vec<String> {
+            conn.prepare(&format!("PRAGMA table_info({t})"))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert!(cols("providers").contains(&"incarnation".to_string()));
+        assert!(cols("provider_ops").contains(&"expected_incarnation".to_string()));
+        assert!(cols("provider_ops").contains(&"expected_revision".to_string()));
     }
 }
