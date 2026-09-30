@@ -1392,9 +1392,20 @@ impl Sessions {
                 self.settle_turn(&turn_id, ended, cause.as_deref()).await;
             }
             Err(e) => {
-                // A transport error is NOT a confirmed stop: if a cancel was
-                // requested the honest terminal is `interrupted` (the turn did not
-                // reach a clean end), otherwise `failed`.
+                // The ADAPTER's own error (an RPC refusal) is authoritative: the
+                // execution it was asked for did not run, so the turn is settled.
+                // A TRANSPORT error with the process still alive proves nothing
+                // about execution - leave it `running` for the execution timeout
+                // (TASK-048 F4), never fabricate a terminal from a write error.
+                let adapter_answered = matches!(e, crate::runtime::StartError::Refused { .. });
+                if !adapter_answered && self.runtime.is_running(&session_id) {
+                    tracing::warn!(
+                        turn = %turn_id,
+                        error = %e,
+                        "the prompt failed without an adapter answer and the adapter is alive; leaving the turn to the timeout sweep"
+                    );
+                    return;
+                }
                 let cancelled = self.cancelled.lock().await.contains(&turn_id);
                 let ended = if cancelled { "interrupted" } else { "failed" };
                 self.settle_turn(&turn_id, ended, Some(&e.to_string())).await;
@@ -1464,14 +1475,26 @@ impl Sessions {
     /// `timeout_secs`, the hub STOPS the adapter (a deliberate, performed stop, not
     /// a send failure) and settles the turn `interrupted`. This releases occupancy
     /// on a real action rather than a hope.
-    pub async fn timeout_unconfirmed_cancels(&self, timeout_secs: i64) -> Result<usize, SessionError> {
+    pub async fn timeout_unconfirmed_cancels(
+        &self,
+        cancel_secs: i64,
+        running_secs: i64,
+    ) -> Result<usize, SessionError> {
         let mut n = 0;
-        for (turn_id, session_id) in self.db.cancelling_turns_older_than(timeout_secs)? {
-            // Stop the adapter so no late events from the old turn can arrive; the
-            // stop is best-effort, the settle is what releases occupancy.
+        for (turn_id, session_id, state) in
+            self.db.unconfirmed_turns_older_than(cancel_secs, running_secs)?
+        {
+            // A cancel that was delivered but never confirmed, or a prompt that
+            // never returned while its adapter may still be alive: neither can hold
+            // the execution occupancy forever. STOP the adapter (a performed action)
+            // and settle `interrupted`.
             let _ = self.runtime.stop(&session_id).await;
-            self.settle_turn(&turn_id, "interrupted", Some("the cancel was not confirmed within the timeout"))
-                .await;
+            let cause = if state == "cancelling" {
+                "the cancel was not confirmed within the timeout"
+            } else {
+                "the turn did not reach a terminal state within the execution timeout"
+            };
+            self.settle_turn(&turn_id, "interrupted", Some(cause)).await;
             n += 1;
         }
         Ok(n)

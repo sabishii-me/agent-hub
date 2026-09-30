@@ -255,7 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tick.tick().await;
-            match sessions.timeout_unconfirmed_cancels(30).await {
+            match sessions.timeout_unconfirmed_cancels(30, 1800).await {
                 Ok(n) if n > 0 => tracing::info!(timed_out = n, "settled unconfirmed cancels as interrupted"),
                 Ok(_) => {}
                 Err(e) => tracing::error!(error = %e, "cancel-timeout sweep failed"),

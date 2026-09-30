@@ -384,10 +384,12 @@ impl Sessions {
             .get(sid)
             .cloned()
             .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
-        requests
-            .request(method, params)
-            .await
-            .map_err(|e| StartError::Protocol(e.to_string()))
+        requests.request(method, params).await.map_err(|e| match e {
+            agent_hub_adapter::BusError::Rpc { code, message, .. } => {
+                StartError::Refused { code: code.to_string(), message }
+            }
+            other => StartError::Protocol(other.to_string()),
+        })
     }
 
     /// Deliver a credential grant to a session's live adapter (a mid-session
@@ -471,6 +473,11 @@ pub enum StartError {
     Spawn(String),
     #[error("adapter protocol: {0}")]
     Protocol(String),
+    /// The ADAPTER answered with an error (an RPC-level refusal). Its own answer
+    /// is authoritative: the execution it was asked for did not run. Distinct from
+    /// a transport failure, where the execution may still be in flight.
+    #[error("adapter refused: {message}")]
+    Refused { code: String, message: String },
 }
 
 impl StartError {
@@ -478,6 +485,7 @@ impl StartError {
         match self {
             StartError::Spawn(_) => "adapter_unreachable",
             StartError::Protocol(_) => "adapter_crash",
+            StartError::Refused { .. } => "adapter_crash",
         }
     }
 }

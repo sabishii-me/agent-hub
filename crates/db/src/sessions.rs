@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS turns (
   created_at       TEXT NOT NULL,
   ended_at         TEXT,
   cancel_requested_at TEXT,
+  running_at         TEXT,
   UNIQUE(session_id, idempotency_key)
 );
 "#;
@@ -418,6 +419,11 @@ impl crate::Db {
                 "UPDATE turns SET state = ?2, cancel_requested_at = ?3 WHERE id = ?1 AND ended IS NULL",
                 params![id, state, crate::now_utc()],
             )?
+        } else if state == "running" {
+            conn.execute(
+                "UPDATE turns SET state = ?2, running_at = ?3 WHERE id = ?1 AND ended IS NULL",
+                params![id, state, crate::now_utc()],
+            )?
         } else {
             conn.execute(
                 "UPDATE turns SET state = ?2 WHERE id = ?1 AND ended IS NULL",
@@ -427,18 +433,30 @@ impl crate::Db {
         Ok(n > 0)
     }
 
-    /// Cancelling turns whose cancel was requested LONGER than `seconds` ago and is
-    /// still unconfirmed (for the core cancel timeout).
-    pub fn cancelling_turns_older_than(&self, seconds: i64) -> Result<Vec<(String, String)>, DbError> {
+    /// `(id, session_id, state)` of turns whose execution has been unconfirmed for
+    /// longer than `seconds`: a `cancelling` turn (cancel not confirmed) or a
+    /// `running` turn (its prompt never returned and the adapter may still be alive).
+    /// The core settles them on a real action (TASK-048 F4).
+    pub fn unconfirmed_turns_older_than(
+        &self,
+        cancel_secs: i64,
+        running_secs: i64,
+    ) -> Result<Vec<(String, String, String)>, DbError> {
         let conn = self.lock();
-        let cutoff = (chrono::Utc::now() - chrono::Duration::seconds(seconds))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string();
+        let now = chrono::Utc::now();
+        let cancel_cutoff = (now - chrono::Duration::seconds(cancel_secs)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let running_cutoff = (now - chrono::Duration::seconds(running_secs)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let mut stmt = conn.prepare(
-            "SELECT id, session_id FROM turns WHERE state = 'cancelling' AND ended IS NULL AND cancel_requested_at IS NOT NULL AND cancel_requested_at < ?1",
+            "SELECT id, session_id, state FROM turns
+             WHERE ended IS NULL AND (
+               (state = 'cancelling' AND cancel_requested_at IS NOT NULL AND cancel_requested_at < ?1)
+               OR (state = 'running' AND running_at IS NOT NULL AND running_at < ?2)
+             )",
         )?;
         let rows = stmt
-            .query_map(params![cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map(params![cancel_cutoff, running_cutoff], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -508,6 +526,7 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     add("sessions", "applied_review", "INTEGER")?;
     add("turns", "intent", "TEXT NOT NULL DEFAULT ''")?;
     add("turns", "cancel_requested_at", "TEXT")?;
+    add("turns", "running_at", "TEXT")?;
     Ok(())
 }
 

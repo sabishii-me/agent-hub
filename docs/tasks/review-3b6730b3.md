@@ -53,3 +53,16 @@ composition root returns a boxed future.
   request-body error).
 - `BusError::Rpc` carries the adapter's typed `data` (its contract code), so the
   identity is no longer dropped at the bus boundary.
+
+## F4 refinement: an adapter ANSWER is not a transport error
+
+`StartError::Refused` now carries the adapter's own RPC refusal (`code`+`message`),
+distinct from a transport failure. `run_turn`:
+- an adapter REFUSAL is authoritative (the execution did not run) -> settle;
+- a TRANSPORT error with the process still alive proves nothing -> leave the turn
+  `running` for the execution timeout, never fabricate a terminal.
+
+The execution timeout (`timeout_unconfirmed_cancels(30, 1800)`) now covers BOTH an
+unconfirmed cancel (30s) and a `running` turn whose prompt never returned (1800s): it
+stops the adapter and settles `interrupted`. `running_at` records when a turn entered
+`running`, so the age is known.
