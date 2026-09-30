@@ -766,6 +766,22 @@ impl Sessions {
     ///   `interrupted` (we cannot prove it finished, so we do not pretend it did).
     pub fn reconcile_interrupted(&self) -> Result<usize, SessionError> {
         let mut n = 0;
+        // FIRST: apply every turn's recorded terminal INTENT (a known terminal whose
+        // write failed). The intent is committed before the terminal, so it is the
+        // durable basis for finishing a settlement the store did not accept
+        // (TASK-048 S3).
+        for (turn_id, _session_id, intent) in self.db.pending_terminal_intents()? {
+            let parsed: serde_json::Value = serde_json::from_str(&intent).unwrap_or_default();
+            let ended = parsed.get("ended").and_then(|v| v.as_str()).unwrap_or("failed");
+            if self.db.end_turn(&turn_id, ended, &now_utc()).unwrap_or(false) {
+                let cause = parsed.get("cause").and_then(|v| v.as_str());
+                self.bus.publish(
+                    "turn.ended",
+                    serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
+                );
+                n += 1;
+            }
+        }
         for row in self.db.list_sessions()? {
             if self.runtime.is_running(&row.id) {
                 continue;
@@ -1694,6 +1710,13 @@ impl Sessions {
         // so a known terminal is not left un-persisted (TASK-048 F4). We publish
         // ONLY after the database confirms, so the stream never announces a fact
         // the store does not hold.
+        // Record the INTENDED terminal durably FIRST, so if the terminal write
+        // below fails, a later reconcile (boot or the sweep) applies it instead of
+        // losing the known terminal (TASK-048 S3).
+        let intent = serde_json::json!({ "ended": ended, "cause": cause }).to_string();
+        if let Err(e) = self.db.set_terminal_intent(turn_id, &intent) {
+            tracing::error!(turn = %turn_id, error = %e, "could not record the terminal intent; the terminal write below may be lost");
+        }
         let mut last_err = None;
         for attempt in 0..5u32 {
             match self.db.end_turn(turn_id, ended, &now_utc()) {
@@ -2256,6 +2279,25 @@ mod reconcile_tests {
         assert_eq!(a2["artifacts"].as_array().unwrap().len(), 0);
 
         assert!(s.artifacts("nope").is_err(), "an unknown session is not_found");
+    }
+
+    /// S3: a known terminal whose DB write failed has a durable INTENT that boot
+    /// reconciliation applies, so the terminal is not lost.
+    #[test]
+    fn boot_applies_a_recorded_terminal_intent() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_session(&row("a", "active")).unwrap();
+        db.admit_turn("a", "k", "turn:x", "t1").unwrap();
+        db.set_turn_state("t1", "running").unwrap();
+        // A terminal was KNOWN but not persisted: the intent is durable.
+        db.set_terminal_intent("t1", r#"{"ended":"completed","cause":null}"#).unwrap();
+
+        let s = sessions(db);
+        s.reconcile_interrupted().unwrap();
+
+        let t = s.db.turn("t1").unwrap().unwrap();
+        assert_eq!(t.state, "ended");
+        assert_eq!(t.ended.as_deref(), Some("completed"), "the recorded intent is applied");
     }
 
     /// N2: at boot an `active` session with no process becomes `needs-repair`, an

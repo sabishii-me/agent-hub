@@ -318,3 +318,15 @@ between the turn check and the send could still receive the old abort. Now:
 
 Live: a dispatched turn records `process_gen=1`; cancel binds to it; after a restart
 the process is gone and the turn is reconciled `interrupted` (no stale abort).
+
+## S3: not-delivered vs unknown vs confirmed-stop (this pass)
+
+- **A confirmed stop consults the CHILD, not stdout EOF**: `AgentBus::shutdown` now
+  treats an already-exited child (`try_wait`) as a CONFIRMED stop, tolerates a kill
+  error when the child is gone, and ALWAYS `wait()`s to confirm the exit.
+- **A write error is not proof of zero-byte delivery**: `runtime.send` already returns
+  `SendError::Unknown` when the adapter is alive, so a turn is left to the timeout
+  rather than settled.
+- **A known terminal whose write failed is not forgotten**: `settle_turn` records a
+  durable `terminal_intent` BEFORE the terminal write; `reconcile_interrupted` applies
+  every recorded intent at boot. Test: `boot_applies_a_recorded_terminal_intent`.

@@ -243,9 +243,19 @@ impl AgentBus {
     /// does (the adapter is responsible for it, per the contract); the hub does
     /// not scan for processes by name.
     pub async fn shutdown(&mut self) -> Result<(), BusError> {
-        self.child.kill().await?;
+        // A child that has ALREADY exited is a CONFIRMED stop (TASK-048 S3). A
+        // stdout EOF alone is NOT proof of exit, so we consult the child itself.
+        if let Ok(Some(_status)) = self.child.try_wait() {
+            return Ok(());
+        }
+        // Kill, then WAIT: the exit is only confirmed when `wait` returns. A kill
+        // error when the child has just exited on its own is not a failure.
+        if let Err(e) = self.child.kill().await {
+            if self.child.try_wait().ok().flatten().is_none() {
+                return Err(e.into());
+            }
+        }
         let _status = self.child.wait().await?;
-        // The reader task ends when stdout closes; do not block a retry on it.
         Ok(())
     }
 }

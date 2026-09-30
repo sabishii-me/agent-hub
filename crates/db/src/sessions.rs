@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS turns (
   cancel_requested_at TEXT,
   running_at         TEXT,
   process_gen        INTEGER,
+  terminal_intent    TEXT,
   UNIQUE(session_id, idempotency_key)
 );
 "#;
@@ -497,10 +498,35 @@ impl crate::Db {
     pub fn end_turn(&self, id: &str, ended: &str, at: &str) -> Result<bool, DbError> {
         let conn = self.lock();
         let n = conn.execute(
-            "UPDATE turns SET state='ended', ended=?2, ended_at=?3 WHERE id=?1 AND ended IS NULL AND state != 'ended'",
+            "UPDATE turns SET state='ended', ended=?2, ended_at=?3, terminal_intent=NULL WHERE id=?1 AND ended IS NULL AND state != 'ended'",
             params![id, ended, at],
         )?;
         Ok(n > 0)
+    }
+
+    /// Record the INTENDED terminal for a turn before attempting to write it. If
+    /// the terminal write then fails, this durable intent lets a later reconcile
+    /// finish the job instead of forgetting the known terminal (TASK-048 S3).
+    pub fn set_terminal_intent(&self, id: &str, intent: &str) -> Result<(), DbError> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE turns SET terminal_intent=?2 WHERE id=?1 AND ended IS NULL",
+            params![id, intent],
+        )?;
+        Ok(())
+    }
+
+    /// Every turn with an unapplied terminal intent (for reconciliation): the
+    /// `(id, session_id, intent)` of each.
+    pub fn pending_terminal_intents(&self) -> Result<Vec<(String, String, String)>, DbError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, terminal_intent FROM turns WHERE ended IS NULL AND terminal_intent IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Session ids that have a `cancelling` turn (for the stalled-cancel sweep).
