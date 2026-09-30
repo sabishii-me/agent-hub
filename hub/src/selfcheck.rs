@@ -37,6 +37,7 @@ pub fn mounted_surface() -> BTreeSet<String> {
     out.extend(agent_hub_plugins::routes::surface());
     out.extend(agent_hub_sessions::routes::surface().iter().map(|s| s.to_string()));
     out.extend(agent_hub_providers::routes::surface().iter().map(|s| s.to_string()));
+    out.extend(agent_hub_connections::routes::surface().iter().map(|s| s.to_string()));
     out.extend(agent_hub_harnesses::routes::surface().iter().map(|s| s.to_string()));
     out.extend(agent_hub_skills::routes::surface().iter().map(|s| s.to_string()));
     out.extend(agent_hub_humans::routes::surface().iter().map(|s| s.to_string()));

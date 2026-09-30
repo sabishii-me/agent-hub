@@ -19,6 +19,8 @@ use agent_hub_humans::routes::{routes as human_routes, HumansState};
 use agent_hub_humans::Humans;
 use agent_hub_sessions::routes::{routes as session_routes, SessionsState};
 use agent_hub_sessions::{HarnessSpec, Sessions};
+use agent_hub_connections::routes::{routes as connection_routes, ConnectionsState};
+use agent_hub_connections::Connections;
 use agent_hub_providers::routes::{routes as provider_routes, ProvidersState};
 use agent_hub_providers::{ProviderStore, Providers};
 use agent_hub_transport::{finish, require_bearer, routes, Admission, BearerToken, ErrorRenderer, Transport};
@@ -103,12 +105,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let providers_db = Db::open(data_dir.join("hub.sqlite"))?;
     let instance = providers_db.instance_id()?;
     let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::for_instance(&instance));
-    let providers = Providers::new(ProviderStore::new(providers_db), secrets, instance);
+    let providers = Providers::new(ProviderStore::new(providers_db), secrets.clone(), instance);
     // Resolve any credential transition that was in flight when the process last
     // stopped (a crash between the row store and the keychain).
     providers.recover_pending();
     let providers = std::sync::Arc::new(providers);
     let provider_state = ProvidersState::new_shared(providers.clone(), errors.clone());
+
+    // Connections: the hub-managed connections. Same secret store + instance
+    // namespace as providers (one keychain namespace per hub instance).
+    let connections_db = Db::open(data_dir.join("hub.sqlite"))?;
+    let connections = std::sync::Arc::new(Connections::new(
+        connections_db,
+        secrets.clone(),
+        providers.namespace.clone(),
+    ));
+    let connection_state = ConnectionsState::new_shared(connections.clone(), errors.clone());
 
     // Sessions: a session resolves its harness through the registry and starts
     // its OWN adapter process with the resolved argv + plugin dir.
@@ -209,6 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(plugin_routes().with_state(plugin_state))
         .merge(session_routes().with_state(session_state))
         .merge(provider_routes().with_state(provider_state))
+        .merge(connection_routes().with_state(connection_state))
         .merge(harness_routes().with_state(harness_state))
         .merge(skill_routes().with_state(skill_state))
         .merge(human_routes().with_state(human_state));

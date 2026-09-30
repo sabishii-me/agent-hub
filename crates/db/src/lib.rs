@@ -10,12 +10,14 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+pub mod connections;
 pub mod instance;
 pub mod providers;
 pub mod recovery;
 pub mod sessions;
 
 pub use recovery::{install, recover, Layout, RecoveryOutcome};
+pub use connections::ConnectionRow;
 pub use providers::ProviderRow;
 pub use sessions::{ReserveOutcome, SessionRow, TurnAdmission, TurnRow};
 
@@ -59,7 +61,7 @@ pub enum InstallStep {
 pub enum DbError {
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
-    #[error("plugin `{0}` not found")]
+    #[error("`{0}` not found")]
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
@@ -101,6 +103,7 @@ impl Db {
         conn.execute_batch(sessions::SCHEMA_SESSIONS)?;
         conn.execute_batch(providers::SCHEMA_PROVIDERS)?;
         conn.execute_batch(instance::SCHEMA_INSTANCE)?;
+        conn.execute_batch(connections::SCHEMA_CONNECTIONS)?;
         conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
         instance::instance_id(&conn)?;
         // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so

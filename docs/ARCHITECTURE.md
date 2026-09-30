@@ -655,7 +655,10 @@ follows distinguishes a real, narrow component fact from a product capability.
   exists). That is a possession check, not an authorization boundary (§7).
 - **skills / humans**: the hub stores skills and lists/removes them; approvals and questions are
   routed to the adapter. Neither is a finished product surface (skills file read/write is `501`).
-- **connections — NOT built**: there is no managed-connection domain. `HarnessEnv.connection_env`
+- **connections** (now): the hub-managed connections are real (rows in the `connections` table,
+  credential in the OS keychain as a per-instance reference, an incarnation/revision guard,
+  enable/disable/delete). `disabled` means zero materialization; `materialize()` hands only
+  ENABLED connections to a session. Still NOT built:: there is no managed-connection domain. `HarnessEnv.connection_env`
   exists but is always empty; the `/v1/connections*` and `/v1/harnesses/{id}/connections*` routes
   are not mounted. This is the largest remaining domain (§17 order: after providers).
 - **harnesses**: the thin projection (`GET /v1/harnesses`, and `presets`/`models`/`tools`/
@@ -812,13 +815,15 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 42
+### Real (mounted, real handler) - 46
 
 ```
+DELETE /v1/connections/{id}
 DELETE /v1/model-providers/{id}
 DELETE /v1/plugins/{id}
 DELETE /v1/sessions/{id}
 DELETE /v1/skills/{id}
+GET /v1/connections
 GET /v1/events
 GET /v1/harnesses
 GET /v1/harnesses/{id}/extensions
@@ -841,8 +846,10 @@ GET /v1/sessions/{id}/stats
 GET /v1/sessions/{id}/turns
 GET /v1/skills
 GET /v1/status
+PATCH /v1/connections/{id}
 PATCH /v1/model-providers/{id}
 PATCH /v1/sessions/{id}
+POST /v1/connections
 POST /v1/model-providers
 POST /v1/model-providers/{id}/logout
 POST /v1/model-providers/{id}/models/refresh
@@ -873,12 +880,10 @@ POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted - 23
+### Not mounted - 19
 
 ```
-DELETE /v1/connections/{id}
 DELETE /v1/harnesses/{id}/connections/{cid}
-GET /v1/connections
 GET /v1/harnesses/{id}/auth/{op}
 GET /v1/harnesses/{id}/connections
 GET /v1/harnesses/{id}/connections/schema
@@ -887,9 +892,7 @@ GET /v1/plugins/catalog
 GET /v1/plugins/{id}/icon/{variant}
 GET /v1/skills/{id}/files/{file...}
 GET /v1/surface
-PATCH /v1/connections/{id}
 PATCH /v1/harnesses/{id}/extensions
-POST /v1/connections
 POST /v1/harnesses/{id}/auth
 POST /v1/harnesses/{id}/auth/{op}/cancel
 POST /v1/harnesses/{id}/connections
