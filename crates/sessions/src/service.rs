@@ -112,6 +112,7 @@ impl SessionError {
                     "requires_new_session" => "requires_new_session",
                     "unsupported" => "unsupported",
                     "session_busy" => "session_busy",
+                    "agent_preset_locked" => "agent_preset_locked",
                     "internal_error" => "internal_error",
                     _ => "validation_failed",
                 }
@@ -974,10 +975,27 @@ impl Sessions {
             {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => {
-                    // The adapter answered with a typed refusal: quarantine (fail
-                    // closed) but KEEP its contract code via `from_start` instead of
-                    // collapsing it to adapter_crash (TASK-048 F5).
                     let typed = SessionError::from_start(e);
+                    let code = typed.code();
+                    // A PRESET the harness cannot change in place is the documented
+                    // restart case: the harness reads its preset extension only at
+                    // spawn, so switching needs a RESTART + RESUME, not a refusal.
+                    // The hub owns that mechanism (stop + session/start(resume) with
+                    // the new preset), so the session stays usable. Only a
+                    // genuinely locked preset WITHOUT prior turns (nothing to
+                    // resume) is refused back with its own code.
+                    // A preset the harness cannot change in place is the documented
+                    // restart case. Trigger it ONLY for an actual preset change that
+                    // the adapter REFUSED (it answered), so we do not restart on an
+                    // unrelated refusal.
+                    let is_preset_change = new_preset.as_deref() != row.applied_preset.as_deref();
+                    if is_preset_change && code == "agent_preset_locked" {
+                        return self
+                            .restart_for_preset(id, &mut row, new_preset, new_provider, new_model)
+                            .await;
+                    }
+                    // Any other typed refusal: quarantine (fail closed) but KEEP its
+                    // contract code (TASK-048 F5).
                     self.quarantine_session(id, &typed.to_string()).await;
                     return Err(typed);
                 }
@@ -998,10 +1016,14 @@ impl Sessions {
             // names an injected provider `hub-<id>`; a bare id is NOT that route,
             // so it is refused (TASK-048 F3). With no requested provider, a
             // non-empty route is still required.
+            // A route is required ONLY when a managed provider was requested. With
+            // no provider the harness uses its own native config, so a bare
+            // preset/model change needs no `connectionId` (the contract: a null
+            // provider = do not intervene).
             let route_ok = match (new_provider.as_deref(), ar.as_deref()) {
                 (Some(want), Some(r)) => !r.is_empty() && r == format!("hub-{want}"),
-                (None, Some(r)) => !r.is_empty(),
-                _ => false,
+                (Some(_), None) => false,
+                (None, _) => true,
             };
             let mut mismatch: Option<String> = None;
             if let Some(want) = new_provider.as_deref() {
@@ -1037,6 +1059,13 @@ impl Sessions {
             row.applied_provider = ap;
             row.applied_model = am;
             row.applied_route = ar;
+            // The preset was CONFIRMED against `applied.preset` above; persist the
+            // confirmed identity so GET reflects what actually took effect (the
+            // earlier code dropped this and left a stale `appliedPreset`).
+            row.applied_preset = applied
+                .get("preset")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
         }
 
         // thinkingLevel: a BOUNDED config/set. An adapter that ANSWERED without
@@ -1088,6 +1117,52 @@ impl Sessions {
         let view = self.view(&row);
         self.bus.publish("session.patched", serde_json::json!({ "session": view }));
         Ok(PatchOutcome { session: view, warning })
+    }
+
+    /// Switch a session's PRESET by RESTARTING on its stored ref and RE-ATTACHING:
+    /// the mechanism for a harness that reads its preset only at spawn. The hub
+    /// stops the running process, records the requested preset, and lets
+    /// `ensure_running_locked` start a fresh process with `session/start(resume)`
+    /// carrying the new `config.presetId` (TASK-048 A2). The conversation is resumed,
+    /// so the session stays usable. `ensure_running_locked` sets `active` only after
+    /// a full success; a failure leaves the session `needs-repair`, never a wedged
+    /// half-state.
+    async fn restart_for_preset(
+        self: &Arc<Self>,
+        id: &str,
+        row: &mut agent_hub_db::SessionRow,
+        new_preset: Option<String>,
+        new_provider: Option<String>,
+        new_model: Option<String>,
+    ) -> Result<PatchOutcome, SessionError> {
+        // Stop first so the fresh process reads the new preset at spawn.
+        if let Err(e) = self.runtime.stop(id).await {
+            return Err(self
+                .quarantine_session(
+                    id,
+                    &format!("the preset switch could not stop the old process: {e}"),
+                )
+                .await);
+        }
+        row.preset_id = new_preset;
+        row.model_provider_id = new_provider;
+        row.model_id = new_model;
+        row.updated_at = now_utc();
+        self.db.update_session(row)?;
+        // Restart + resume; ensure_running_locked re-grants and confirms the newly
+        // applied identity (preset included).
+        let view = match self.ensure_running_locked(id, false).await {
+            Ok(v) => v,
+            Err(e) => {
+                // The restart did not prove itself: keep the session repairable, and
+                // report the failure honestly.
+                return Err(SessionError::RepairFailed(format!(
+                    "the preset switch could not re-establish the session: {e}"
+                )));
+            }
+        };
+        self.bus.publish("session.patched", serde_json::json!({ "session": view }));
+        Ok(PatchOutcome { session: view, warning: None })
     }
 
     /// Reopen: restart on the stored ref. Refuses a session that is still running

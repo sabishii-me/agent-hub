@@ -37,16 +37,20 @@ and `docs/tasks/review-*.md`, not claimed as done.
 
 ### Current focus
 
-**The hub-ownable surface is complete.** Every remaining route is blocked OUTSIDE the
-hub, with a recorded reason per group in `docs/tasks/remaining-surface.md`: the adapter
-protocol (`connections/*`, `auth/*`, `tools/list`, `approval_need`/`question_need`), the
-provider-type data model (no plugin ships a descriptor), the C2 plugin-sourced skills
-model, and `resources/*` (which IS that skills model). 56 real / 8 mounted-`501` / 10
-unmounted, all listed in `docs/ARCHITECTURE.md` §24.
+**The slice is IN PROGRESS, not complete.** The provider/secret/turn chain and the
+session preset capability are the current work; several genuinely HUB-OWNED domains
+remain unimplemented (§17 order), and each remaining route is classified in
+`docs/tasks/remaining-surface.md` as ONE of: (a) hub work still to do, (b) a concrete
+external dependency, or (c) an unavailable real call (credentials/paid). A missing
+plugin or credential does NOT make a hub-side implementation complete.
 
-The chain is now coherent and recoverable end-to-end (`docs/tasks/lifecycle-chain.md`),
-with the fault branches rehearsed on a real process. The next step is the reviewer's look
-before any polish.
+Delivered so far on this chain: preset switching WITHOUT wedging a session (restart +
+`session/start(resume)`, HTTP-verified across repeated switches), the confirmed
+`applied_preset` persisted, the provider pending barrier on every mutator/consumer, and
+the turn/abort delivery bound to the dispatched process generation. Still to do (hub
+side): the provider-type descriptor loading + auth execution (`/v1/model-providers/types`
+and `auth/*` are unconditional `501` today), the new plugin-sourced skills model
+(T2b), and the remaining §17 domains/surface.
 
 ## Status
 

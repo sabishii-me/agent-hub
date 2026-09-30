@@ -1,68 +1,59 @@
-# What remains, and why it is not hub-ownable yet
+# Remaining surface, classified (per A1: NOT "all hub-ownable done")
 
-Verified at the plugin-install-sources + repair commit against `contract/v1.json`
-(74 endpoints): 56 real, 8 mounted but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
-own code, not on a hub omission. This file records the reason per group, so the next
-session does not re-derive it.
+Each remaining route is classified as one of:
+- **HUB-TODO** — a hub-side implementation still owed (do not call it an external blocker).
+- **EXT-DEP** — blocked on a concrete artifact/work in another project/plugin.
+- **UNAUTH-CALL** — needs a real credential / paid vendor call that is not authorized.
 
-## Adapter protocol (a separate project)
+A missing plugin or credential never turns a HUB-TODO into an EXT-DEP: the hub must still
+implement its own consumer/executor and simply have no input yet.
 
-The pi adapter implements 15 methods; `contract/adapter-v1.json` declares 26. The hub
-can only forward what the adapter answers. Missing adapter-side:
-
-- `connections/{schema,list,validate,save,delete}` -> the harness-private connection
-  routes (`/v1/harnesses/{id}/connections*`, 5 routes).
-- `auth/{start,status,cancel}` -> the harness auth routes (`/v1/harnesses/{id}/auth*`,
-  3 routes).
-- `tools/list` -> `GET /v1/harnesses/{id}/tools` is mounted but the adapter cannot
-  answer it (it stays `501`).
-- `approval_need` / `question_need` -> the humans domain routes are mounted and
-  forward, but a real adapter must push them.
-
-## The provider-type data model
+## Provider-type: HUB-TODO (+ EXT-DEP for input)
 
 `GET /v1/model-providers/types` and the provider `auth/*` routes
 (`POST /v1/model-providers/{id}/auth`, `GET .../auth/{op}`, `POST .../auth/{op}/cancel`)
-read a **type descriptor a model-provider plugin ships** (id, version, owner, name,
-authMethods, configuration, catalog dialect). No such plugin/descriptor exists yet, so
-there is nothing to serve and nothing to run an auth flow from. A type no plugin ships
-stays absent by the contract's own wording.
+are **unconditional `501`** today (`providers/routes.rs`). The hub OWES:
+- a **descriptor loader** that reads provider-type descriptors a model-provider plugin
+  ships (`{id,version,owner,name,authMethods,configuration,catalog}`) from installed
+  plugins, and reports `types` + `broken[]`;
+- the **auth executor** (device-code/browser flows as DATA, run in the hub, outliving the
+  request), plus the operation store and cancel.
 
-## `resources` is the skills model, not the adapter
+**EXT-DEP**: no model-provider plugin ships a descriptor yet, so `types` would be an
+empty list and no auth flow can start. That does not remove the HUB-TODO.
 
-Correction: `GET /v1/sessions/{id}/resources` and `POST .../resources/read` are NOT
-adapter methods - the adapter contract's `skills` capability declares only
-`skills/list`. The contract describes these routes over the session's harness **skill
-selection** and logical `skills://` URIs, which IS the plugin-sourced skills model
-below (the `skills://` `node:fs` hook, ARCHITECTURE §7). They stay `501` with the
-`skills/{id}/files/*` routes, for the same decided reason.
+## New skills model (approved; C2 kept): HUB-TODO + verification (T2b)
 
-## The plugin-sourced skills model
+C2 excluded the OLD hub-authored skills store. The APPROVED new model is a
+plugin-sourced, layered delivery with a `skills://` `node:fs` hook (ARCHITECTURE §7) and
+is a **verification-gated unknown (VERIFICATION-TASKS T2b)**. The hub-side pieces
+(`GET /v1/skills`, `DELETE /v1/skills/{id}`, `GET/PUT /v1/skills/{id}/files/{file...}`,
+`GET /v1/sessions/{id}/resources`, `POST .../resources/read`) stay `501` until that model
+lands. This is HUB work, not restored legacy.
 
-ALL FOUR skills routes (`GET /v1/skills`, `DELETE /v1/skills/{id}`, and
-`GET`/`PUT /v1/skills/{id}/files/{file...}`) stay `501` by a **decided** correction
-(TASK-048 C2): the earlier hub-authored skills store was the excluded model. (The
-architecture's §24 "Real" list was stale - it still counted `GET /v1/skills` and
-`DELETE /v1/skills/{id}` as real after C2 made every skills route `501`; corrected.) The
-decided direction is a plugin-sourced, layered delivery with a `skills://` `node:fs`
-hook (ARCHITECTURE §7), which is a verification-gated unknown (T2b). Re-enabling the
-routes over the old model would revert an approved correction.
+## Harness connections / auth: EXT-DEP (adapter protocol)
 
-## Artifact recording (DONE)
+`/v1/harnesses/{id}/connections*` (5 routes) and `/v1/harnesses/{id}/auth*` (3 routes)
+forward to the adapter's `connections/*` and `auth/*`, which the pi adapter does not
+implement. HUB-TODO portion: mount and forward these routes (returning a typed
+`unsupported`/absent answer) rather than leaving them unmounted. EXT-DEP: the adapter
+methods that make them return real data.
 
-`POST /v1/plugins` now supports BOTH declared sources: a git clone (`{url, ref?}`)
-and a release artifact (`{artifact:{url,sha256,id,pluginType,version,size?}}`),
-verified size-first then sha256 before unpacking (the mature `zip` crate, ADR-0010).
-An artifact install is RECORDED on the plugin row and reported by
-`GET /v1/sessions/{id}/artifacts` (the session's harness plugin's artifact). See
-`docs/tasks/plugin-install-sources.md`.
+## Small hub-owned gaps: HUB-TODO
 
-## Not blocked (done since the last audit)
+- `GET /v1/harnesses/{id}/tools` forwards `tools/list`; the pi adapter does not answer it
+  (`known:false`). HUB-TODO: none beyond forwarding (already capability-gated).
+- Artifact recording: DONE (`POST /v1/plugins` artifact source records it;
+  `GET /v1/sessions/{id}/artifacts` reports it).
 
-sessions create (including additionalDirectories, now passed to the adapter as
-AGENT_HUB_ADDITIONAL_DIRS)/turn/cancel/compact/fork/patch/close/reopen + the read-through
-views (messages/stats/skills/artifacts); the provider grant chain, presets, plan/review,
-model selection; the connections domain; plugin install from a git ref OR a release
-artifact (verified + recorded), enable/disable, catalog, registry refresh, icon; harness
-extension selection; session repair (hub-side re-abort + process replace + re-attach);
-the metadata routes (surface/openapi/shutdown).
+## Delivered on the current chain (verified)
+
+sessions create/turn/cancel/compact/fork/patch/close/reopen/repair + read-through views
+(messages/stats/skills/artifacts); provider grant chain, presets (**switchable without
+wedging, restart+resume**), plan/review, model selection with a full pending barrier;
+connections domain; plugin install (git or verified artifact), enable/disable, catalog,
+registry refresh, icon; harness extension selection (**complete immutable snapshot per
+start**); metadata routes (surface/openapi/shutdown).
+
+`contract/v1.json` = 74 endpoints; the mounted-vs-contract split is in
+`docs/ARCHITECTURE.md` §24.

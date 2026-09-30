@@ -671,6 +671,7 @@ pub fn adapter_code_to_contract(data: &Value) -> &'static str {
         "busy-session-active" => "session_busy",
         "unsupported-for-provider" => "unsupported",
         "requires-new-session" => "requires_new_session",
+        "agent-preset-locked" => "agent_preset_locked",
         "abort-failed" => "adapter_unreachable",
         // A contract code passed through unchanged (a hub-shaped adapter).
         "provider_unauthorized" => "provider_unauthorized",
