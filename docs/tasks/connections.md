@@ -34,3 +34,14 @@ materialises nothing; a duplicate is `already_exists`.
 The **harness-private** connections (`/v1/harnesses/{id}/connections*`, forwarded to
 the adapter's `connections/*` methods) and handing a materialized connection to a
 session's adapter via `HarnessEnv.connection_env` (which exists but is still empty).
+
+## Handing a connection to a session's adapter
+
+A session's adapter receives every ENABLED connection's credential as an environment
+variable named by the connection's `envName` (never in the config payload or the
+conversation). `Sessions::with_connection_resolver` (the composition root injects
+`Connections::materialize()`) resolves them; a disabled connection, or one with no
+envName or no credential, contributes NOTHING (zero materialization). Verified by
+unit tests on `build_env` (the credential lands as the named var; no connection means
+no var) and on `materialize` (disabled => empty). Live: a connection created, a
+session started active with the resolver wired.

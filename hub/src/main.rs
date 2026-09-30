@@ -187,7 +187,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Box::new(harness_exists),
             Box::new(resolve),
         )
-        .with_provider_resolver(Box::new(provider_resolver)),
+        .with_provider_resolver(Box::new(provider_resolver))
+        .with_connection_resolver({
+            let conns = connections.clone();
+            Box::new(move || conns.materialize().map_err(|e| e.to_string()))
+        }),
     );
     // A start interrupted by a restart must not keep claiming `starting`.
     match sessions.reconcile_interrupted() {

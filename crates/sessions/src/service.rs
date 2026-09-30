@@ -198,6 +198,10 @@ pub struct Sessions {
     /// composition root injects the resolver. `None` = no provider injection
     /// configured, so a session with `modelProviderId` is refused (honest).
     provider_resolver: Option<Box<dyn Fn(&str) -> Result<crate::runtime::Grant, String> + Send + Sync>>,
+    /// Resolve the hub-managed connections' credentials for a session's adapter, as
+    /// `(envName, value)` for ENABLED connections only. Injected by the composition
+    /// root so `sessions` does not depend on `connections`.
+    connection_resolver: Option<Box<dyn Fn() -> Result<Vec<(String, String)>, String> + Send + Sync>>,
     /// One lock per session: start/close/reopen on the same session never race
     /// (R4). A lock held across the lifecycle of one session.
     locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
@@ -244,6 +248,7 @@ impl Sessions {
             harness_exists,
             harness_spec,
             provider_resolver: None,
+            connection_resolver: None,
             locks: Mutex::new(std::collections::HashMap::new()),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             settled: Mutex::new(std::collections::HashSet::new()),
@@ -258,6 +263,25 @@ impl Sessions {
     ) -> Self {
         self.provider_resolver = Some(resolver);
         self
+    }
+
+    /// Inject the connection resolver (the composition root owns it). It returns
+    /// the ENABLED connections' `(envName, value)` pairs; a disabled one is absent.
+    pub fn with_connection_resolver(
+        mut self,
+        resolver: Box<dyn Fn() -> Result<Vec<(String, String)>, String> + Send + Sync>,
+    ) -> Self {
+        self.connection_resolver = Some(resolver);
+        self
+    }
+
+    /// The connection env for a session's adapter (empty when no resolver is
+    /// injected, or when a connection is disabled / incomplete).
+    fn connection_env(&self) -> Result<Vec<(String, String)>, SessionError> {
+        match &self.connection_resolver {
+            Some(r) => r().map_err(SessionError::Validation),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Resolve the session's requested provider/model/preset into a grant and the
@@ -490,6 +514,7 @@ impl Sessions {
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
             fork_from: None,
+            connection_env: self.connection_env().unwrap_or_default(),
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),
@@ -848,6 +873,7 @@ impl Sessions {
             runtime_argv: harness.runtime_argv.clone(),
             resume: row.native_ref.clone(),
             fork_from: None,
+            connection_env: self.connection_env().unwrap_or_default(),
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),
@@ -980,6 +1006,7 @@ impl Sessions {
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
             fork_from: Some(crate::runtime::ForkFrom { source_ref, through_turn: through }),
+            connection_env: self.connection_env().unwrap_or_default(),
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),

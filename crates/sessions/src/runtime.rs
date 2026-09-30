@@ -101,6 +101,10 @@ pub struct StartSpec {
     pub resume: Option<String>,
     /// The `config/set` payload (may be `{}`).
     pub config: Value,
+    /// Environment variables a session's adapter receives for the hub-managed
+    /// connections (envName -> value). Populated only for ENABLED connections; a
+    /// disabled connection contributes nothing (zero materialization).
+    pub connection_env: Vec<(String, String)>,
     /// When set, the process is spawned as a FORK of another session: the first
     /// request is `session/fork {sid, from, throughTurn}` instead of
     /// `session/start`. `from` is the SOURCE's native ref; the returned ref becomes
@@ -430,6 +434,11 @@ fn build_env(spec: &StartSpec) -> Vec<(String, String)> {
     if let Some(argv) = &spec.runtime_argv {
         env.push(("AGENT_HUB_RUNTIME_COMMAND".into(), serde_json::to_string(argv).unwrap()));
     }
+    // The hub-managed connections' credentials travel as env vars named by each
+    // connection's envName - never in the config payload or the conversation.
+    for (name, value) in &spec.connection_env {
+        env.push((name.clone(), value.clone()));
+    }
     env
 }
 
@@ -447,5 +456,52 @@ impl StartError {
             StartError::Spawn(_) => "adapter_unreachable",
             StartError::Protocol(_) => "adapter_crash",
         }
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn spec(connection_env: Vec<(String, String)>) -> StartSpec {
+        StartSpec {
+            sid: "s1".into(),
+            harness_id: "pi".into(),
+            command: vec!["true".into()],
+            plugin_dir: PathBuf::from("."),
+            cwd: PathBuf::from("."),
+            harness_dir: PathBuf::from("."),
+            skills_dir: PathBuf::from("."),
+            extensions_dir: PathBuf::from("."),
+            presets_dir: None,
+            runtime_argv: None,
+            resume: None,
+            fork_from: None,
+            connection_env,
+            config: json!({}),
+            grant: None,
+            requested_preset_id: None,
+            requested_plan: None,
+            requested_review: None,
+        }
+    }
+
+    /// A hub-managed connection's credential reaches the adapter as the env var
+    /// named by its envName.
+    #[test]
+    fn connection_env_lands_in_the_adapter_environment() {
+        let env = build_env(&spec(vec![("MY_CONN_TOKEN".into(), "secret".into())]));
+        assert!(
+            env.iter().any(|(k, v)| k == "MY_CONN_TOKEN" && v == "secret"),
+            "the connection credential must be in the adapter env"
+        );
+    }
+
+    /// No connection env means no stray variable.
+    #[test]
+    fn no_connections_means_no_variable() {
+        let env = build_env(&spec(vec![]));
+        assert!(!env.iter().any(|(k, _)| k == "MY_CONN_TOKEN"));
     }
 }

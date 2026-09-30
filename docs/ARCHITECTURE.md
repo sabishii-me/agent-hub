@@ -658,7 +658,8 @@ follows distinguishes a real, narrow component fact from a product capability.
 - **connections** (now): the hub-managed connections are real (rows in the `connections` table,
   credential in the OS keychain as a per-instance reference, an incarnation/revision guard,
   enable/disable/delete). `disabled` means zero materialization; `materialize()` hands only
-  ENABLED connections to a session. Still NOT built:: there is no managed-connection domain. `HarnessEnv.connection_env`
+  ENABLED connections to a session, and a session's adapter receives them as env vars
+  named by each connection's `envName` (injected resolver; disabled => zero). Still NOT built:: there is no managed-connection domain. `HarnessEnv.connection_env`
   exists but is always empty; the `/v1/connections*` and `/v1/harnesses/{id}/connections*` routes
   are not mounted. This is the largest remaining domain (§17 order: after providers).
 - **harnesses**: the thin projection (`GET /v1/harnesses`, and `presets`/`models`/`tools`/
