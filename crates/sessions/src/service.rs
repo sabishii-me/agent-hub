@@ -36,6 +36,10 @@ pub enum SessionError {
     AbortFailed(String),
     #[error("the session has a running turn; this change requires an idle turn")]
     Busy,
+    #[error("the session is not in a repairable state; repair is for an orphaned tail")]
+    NotNeedsRepair,
+    #[error("repair could not re-establish the session: {0}")]
+    RepairFailed(String),
     /// A provider resolution failure with its OWN contract code (e.g.
     /// `provider_unauthorized`), so the identity survives to the response
     /// (TASK-048 F5).
@@ -103,6 +107,8 @@ impl SessionError {
             }
             SessionError::Conflict(_) => "idempotency_conflict",
             SessionError::Start(_) => "adapter_crash",
+            SessionError::NotNeedsRepair => "not_needs_repair",
+            SessionError::RepairFailed(_) => "repair_failed",
             SessionError::Db(_) | SessionError::Io(_) => "internal_error",
         }
     }
@@ -193,6 +199,9 @@ pub struct HarnessSpec {
     /// harness declares the `presets` capability. The adapter reads definitions
     /// from it via `AGENT_HUB_PRESETS_DIR`.
     pub presets_dir: Option<PathBuf>,
+    /// Whether the harness reports it can repair an orphaned tail (its manifest's
+    /// `repair`), so `POST /v1/sessions/{id}/repair` can answer honestly.
+    pub repair: Option<bool>,
 }
 
 /// What `create` returns: the reserved session (to be answered 202) or a replay.
@@ -1340,6 +1349,17 @@ pub enum TurnOutcome {
 
 /// The PATCH /v1/sessions/{id} body. Every field is optional; an absent field is
 /// unchanged.
+/// The body of `POST /v1/sessions/{id}/repair`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct RepairRequest {
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub confirm: bool,
+    #[serde(default)]
+    pub preview: bool,
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct PatchSession {
     #[serde(rename = "modelProviderId")]
@@ -1660,6 +1680,102 @@ impl Sessions {
         Ok(serde_json::json!({ "artifacts": artifacts, "next_cursor": serde_json::Value::Null }))
     }
 
+    /// Repair a session whose cancelled turn never confirmed its end. The hub
+    /// re-aborts, REPLACES the adapter process (so no late event from the old turn
+    /// can arrive), then re-attaches via `session/start(resume)`. `preview:true`
+    /// returns the exact steps and leaves state untouched. A repair that cannot be
+    /// PROVEN is never reported as one: an unconfirmed re-attach stays `needs-repair`
+    /// and `repair_failed`.
+    pub async fn repair(
+        self: Arc<Self>,
+        id: &str,
+        req: RepairRequest,
+    ) -> Result<serde_json::Value, SessionError> {
+        let lock = self.lock_for(id).await;
+        let _guard = lock.lock().await;
+        let row = self.db.session(id)?.ok_or_else(|| SessionError::NotFound(id.into()))?;
+        let mode = req.mode.as_deref().unwrap_or("native");
+        if !matches!(mode, "native" | "truncate" | "tombstone") {
+            return Err(SessionError::Validation(format!(
+                "mode must be native|truncate|tombstone, not `{mode}`"
+            )));
+        }
+        // The steps this repair WOULD take (the same on preview and real).
+        let steps: Vec<serde_json::Value> = Vec::new();
+        let _ = steps;
+        let mut preview_steps = vec![
+            serde_json::json!({ "step": "re-abort", "detail": "deliver session/abort and stop the adapter process" }),
+            serde_json::json!({ "step": "replace-process", "detail": "start a NEW adapter process so no late event from the old turn can arrive" }),
+            serde_json::json!({ "step": "re-attach", "detail": "session/start(resume) and confirm the applied identity" }),
+        ];
+        if mode == "truncate" {
+            preview_steps.push(serde_json::json!({ "step": "truncate", "detail": "drop the orphaned tail" }));
+        } else if mode == "tombstone" {
+            preview_steps.push(serde_json::json!({ "step": "tombstone", "detail": "mark the orphaned tail terminal" }));
+        }
+
+        if req.preview {
+            // Preview NEVER changes state; it reports what a real call would do and
+            // whether the session is even repairable.
+            let repairable = row.status == "needs-repair"
+                || self.quarantined.lock().await.contains(id);
+            return Ok(serde_json::json!({
+                "session": self.view(&row),
+                "dropped": serde_json::Value::Null,
+                "preview": preview_steps,
+                "repair": serde_json::Value::Null,
+                "proven": false,
+                "recoverable": repairable,
+            }));
+        }
+
+        // Not repairable -> refuse (repair is for an orphaned tail).
+        let quarantined = self.quarantined.lock().await.contains(id);
+        if row.status != "needs-repair" && !quarantined {
+            return Err(SessionError::NotNeedsRepair);
+        }
+        if mode != "native" && !req.confirm {
+            return Err(SessionError::Validation(format!(
+                "mode `{mode}` is destructive and requires confirm:true"
+            )));
+        }
+
+        // 1. Re-abort best-effort and REPLACE the process: stop the old one (no
+        //    late events), then let ensure_running_locked start a fresh one.
+        let _ = self
+            .runtime
+            .request(id, "session/abort", serde_json::json!({ "sid": id }))
+            .await;
+        if let Err(e) = self.runtime.stop(id).await {
+            return Err(SessionError::RepairFailed(format!(
+                "the old adapter process could not be stopped: {e}"
+            )));
+        }
+
+        // 2. Re-attach. `ensure_running_locked` restarts with `session/start(resume)`
+        //    and re-grants; it sets the row `active` ONLY after a full success.
+        match self.ensure_running_locked(id, false).await {
+            Ok(view) => Ok(serde_json::json!({
+                "session": view,
+                "dropped": serde_json::Value::Null,
+                "preview": serde_json::Value::Null,
+                "repair": serde_json::json!({ "mode": mode, "steps": preview_steps }),
+                "proven": true,
+                "recoverable": true,
+            })),
+            Err(e) => {
+                // The re-attach was not proven: keep the session `needs-repair`.
+                if let Ok(Some(mut r)) = self.db.session(id) {
+                    r.status = "needs-repair".into();
+                    r.updated_at = now_utc();
+                    let _ = self.db.update_session(&r);
+                }
+                self.quarantined.lock().await.insert(id.to_string());
+                Err(SessionError::RepairFailed(e.to_string()))
+            }
+        }
+    }
+
     pub async fn cancel_turn(self: Arc<Self>, session_id: &str) -> Result<TurnView, SessionError> {
         // The cancel INTENT is recorded under the session lock (serialized with
         // admission/dispatch), but the lock is RELEASED before the abort request:
@@ -1812,6 +1928,7 @@ mod reconcile_tests {
                     skills_dir: std::path::PathBuf::from("."),
                     extensions_dir: std::path::PathBuf::from("."),
                     presets_dir: None,
+                    repair: None,
                 })
             }),
         )

@@ -622,8 +622,9 @@ follows distinguishes a real, narrow component fact from a product capability.
   `compact` and `fork` are
   now real (`compact` reports the harness's own result; `fork` starts a new session
   from a completed-turn anchor, source untouched). `artifacts` is now real (the
-  session's harness plugin's recorded install artifact). Still `501`: `repair`,
-  `resources`.
+  session's harness plugin's recorded install artifact), and `repair` is real (the hub
+  re-aborts, replaces the adapter process, re-attaches via `session/start(resume)`, and
+  reports `proven` only when the re-attach succeeded). Still `501`: `resources`.
 
 - **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
   identity is the body `idempotencyKey`, reserved **durably** by the UNIQUE
@@ -847,7 +848,7 @@ logs the count and refuses to START only if the hub serves a route the contract 
 remaining route** (adapter protocol, the provider-type data model, the plugin-sourced skills
 model, artifact recording).
 
-### Real (mounted, real handler) - 57
+### Real (mounted, real handler) - 58
 
 ```
 DELETE /v1/connections/{id}
@@ -904,11 +905,12 @@ POST /v1/sessions/{id}/compact
 POST /v1/sessions/{id}/fork
 POST /v1/sessions/{id}/questions/{qid}
 POST /v1/sessions/{id}/reopen
+POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/turns
 POST /v1/shutdown
 ```
 
-### Mounted but `501` - 7
+### Mounted but `501` - 6
 
 ```
 GET /v1/model-providers/types
@@ -916,7 +918,6 @@ GET /v1/model-providers/{id}/auth/{op}
 GET /v1/sessions/{id}/resources
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel
-POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 

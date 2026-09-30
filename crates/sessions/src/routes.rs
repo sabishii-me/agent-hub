@@ -14,8 +14,8 @@ use axum::{Json, Router};
 use agent_hub_transport::{Accepted, DomainError, ErrorRenderer, RouteTable};
 
 use crate::service::{
-    CompactRequest, CreateOutcome, CreateSession, ForkRequest, PatchSession, SessionError, Sessions,
-    TurnOutcome, TurnRequest,
+    CompactRequest, CreateOutcome, CreateSession, ForkRequest, PatchSession, RepairRequest,
+    SessionError, Sessions, TurnOutcome, TurnRequest,
 };
 
 #[derive(Clone)]
@@ -52,7 +52,7 @@ fn table() -> RouteTable<SessionsState> {
         .get("/v1/sessions/{id}/stats", stats)
         .get("/v1/sessions/{id}/skills", session_skills)
         .get("/v1/sessions/{id}/artifacts", artifacts)
-        .post("/v1/sessions/{id}/repair", not_implemented)
+        .post("/v1/sessions/{id}/repair", repair)
         .get("/v1/sessions/{id}/resources", not_implemented)
         .post("/v1/sessions/{id}/resources/read", not_implemented)
 }
@@ -122,6 +122,20 @@ async fn stats(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -
 /// read from the harness (not the hub's installed set).
 /// The release artifacts the session's harness plugin depends on (recorded at
 /// install). A non-installed or git/local harness reports an empty list.
+/// `POST /v1/sessions/{id}/repair`: recover a session whose cancelled turn never
+/// confirmed its end. `preview:true` returns the steps and leaves state untouched.
+async fn repair(
+    State(s): State<SessionsState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<RepairRequest>,
+) -> Response {
+    let sessions = s.sessions.clone();
+    match sessions.repair(&id, body).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(&s, e),
+    }
+}
+
 async fn artifacts(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     let sessions = s.sessions.clone();
     match sessions.artifacts(&id) {

@@ -27,6 +27,8 @@ pub struct AdapterManifest {
     pub runtime: Option<RuntimeSpec>,
     pub permission_model: Option<String>,
     pub plan_mode: Option<String>,
+    /// Whether the harness can repair an orphaned tail (reported, never guessed).
+    pub repair: Option<bool>,
     /// The plugin's own icon files, by variant (`{light, dark}`), relative to the
     /// plugin directory. The hub serves the bytes; it never inlines them.
     pub icons: Option<std::collections::BTreeMap<String, String>>,

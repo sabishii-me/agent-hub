@@ -1,7 +1,7 @@
 # What remains, and why it is not hub-ownable yet
 
-Verified at the plugin-install-sources commit against `contract/v1.json` (74
-endpoints): 57 real, 7 mounted but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
+Verified at the plugin-install-sources + repair commit against `contract/v1.json`
+(74 endpoints): 58 real, 6 mounted but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
 own code, not on a hub omission. This file records the reason per group, so the next
 session does not re-derive it.
 
@@ -18,8 +18,6 @@ can only forward what the adapter answers. Missing adapter-side:
   answer it (it stays `501`).
 - `approval_need` / `question_need` -> the humans domain routes are mounted and
   forward, but a real adapter must push them.
-- `session/repair` -> `POST /v1/sessions/{id}/repair` (a cancelled turn whose end was
-  never confirmed).
 - `resources/list` / `resources/read` -> `GET /v1/sessions/{id}/resources` and
   `POST .../resources/read`.
 
@@ -56,4 +54,5 @@ AGENT_HUB_ADDITIONAL_DIRS)/turn/cancel/compact/fork/patch/close/reopen + the rea
 views (messages/stats/skills/artifacts); the provider grant chain, presets, plan/review,
 model selection; the connections domain; plugin install from a git ref OR a release
 artifact (verified + recorded), enable/disable, catalog, registry refresh, icon; harness
-extension selection; the metadata routes (surface/openapi/shutdown).
+extension selection; session repair (hub-side re-abort + process replace + re-attach);
+the metadata routes (surface/openapi/shutdown).

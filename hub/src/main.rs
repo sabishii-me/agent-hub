@@ -197,6 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             skills_dir: env.skills_dir,
             extensions_dir: env.extensions_dir,
             presets_dir,
+            repair: h.manifest.repair,
         })
     };
     // The provider resolver: the ONLY path a hub-managed provider reaches a
