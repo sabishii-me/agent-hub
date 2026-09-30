@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+agent-hub-db = { path = "../db" }
 serde.workspace = true
 serde_json.workspace = true
 agent-hub-events = { path = "../events" }

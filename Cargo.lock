@@ -34,6 +34,7 @@ dependencies = [
 name = "agent-hub-adapter"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-db",
  "agent-hub-events",
  "agent-hub-extensions",
  "serde",
@@ -147,6 +148,7 @@ dependencies = [
 name = "agent-hub-plugins"
 version = "0.1.0"
 dependencies = [
+ "agent-hub-adapter",
  "agent-hub-contract",
  "agent-hub-db",
  "agent-hub-events",

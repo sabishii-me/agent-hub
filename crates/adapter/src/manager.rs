@@ -86,6 +86,9 @@ pub struct Adapters {
     harnesses: Mutex<HashMap<String, Harness>>,
     running: Mutex<HashMap<String, RequestHandle>>,
     events: Bus,
+    /// The durable status store: a harness's enable/disable survives a restart, so a
+    /// rescan never silently re-enables a disabled harness.
+    status_store: Option<agent_hub_db::Db>,
 }
 
 impl Adapters {
@@ -96,7 +99,15 @@ impl Adapters {
             harnesses: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
             events,
+            status_store: None,
         }
+    }
+
+    /// Attach a durable status store (the hub's DB), so enable/disable survives a
+    /// restart.
+    pub fn with_status_store(mut self, db: agent_hub_db::Db) -> Self {
+        self.status_store = Some(db);
+        self
     }
 
     /// The environment a harness's adapter is started with, derived from the
@@ -202,6 +213,27 @@ impl Adapters {
             }
         }
         found.sort_by(|a, b| a.id.cmp(&b.id));
+        // A disabled harness stays disabled across a restart: apply the recorded
+        // statuses to the freshly scanned map.
+        if let Some(db) = &self.status_store {
+            if let Ok(statuses) = db.harness_statuses() {
+                let mut map = self.harnesses.lock().expect("harnesses");
+                for (id, status) in statuses {
+                    if let Some(h) = map.get_mut(&id) {
+                        h.status = if status == "disabled" {
+                            HarnessStatus::Disabled
+                        } else {
+                            HarnessStatus::Enabled
+                        };
+                    }
+                }
+                for h in found.iter_mut() {
+                    if let Some(cur) = map.get(&h.id) {
+                        h.status = cur.status;
+                    }
+                }
+            }
+        }
         found
     }
 
@@ -224,6 +256,9 @@ impl Adapters {
         let mut map = self.harnesses.lock().expect("harnesses");
         let harness = map.get_mut(id).ok_or_else(|| AdapterError::NotFound(id.into()))?;
         harness.status = status;
+        if let Some(db) = &self.status_store {
+            let _ = db.set_harness_status(id, status.as_str());
+        }
         self.events.publish(
             "harness.changed",
             json!({ "id": id, "status": status.as_str() }),

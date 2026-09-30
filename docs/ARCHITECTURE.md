@@ -667,8 +667,9 @@ follows distinguishes a real, narrow component fact from a product capability.
 - **harnesses**: the thin projection (`GET /v1/harnesses`, and `presets`/`models`/`tools`/
   `extensions` gated capability calls) is real; harness `auth` and `PATCH .../extensions` are not
   mounted.
-- **plugins**: install/get/list/remove/prepare/recovery are real; the catalog, registry refresh,
-  enable/disable and icon routes are not mounted.
+- **plugins**: install/get/list/remove/prepare/recovery are real; `enable`/`disable` are real and
+  DURABLE (a `harness_status` table; a disabled harness refuses session create/turns and survives a
+  restart). The catalog, registry refresh and icon routes are not mounted.
 
 ### What was fake and is being removed
 
@@ -818,7 +819,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 49
+### Real (mounted, real handler) - 51
 
 ```
 DELETE /v1/connections/{id}
@@ -859,6 +860,8 @@ POST /v1/model-providers
 POST /v1/model-providers/{id}/logout
 POST /v1/model-providers/{id}/models/refresh
 POST /v1/plugins
+POST /v1/plugins/{id}/disable
+POST /v1/plugins/{id}/enable
 POST /v1/plugins/{id}/prepare
 POST /v1/sessions
 POST /v1/sessions/{id}/approvals/{aid}
@@ -886,7 +889,7 @@ POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted - 16
+### Not mounted - 14
 
 ```
 DELETE /v1/harnesses/{id}/connections/{cid}
@@ -902,8 +905,6 @@ POST /v1/harnesses/{id}/auth/{op}/cancel
 POST /v1/harnesses/{id}/connections
 POST /v1/harnesses/{id}/connections/validate
 POST /v1/plugins/registry/refresh
-POST /v1/plugins/{id}/disable
-POST /v1/plugins/{id}/enable
 PUT /v1/skills/{id}/files/{file...}
 ```
 

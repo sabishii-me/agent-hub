@@ -66,6 +66,16 @@ async fn serve(state: PluginsState) -> String {
 /// Merge the transport surface under the plugins state. Transport handlers need
 /// `Transport`; we give them their own router and mount it, so both live in one
 /// axum app with different state via `with_state` per sub-router.
+/// An empty adapter registry (the plugin tests do not exercise enable/disable
+/// against a real harness).
+fn empty_adapters() -> std::sync::Arc<agent_hub_adapter::Adapters> {
+    std::sync::Arc::new(agent_hub_adapter::Adapters::new(
+        vec![],
+        std::env::temp_dir(),
+        Bus::new(8, 8),
+    ))
+}
+
 fn finish_plugins(plugins: axum::Router<PluginsState>, state: PluginsState) -> axum::Router {
     let transport = agent_hub_transport::finish(agent_hub_transport::routes(), state.transport.clone());
     plugins.with_state(state).merge(transport)
@@ -80,7 +90,7 @@ async fn install_list_replace_remove_over_http() {
     fs::create_dir_all(&root).unwrap();
     let plugins = Plugins::new(db, &root, bus.clone());
     let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
-    let base = serve(PluginsState::new(plugins, transport, errors())).await;
+    let base = serve(PluginsState::new(plugins, transport, errors(), empty_adapters())).await;
     let client = reqwest::Client::new();
 
     let src = plugin_src(&dir, "alpha", "1.0.0");
@@ -152,7 +162,7 @@ async fn installing_an_invalid_manifest_is_refused() {
     fs::create_dir_all(&root).unwrap();
     let plugins = Plugins::new(db, &root, bus.clone());
     let transport = Transport::new(bus, agent_hub_transport::Admission::new(4));
-    let base = serve(PluginsState::new(plugins, transport, errors())).await;
+    let base = serve(PluginsState::new(plugins, transport, errors(), empty_adapters())).await;
 
     let bad = dir.join("bad");
     fs::create_dir_all(&bad).unwrap();
@@ -228,7 +238,7 @@ async fn state_change_is_announced_on_the_event_stream() {
     fs::create_dir_all(&root).unwrap();
     let plugins = Plugins::new(db, &root, bus.clone());
     let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
-    let base = serve(PluginsState::new(plugins, transport, errors())).await;
+    let base = serve(PluginsState::new(plugins, transport, errors(), empty_adapters())).await;
     let client = reqwest::Client::new();
 
     // Subscribe to the event stream.

@@ -104,6 +104,7 @@ impl Db {
         conn.execute_batch(providers::SCHEMA_PROVIDERS)?;
         conn.execute_batch(instance::SCHEMA_INSTANCE)?;
         conn.execute_batch(connections::SCHEMA_CONNECTIONS)?;
+        conn.execute_batch(SCHEMA_HARNESS_STATUS)?;
         conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
         instance::instance_id(&conn)?;
         // A pre-existing table is not extended by CREATE TABLE IF NOT EXISTS, so
@@ -323,4 +324,69 @@ CREATE TABLE IF NOT EXISTS plugin_ops (
 /// RFC 3339 UTC (a maintained date library, shared by the domains).
 pub fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// A harness's enable/disable status (`enabled` | `disabled`), the hub's own
+/// lifecycle fact. It must survive a restart: a disabled harness refuses session
+/// create/turns, and a rescan must not silently re-enable it.
+pub const SCHEMA_HARNESS_STATUS: &str = r#"
+CREATE TABLE IF NOT EXISTS harness_status (
+  harness_id TEXT PRIMARY KEY,
+  status     TEXT NOT NULL
+);
+"#;
+
+impl Db {
+    /// Every recorded harness status.
+    pub fn harness_statuses(&self) -> Result<Vec<(String, String)>, DbError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT harness_id, status FROM harness_status")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn set_harness_status(&self, id: &str, status: &str) -> Result<(), DbError> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO harness_status (harness_id, status) VALUES (?1, ?2)
+             ON CONFLICT(harness_id) DO UPDATE SET status = excluded.status",
+            rusqlite::params![id, status],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod harness_status_tests {
+    use crate::Db;
+
+    /// The status is durable: a disabled harness reads back as disabled after a
+    /// reopen of the same database.
+    #[test]
+    fn harness_status_survives_a_reopen() {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-hub-hs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hub.sqlite");
+        {
+            let db = Db::open(&path).unwrap();
+            db.set_harness_status("pi", "disabled").unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let statuses = db.harness_statuses().unwrap();
+        assert_eq!(
+            statuses,
+            vec![("pi".to_string(), "disabled".to_string())],
+            "a disabled harness survives a reopen"
+        );
+        // Re-enabling overwrites.
+        db.set_harness_status("pi", "enabled").unwrap();
+        assert_eq!(db.harness_statuses().unwrap(), vec![("pi".to_string(), "enabled".to_string())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

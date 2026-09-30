@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::HeaderMap;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -22,11 +22,19 @@ pub struct PluginsState {
     pub plugins: Arc<Plugins>,
     pub transport: Transport,
     pub errors: ErrorRenderer,
+    /// The adapter registry: enable/disable acts on a harness (a plugin is a
+    /// harness too), so the lifecycle routes reach it here.
+    pub adapters: Arc<agent_hub_adapter::Adapters>,
 }
 
 impl PluginsState {
-    pub fn new(plugins: Plugins, transport: Transport, errors: ErrorRenderer) -> Self {
-        PluginsState { plugins: Arc::new(plugins), transport, errors }
+    pub fn new(
+        plugins: Plugins,
+        transport: Transport,
+        errors: ErrorRenderer,
+        adapters: Arc<agent_hub_adapter::Adapters>,
+    ) -> Self {
+        PluginsState { plugins: Arc::new(plugins), transport, errors, adapters }
     }
 }
 
@@ -40,6 +48,39 @@ fn table() -> agent_hub_transport::RouteTable<PluginsState> {
         .get("/v1/plugins/{id}", get_one)
         .delete("/v1/plugins/{id}", remove)
         .post("/v1/plugins/{id}/prepare", prepare)
+        .post("/v1/plugins/{id}/enable", enable)
+        .post("/v1/plugins/{id}/disable", disable)
+}
+
+/// POST /v1/plugins/{id}/enable - enable a plugin's lifecycle. A disabled harness
+/// refuses session create/turns; a rescan does not silently re-enable it (the status
+/// is durable).
+async fn enable(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) -> Response {
+    match s
+        .adapters
+        .set_status(&id, agent_hub_adapter::HarnessStatus::Enabled)
+    {
+        Ok(_) => Json(serde_json::json!({ "ok": true, "id": id, "status": "enabled" })).into_response(),
+        Err(_) => {
+            // Not a harness, or unknown: a plugin that is not a harness has no
+            // lifecycle of its own here.
+            s.errors.render(&DomainError::new("not_found", format!("no plugin `{id}`")))
+        }
+    }
+}
+
+/// POST /v1/plugins/{id}/disable - disable a plugin's lifecycle (a disabled
+/// harness refuses session create/turns).
+async fn disable(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) -> Response {
+    match s
+        .adapters
+        .set_status(&id, agent_hub_adapter::HarnessStatus::Disabled)
+    {
+        Ok(_) => Json(serde_json::json!({ "ok": true, "id": id, "status": "disabled" })).into_response(),
+        Err(_) => s
+            .errors
+            .render(&DomainError::new("not_found", format!("no plugin `{id}`"))),
+    }
 }
 
 pub fn routes() -> Router<PluginsState> {

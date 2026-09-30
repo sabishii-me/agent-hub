@@ -115,13 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {}
         Err(e) => tracing::error!(error = %e, "plugin recovery failed"),
     }
-    let plugins = Plugins::new(db, &plugins_root, bus.clone());
-    let plugin_state = PluginsState::new(plugins, transport.clone(), errors.clone());
-
-    // Harnesses first: the adapter registry is where a session resolves the
-    // adapter argv and plugin dir it must start.
-    let adapters = std::sync::Arc::new(Adapters::new(vec![plugins_root.clone()], &data_dir, bus.clone()));
+    // The adapter registry is built BEFORE the plugin routes: enable/disable acts on
+    // a harness (a plugin is a harness too), so the plugin domain needs the registry.
+    let adapters = std::sync::Arc::new(
+        Adapters::new(vec![plugins_root.clone()], &data_dir, bus.clone())
+            .with_status_store(Db::open(data_dir.join("hub.sqlite"))?),
+    );
     adapters.scan();
+    let plugins = Plugins::new(db, &plugins_root, bus.clone());
+    let plugin_state = PluginsState::new(plugins, transport.clone(), errors.clone(), adapters.clone());
     let harness_state = HarnessesState::new(Harnesses::new(adapters.clone()), errors.clone());
 
     // Providers: the relationship state is in the database; the credential is in
@@ -152,10 +154,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // its OWN adapter process with the resolved argv + plugin dir.
     let sessions_db = Db::open(data_dir.join("hub.sqlite"))?;
     let exists_registry = adapters.clone();
-    let harness_exists = move |id: &str| -> bool { exists_registry.get(id).is_ok() };
+    // A DISABLED harness does not exist for a new session: create refuses it
+    // (a disabled harness refuses session create/turns).
+    let harness_exists = move |id: &str| -> bool {
+        exists_registry
+            .get(id)
+            .map(|h| h.status == agent_hub_adapter::HarnessStatus::Enabled)
+            .unwrap_or(false)
+    };
     let registry = adapters.clone();
     let resolve = move |id: &str| -> Result<HarnessSpec, String> {
         let h = registry.get(id).map_err(|e| e.to_string())?;
+        if h.status == agent_hub_adapter::HarnessStatus::Disabled {
+            return Err(format!("harness `{id}` is disabled"));
+        }
         let command = h
             .manifest
             .command
