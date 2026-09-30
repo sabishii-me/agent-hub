@@ -249,10 +249,11 @@ impl crate::Db {
         Ok(id)
     }
 
-    /// Insert a LEGACY journal entry (no `intent_version`), simulating an entry
-    /// written by an older hub where `expected_revision` meant the PRE-write
-    /// revision. Public so a cross-crate test can prove recovery isolates it; the
-    /// hub itself never calls it.
+    /// TEST-ONLY (feature `testing`): insert a LEGACY journal entry (no
+    /// `intent_version`), simulating an entry written by an older hub where
+    /// `expected_revision` meant the PRE-write revision. The hub binary never
+    /// enables the `testing` feature, so this is not a production path.
+    #[cfg(feature = "testing")]
     #[doc(hidden)]
     pub fn begin_provider_op_legacy(
         &self,

@@ -76,6 +76,7 @@ impl ProviderStore {
     }
 
     /// TEST-ONLY: insert a LEGACY journal entry (no `intent_version`).
+    #[cfg(feature = "testing")]
     pub fn begin_op_legacy(
         &self,
         provider: &str,

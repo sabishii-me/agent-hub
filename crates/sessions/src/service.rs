@@ -936,8 +936,9 @@ impl Sessions {
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
-                        let msg = format!("credentials/grant failed: {e}");
-                        return Err(self.quarantine_session(id, &msg).await);
+                        let typed = SessionError::from_start(e);
+                        self.quarantine_session(id, &typed.to_string()).await;
+                        return Err(typed);
                     }
                     Err(_) => {
                         let msg = "credentials/grant outcome unknown: the adapter did not answer in time".to_string();
@@ -958,9 +959,12 @@ impl Sessions {
             {
                 Ok(Ok(v)) => v,
                 Ok(Err(e)) => {
-                    return Err(self
-                        .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
-                        .await);
+                    // The adapter answered with a typed refusal: quarantine (fail
+                    // closed) but KEEP its contract code via `from_start` instead of
+                    // collapsing it to adapter_crash (TASK-048 F5).
+                    let typed = SessionError::from_start(e);
+                    self.quarantine_session(id, &typed.to_string()).await;
+                    return Err(typed);
                 }
                 Err(_) => {
                     return Err(self
@@ -1618,11 +1622,24 @@ impl Sessions {
             });
             match self.runtime.send(&session_id, "session/prompt", params).await {
                 Ok(rx) => rx,
-                Err(e) => {
-                    // The frame could not even be written: the adapter is gone, so
-                    // the turn did not run. Settle honestly.
+                Err(crate::runtime::SendError::NotDelivered(m)) => {
+                    // The frame was NOT written (no live process / stale): the turn
+                    // definitely did not run. Settle honestly.
                     drop(_delivering);
-                    self.settle_turn(&turn_id, "failed", Some(&e.to_string())).await;
+                    self.settle_turn(&turn_id, "failed", Some(&m)).await;
+                    return;
+                }
+                Err(crate::runtime::SendError::Unknown(m)) => {
+                    // The write failed with the adapter ALIVE: delivery is UNKNOWN,
+                    // so the prompt may still run. Do NOT settle; leave the turn
+                    // `running` for the execution/cancel timeout to resolve
+                    // (TASK-048 F4 - restore the unknown-result protection).
+                    drop(_delivering);
+                    tracing::warn!(
+                        turn = %turn_id,
+                        error = %m,
+                        "the prompt frame write failed with the adapter alive; leaving the turn to the timeout sweep"
+                    );
                     return;
                 }
             }
@@ -1977,9 +1994,19 @@ impl Sessions {
                     .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
                 return Ok(turn_view(&t));
             }
+            // Bind the abort to the PROCESS GENERATION we re-checked: if the
+            // process was replaced (timeout/repair/reopen) after we confirmed the
+            // turn, the send refuses rather than aborting the NEW process
+            // (TASK-048 F4).
+            let generation = self.runtime.generation(session_id);
             match self
                 .runtime
-                .send(session_id, "session/abort", serde_json::json!({ "sid": session_id }))
+                .send_if_generation(
+                    session_id,
+                    generation,
+                    "session/abort",
+                    serde_json::json!({ "sid": session_id }),
+                )
                 .await
             {
                 Ok(rx) => rx,
@@ -1995,10 +2022,24 @@ impl Sessions {
                 }
             }
         };
-        // The abort is IN FLIGHT; wait for its answer WITHOUT holding any lock (a
-        // send failure does NOT settle the turn: the prompt may still run, so the
-        // turn stays held and the timeout can rescue it).
-        match abort_rx.await {
+        // The abort is IN FLIGHT; wait for its answer WITHOUT holding any lock. The
+        // wait is BOUNDED: an adapter that ignores the abort must not hold the
+        // handler forever. On timeout the abort was DELIVERED but unconfirmed, so
+        // the turn STAYS held and the timeout sweep resolves it (never an unbounded
+        // wait, never a fabricated terminal). A send/close failure does not settle
+        // the turn either: the prompt may still run.
+        let waited = tokio::time::timeout(crate::runtime::control_request_timeout(), abort_rx).await;
+        match waited {
+            Err(_) => {
+                // Delivered-but-unconfirmed: return the held turn; the sweep will
+                // confirm or settle it.
+                let t = self
+                    .db
+                    .turn(&active_id)?
+                    .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
+                return Ok(turn_view(&t));
+            }
+            Ok(abort_res) => match abort_res {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 let t = self
@@ -2020,6 +2061,7 @@ impl Sessions {
                     t.state
                 )));
             }
+            },
         }
         let t = self
             .db

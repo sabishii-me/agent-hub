@@ -231,3 +231,35 @@ their identity through reopen/run_start) and the adapter's `abort-failed` maps t
 `adapter_unreachable`; quarantine/fail_start/timeout no longer PUBLISH a state change whose
 DB write failed; the `thinkingLevel` and policy-knob `config/set` branches are bounded and
 fail closed (quarantine) on an unknown/unconfirmed outcome.
+
+## REVIEW-71ef0d6 fixes (this pass)
+
+Two remaining P1s and the reported P2s:
+
+- **F1 legacy isolation made REAL**: the previous pass returned `Ok` for a legacy
+  entry whose row referenced the credential, so the sweep CLEARED the pending and the
+  resolver granted the possibly-mismatched credential. Now such an entry returns an
+  `Unresolved` error: the journal entry STAYS, `has_pending_op` stays true, and
+  `resolve_grant` keeps refusing until it is explicitly resolved. An orphaned
+  credential (no row references it) is still cleaned up. The legacy test now asserts
+  the barrier is KEPT and the resolver REFUSES, not just that the token survives.
+- **F4 delivery bound to process GENERATION**: `Sessions` keeps a per-session
+  generation, bumped on every start AND stop under the same `requests` lock that holds
+  the handle map. A cancel captures the generation and uses `send_if_generation`, so an
+  abort captured against the old process is REFUSED if the process was replaced
+  (stop/reopen/repair) in between - an old abort can never reach a new process.
+- **F4 send-error protection restored**: `runtime.send` now distinguishes
+  `NotDelivered` (no live process / stale generation / dead pipe) from `Unknown` (a
+  write failure with the process ALIVE). The prompt path settles `failed` ONLY on
+  `NotDelivered`; an `Unknown` leaves the turn `running` for the timeout sweep, exactly
+  the unknown-result protection the previous pass had bypassed.
+- **F4 cancel reply bounded**: the abort-reply wait is bounded by the control timeout;
+  on timeout the turn stays held (`cancelling`) and the sweep resolves it.
+- **F5**: `from_start` is now used by the PATCH grant/config paths (a typed refusal
+  keeps its contract code) as well as reopen/fork.
+- **N4**: the stale "junction/stable pointer" comment is removed; the honest guarantee
+  is stated where the replacement happens, and `read_dir`/entry/rollback failures are
+  now REPORTED instead of ignored.
+
+Lifecycle note: `recover_pending` at boot keeps an unresolved legacy entry forever
+until an explicit resolution - that is the intended barrier, not a stuck sweep.

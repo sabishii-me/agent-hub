@@ -158,6 +158,11 @@ pub struct Sessions {
     requests: Mutex<std::collections::HashMap<String, agent_hub_adapter::RequestHandle>>,
     /// Where an adapter's notifications become events.
     events: agent_hub_events::Bus,
+    /// A per-session PROCESS GENERATION: bumped on every start and every stop.
+    /// A caller that must act on a SPECIFIC process (a cancel's abort) captures
+    /// the generation under the delivery lock and refuses to act if the process
+    /// was replaced (stop/reopen) since (TASK-048 F4).
+    generations: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl Sessions {
@@ -166,6 +171,7 @@ impl Sessions {
             running: Mutex::new(std::collections::HashMap::new()),
             requests: Mutex::new(std::collections::HashMap::new()),
             events,
+            generations: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -386,6 +392,13 @@ impl Sessions {
             .lock()
             .expect("running")
             .insert(sid, std::sync::Arc::new(tokio::sync::Mutex::new(process)));
+        // A NEW process: bump the generation so an action captured against the old
+        // process can detect the replacement. Bumped under the requests lock so it
+        // pairs atomically with the handle insert (see send_if_generation).
+        {
+            let _reqs = self.requests.lock().expect("requests");
+            self.bump_generation(&spec.sid);
+        }
         // Return a description (the process itself lives in the map). The bus
         // stays in the map entry; this value is the caller's record of it.
         Ok(SessionProcess {
@@ -428,16 +441,104 @@ impl Sessions {
         sid: &str,
         method: &str,
         params: Value,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<Value, agent_hub_adapter::BusError>>, StartError>
-    {
+    ) -> Result<
+        tokio::sync::oneshot::Receiver<Result<Value, agent_hub_adapter::BusError>>,
+        SendError,
+    > {
         let requests = self
             .requests
             .lock()
             .expect("requests")
             .get(sid)
             .cloned()
-            .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
-        requests.send(method, params).await.map_err(map_bus_err)
+            .ok_or_else(|| {
+                SendError::NotDelivered(format!("session `{sid}` has no running process"))
+            })?;
+        match requests.send(method, params).await {
+            Ok(rx) => Ok(rx),
+            Err(e) => {
+                // A write error with the process still alive proves NOTHING about
+                // delivery: keep the unknown result. A dead process is a definite
+                // non-delivery.
+                if requests.is_alive() {
+                    Err(SendError::Unknown(format!("the frame write failed with the adapter alive: {e}")))
+                } else {
+                    Err(SendError::NotDelivered(format!("the adapter is gone: {e}")))
+                }
+            }
+        }
+    }
+
+    /// The current PROCESS GENERATION for a session (0 when none ever started).
+    pub fn generation(&self, sid: &str) -> u64 {
+        self.generations
+            .lock()
+            .expect("generations")
+            .get(sid)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Bump the generation for `sid` (a new process starts, or a process stops).
+    fn bump_generation(&self, sid: &str) -> u64 {
+        let mut g = self.generations.lock().expect("generations");
+        let e = g.entry(sid.to_string()).or_insert(0);
+        *e = e.wrapping_add(1);
+        *e
+    }
+
+    /// Write a request frame to a session's process ONLY IF its generation still
+    /// matches `expected`. This binds a delivery to a SPECIFIC process: a cancel
+    /// captured against process generation G refuses to send if the process was
+    /// replaced since, so an old abort can never reach a NEW process (TASK-048 F4).
+    ///
+    /// The generation is read and the handle is taken under the SAME `requests`
+    /// lock, and every `start`/`stop` bumps the generation AND mutates the handle
+    /// map under that same lock, so the check and the lookup cannot interleave with
+    /// a process replacement.
+    pub async fn send_if_generation(
+        &self,
+        sid: &str,
+        expected: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<
+        tokio::sync::oneshot::Receiver<Result<Value, agent_hub_adapter::BusError>>,
+        SendError,
+    > {
+        let requests = {
+            // Take the requests lock FIRST, then read the generation; start/stop
+            // mutate the generation AND the requests map under `requests`, so this
+            // pair cannot interleave with a process replacement.
+            let reqs = self.requests.lock().expect("requests");
+            let current = self
+                .generations
+                .lock()
+                .expect("generations")
+                .get(sid)
+                .copied()
+                .unwrap_or(0);
+            if current != expected {
+                return Err(SendError::NotDelivered(
+                    "the session process was replaced; the delivery target is stale".into(),
+                ));
+            }
+            reqs.get(sid).cloned().ok_or_else(|| {
+                SendError::NotDelivered(format!("session `{sid}` has no running process"))
+            })?
+        };
+        match requests.send(method, params).await {
+            Ok(rx) => Ok(rx),
+            Err(e) => {
+                if requests.is_alive() {
+                    Err(SendError::Unknown(format!(
+                        "the frame write failed with the adapter alive: {e}"
+                    )))
+                } else {
+                    Err(SendError::NotDelivered(format!("the adapter is gone: {e}")))
+                }
+            }
+        }
     }
 
     /// Whether a LIVE process is running for this session (see `is_running`).
@@ -481,7 +582,13 @@ impl Sessions {
                 guard.stop().await?;
                 drop(guard);
                 self.running.lock().expect("running").remove(sid);
-                self.requests.lock().expect("requests").remove(sid);
+                {
+                    let mut reqs = self.requests.lock().expect("requests");
+                    reqs.remove(sid);
+                    // Bump while holding the requests lock, so a delivery captured
+                    // against the old process cannot pass the generation check.
+                    self.bump_generation(sid);
+                }
                 Ok(())
             }
         }
@@ -630,6 +737,27 @@ pub fn control_request_timeout() -> std::time::Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(60);
     std::time::Duration::from_secs(secs)
+}
+
+/// The outcome of WRITING a request frame. The distinction matters: a caller must
+/// not settle a turn on a write error when delivery is UNKNOWN, because the
+/// execution may still run (TASK-048 F4).
+pub enum SendError {
+    /// The frame was NOT written (no live process, a stale generation, a closed
+    /// pipe before any byte): the request definitely did not run.
+    NotDelivered(String),
+    /// The write failed with the process still alive: delivery is UNKNOWN. The
+    /// caller must NOT assume the request did not run.
+    Unknown(String),
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendError::NotDelivered(m) => write!(f, "{m}"),
+            SendError::Unknown(m) => write!(f, "{m}"),
+        }
+    }
 }
 
 /// Turn a bus error into a StartError, KEEPING the adapter's typed `data.code` when

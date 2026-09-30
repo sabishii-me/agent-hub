@@ -17,9 +17,13 @@ reqwest = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true
 
+[features]
+# Pass-through so the providers' own tests can use the db test helpers.
+testing = ["agent-hub-db/testing"]
+
 [dev-dependencies]
 agent-hub-contract = { path = "../contract" }
-agent-hub-db = { path = "../db" }
+agent-hub-db = { path = "../db", features = ["testing"] }
 agent-hub-secrets = { path = "../secrets" }
 agent-hub-transport = { path = "../transport" }
 futures.workspace = true

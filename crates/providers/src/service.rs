@@ -33,6 +33,11 @@ pub enum ProviderError {
     /// No catalog has been fetched yet (contract `catalog_not_loaded`).
     #[error("provider `{0}` has no catalog; fetch it first")]
     CatalogNotLoaded(String),
+    /// A credential transition is unresolved (a legacy journal entry, or a step
+    /// that could not be confirmed): the provider is held unusable until it is
+    /// explicitly resolved, so no possibly-mismatched credential is granted.
+    #[error("unresolved credential transition: {0}")]
+    Unresolved(String),
 }
 
 impl ProviderError {
@@ -49,6 +54,7 @@ impl ProviderError {
             ProviderError::Unauthorized(_) => "provider_unauthorized",
             ProviderError::RevisionConflict(_) => "revision_conflict",
             ProviderError::CatalogNotLoaded(_) => "catalog_not_loaded",
+            ProviderError::Unresolved(_) => "revision_conflict",
         }
     }
 
@@ -538,8 +544,9 @@ impl Providers {
                 .and_then(|r| r.secret_ref.as_deref())
                 == Some(secret_ref);
             if row.is_none() || !referenced {
-                // No row owns this credential: it is orphaned. A read error is an
-                // ERROR (never read as "absent").
+                // No row owns this credential: it is orphaned. Removing it is SAFE
+                // (nothing can be paired with it). A read error is an ERROR (never
+                // read as "absent").
                 let has = self
                     .secrets
                     .get(secret_ref)
@@ -550,16 +557,24 @@ impl Providers {
                         .delete(secret_ref)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
                 }
+                Ok(())
             } else {
-                // The row already points at this credential: it is the row's own.
-                // Leave it EXACTLY as it is; the legacy entry proved nothing, so we
-                // neither bless nor destroy.
+                // The row REFERENCES this credential, but a legacy entry proves
+                // NOTHING about whether the stored value still matches the row's
+                // configuration (a failed URL+token patch could have replaced the
+                // value under the same reference). We must NOT clear the journal:
+                // an unresolved barrier keeps the provider unusable until it is
+                // explicitly resolved, so the resolver cannot hand out a possibly
+                // mismatched credential (TASK-048 F1). Returning `Err` keeps the
+                // pending op; the next boot retries, and `resolve_grant` refuses.
                 tracing::warn!(
                     provider,
-                    "a legacy credential transition is unresolved; keeping the row's own credential and inventing no ownership"
+                    "a legacy credential transition is UNRESOLVED: the credential the row references cannot be proven to match the row's configuration; keeping the barrier"
                 );
+                Err(ProviderError::Unresolved(
+                    "a legacy credential transition references a row whose credential cannot be proven to match; explicit resolution required".into(),
+                ))
             }
-            Ok(())
         } else {
             // create/patch/logout did not finish: reconcile the credential with
             // the row. An unreadable credential or row is an ERROR, never read as
@@ -800,6 +815,7 @@ mod recovery_intent_tests {
     /// A LEGACY journal entry (no `intent_version`: `expected_revision` was the
     /// PRE-write one) proves nothing under the new semantics. Recovery must NOT
     /// bless it NOR destroy a credential the row already references (TASK-048 F1).
+    #[cfg(feature = "testing")]
     #[tokio::test]
     async fn a_legacy_journal_entry_neither_blesses_nor_destroys() {
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe(format!(
@@ -836,10 +852,21 @@ mod recovery_intent_tests {
         );
         let after = p.store.get("pL").unwrap();
         assert_eq!(after.secret_ref.as_deref(), Some(reference.as_str()), "the row keeps its own reference");
+        // The ISOLATION IS REAL: the barrier is KEPT, so the provider stays
+        // unresolved and the resolver refuses to hand the credential out.
+        assert!(
+            p.store.has_pending_op("pL").unwrap(),
+            "a legacy entry that references a row must keep the unresolved barrier"
+        );
+        assert!(
+            p.resolve_grant("pL").await.is_err(),
+            "the resolver must refuse while a legacy barrier stands"
+        );
     }
 
     /// A legacy entry whose secret is ORPHANED (no row references it) is cleaned up
     /// - it cannot belong to anything.
+    #[cfg(feature = "testing")]
     #[tokio::test]
     async fn a_legacy_entry_removes_a_truly_orphaned_credential() {
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe(format!(

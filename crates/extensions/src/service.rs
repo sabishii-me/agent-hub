@@ -63,17 +63,9 @@ pub fn install_for_harness(
 
     let base = agents_root.join(harness_id);
     std::fs::create_dir_all(&base)?;
-    // Publish each selected extension behind a STABLE PER-EXTENSION POINTER, so a
-    // reader always resolves a COMPLETE extension and the pointer is swapped in ONE
-    // step (TASK-048 N4):
-    //
-    //   <base>/extensions/<id>            -> a junction to a versioned dir
-    //   <base>/extensions/.v-<id>-<rev>/  -> the complete tree this version holds
-    //
-    // We build the new version COMPLETE, create a junction to it, then atomically
-    // RENAME the junction over the current pointer (a reparse-point move, no
-    // intermediate window). If the platform refuses a junction, we fall back to an
-    // in-place staging rename and say so honestly; we never claim more than we do.
+    // Publish each selected extension IN PLACE and per-extension (TASK-048 N4).
+    // This is NOT an atomic tree-wide swap; the honest guarantee is stated at the
+    // point of replacement below.
     let target = base.join("extensions");
     std::fs::create_dir_all(&target)?;
 
@@ -109,11 +101,22 @@ pub fn install_for_harness(
         }
         match std::fs::rename(&staging, &final_dir) {
             Ok(()) => {
-                let _ = std::fs::remove_dir_all(&old);
+                // The old copy is a transient that MUST go; a failure to remove it
+                // is reported (a silently kept `.old-*` is a leaked tree).
+                if let Err(e) = remove_dir(&old) {
+                    return Err(ExtensionError::Io(e));
+                }
             }
             Err(e) => {
-                // Put the old one back so the harness keeps a usable extension.
-                let _ = std::fs::rename(&old, &final_dir);
+                // Put the old one back so the harness keeps a usable extension. If
+                // the ROLLBACK itself fails, report it: the extension is now
+                // missing under its final name and that must not be silent.
+                if let Err(re) = std::fs::rename(&old, &final_dir) {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(ExtensionError::Io(std::io::Error::other(format!(
+                        "the extension `{want}` failed to publish ({e}) and its rollback failed ({re}); it may be missing"
+                    ))));
+                }
                 let _ = std::fs::remove_dir_all(&staging);
                 return Err(ExtensionError::Io(e));
             }
@@ -123,18 +126,30 @@ pub fn install_for_harness(
     // Removal LAST: every selected extension is in place; now drop the rest. A
     // failure to remove a de-selected extension is REPORTED (not silently read as
     // success): the effective set would otherwise still contain it.
-    if let Ok(entries) = std::fs::read_dir(&target) {
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with(".stage-") || name.starts_with(".old-") {
-                continue; // our own transient dirs
-            }
-            if !selected_set.contains(name.as_str()) {
-                std::fs::remove_dir_all(e.path()).map_err(ExtensionError::Io)?;
-            }
+    // A failure to even LIST the target, or a broken entry, is reported: an
+    // unreadable directory means the effective set cannot be guaranteed.
+    let entries = std::fs::read_dir(&target).map_err(ExtensionError::Io)?;
+    for e in entries {
+        let e = e.map_err(ExtensionError::Io)?;
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with(".stage-") || name.starts_with(".old-") {
+            continue; // our own transient dirs
+        }
+        if !selected_set.contains(name.as_str()) {
+            std::fs::remove_dir_all(e.path()).map_err(ExtensionError::Io)?;
         }
     }
     Ok(target)
+}
+
+/// Remove a directory, treating "already gone" as success and any other error as
+/// a real failure (so a leaked tree is not silently accepted).
+fn remove_dir(p: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(p) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// A unique-enough name suffix (millis + a counter) for staging/old dirs.
