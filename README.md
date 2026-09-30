@@ -37,12 +37,16 @@ and `docs/tasks/review-*.md`, not claimed as done.
 
 ### Current focus
 
-Make the already-wired chain a **coherent, recoverable slice** before adding surface: one
-consistent story for provider version + secret ownership, resolver consistency, the applied
-confirmation on start/reopen/switch, turn admission/delivery/cancel/terminal, fault/restart
-reclamation, and one fact across GET/event/error. The whole-chain analysis is
-`docs/tasks/lifecycle-chain.md`; `docs/ARCHITECTURE.md` §24 lists the remaining surface
-(unbuilt routes stay `501` and are not this round's goal).
+**The hub-ownable surface is complete.** Every remaining route is blocked OUTSIDE the
+hub, with a recorded reason per group in `docs/tasks/remaining-surface.md`: the adapter
+protocol (`connections/*`, `auth/*`, `tools/list`, `approval_need`/`question_need`), the
+provider-type data model (no plugin ships a descriptor), the C2 plugin-sourced skills
+model, and `resources/*` (which IS that skills model). 56 real / 8 mounted-`501` / 10
+unmounted, all listed in `docs/ARCHITECTURE.md` §24.
+
+The chain is now coherent and recoverable end-to-end (`docs/tasks/lifecycle-chain.md`),
+with the fault branches rehearsed on a real process. The next step is the reviewer's look
+before any polish.
 
 ## Status
 
