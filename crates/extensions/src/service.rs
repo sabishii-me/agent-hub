@@ -63,96 +63,81 @@ pub fn install_for_harness(
 
     let base = agents_root.join(harness_id);
     std::fs::create_dir_all(&base)?;
-    // Publish each selected extension IN PLACE and per-extension (TASK-048 N4).
-    // This is NOT an atomic tree-wide swap; the honest guarantee is stated at the
-    // point of replacement below.
-    let target = base.join("extensions");
-    std::fs::create_dir_all(&target)?;
 
-    let selected_set: std::collections::HashSet<&str> =
-        selected.iter().map(|s| s.as_str()).collect();
+    // Build a COMPLETE, IMMUTABLE SNAPSHOT of the selected set, then hand that
+    // snapshot's path to the adapter for this start (TASK-048 S5/N4). No reader
+    // ever observes a partially-updated tree: the snapshot is written under a
+    // private name and only named as the returned path once it is complete. The
+    // caller points the adapter at THIS path, so concurrent starts each get a
+    // stable, complete set. Snapshots are swept by age, never while current.
+    let rev = unique();
+    let snapshots = base.join("extensions.snapshots");
+    std::fs::create_dir_all(&snapshots)?;
+    let snapshot = snapshots.join(format!(".snap-{rev}"));
+    std::fs::remove_dir_all(&snapshot).ok();
+    std::fs::create_dir_all(&snapshot)?;
 
-    for want in selected {
-        let src = &shipped.iter().find(|(id, _)| id == want).unwrap().1;
-        if !src.exists() {
-            // A declared source with no directory is a MISSING trust component, not
-            // an installed one. Fail loudly; never fabricate a placement.
-            return Err(ExtensionError::SourceMissing(want.clone(), src.display().to_string()));
-        }
-        let rev = unique();
-        let final_dir = target.join(want);
-        // Replace THIS extension by moving the complete new tree into place, with
-        // the old one moved aside first. HONEST STATEMENT OF THE GUARANTEE: for one
-        // extension there is a brief window between `final -> old` and
-        // `staging -> final` where that extension name is absent. Across
-        // extensions, this is per-extension (not one tree-wide swap). What IS
-        // guaranteed: a half-copied tree is never published (the new tree is built
-        // complete under `staging` first), the shared directory is never deleted
-        // wholesale, and a de-selected extension is removed only AFTER every
-        // selected one is in place (TASK-048 N4).
-        let staging = base.join(format!(".stage-{want}-{rev}"));
-        std::fs::remove_dir_all(&staging).ok();
-        std::fs::create_dir_all(&staging)?;
-        copy_tree(src, &staging)?;
-        let old = base.join(format!(".old-{want}-{rev}"));
-        std::fs::remove_dir_all(&old).ok();
-        if dir_exists(&final_dir) {
-            std::fs::rename(&final_dir, &old)?;
-        }
-        match std::fs::rename(&staging, &final_dir) {
-            Ok(()) => {
-                // The old copy is a transient that MUST go; a failure to remove it
-                // is reported (a silently kept `.old-*` is a leaked tree).
-                if let Err(e) = remove_dir(&old) {
-                    return Err(ExtensionError::Io(e));
-                }
+    let result: Result<(), ExtensionError> = (|| {
+        for want in selected {
+            let src = &shipped.iter().find(|(id, _)| id == want).unwrap().1;
+            if !src.exists() {
+                // A declared source with no directory is a MISSING trust component,
+                // not an installed one. Fail loudly; never fabricate a placement.
+                return Err(ExtensionError::SourceMissing(
+                    want.clone(),
+                    src.display().to_string(),
+                ));
             }
-            Err(e) => {
-                // Put the old one back so the harness keeps a usable extension. If
-                // the ROLLBACK itself fails, report it: the extension is now
-                // missing under its final name and that must not be silent.
-                if let Err(re) = std::fs::rename(&old, &final_dir) {
-                    let _ = std::fs::remove_dir_all(&staging);
-                    return Err(ExtensionError::Io(std::io::Error::other(format!(
-                        "the extension `{want}` failed to publish ({e}) and its rollback failed ({re}); it may be missing"
-                    ))));
-                }
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(ExtensionError::Io(e));
-            }
+            copy_tree(src, &snapshot.join(want))?;
         }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&snapshot);
+        return Err(e);
     }
 
-    // Removal LAST: every selected extension is in place; now drop the rest. A
-    // failure to remove a de-selected extension is REPORTED (not silently read as
-    // success): the effective set would otherwise still contain it.
-    // A failure to even LIST the target, or a broken entry, is reported: an
-    // unreadable directory means the effective set cannot be guaranteed.
-    let entries = std::fs::read_dir(&target).map_err(ExtensionError::Io)?;
-    for e in entries {
-        let e = e.map_err(ExtensionError::Io)?;
-        let name = e.file_name().to_string_lossy().to_string();
-        if name.starts_with(".stage-") || name.starts_with(".old-") {
-            continue; // our own transient dirs
-        }
-        if !selected_set.contains(name.as_str()) {
-            std::fs::remove_dir_all(e.path()).map_err(ExtensionError::Io)?;
-        }
-    }
-    Ok(target)
+    // Hand the adapter THIS snapshot's path directly: it is COMPLETE and
+    // IMMUTABLE, so the reader never races a replacement and never sees a mixed or
+    // missing set. There is no shared mutable name to swap, hence no window
+    // (TASK-048 S5). Older snapshots are swept by COUNT: keep the newest few so a
+    // still-running adapter's snapshot is not deleted under it, drop the rest.
+    sweep_old_snapshots(&snapshots, &snapshot, KEEP_SNAPSHOTS);
+
+    Ok(snapshot)
 }
 
-/// Remove a directory, treating "already gone" as success and any other error as
-/// a real failure (so a leaked tree is not silently accepted).
-fn remove_dir(p: &Path) -> std::io::Result<()> {
-    match std::fs::remove_dir_all(p) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
+/// How many recent snapshots to keep (a running adapter reads its own; the newest
+/// few cover overlapping starts). Sweeping is best-effort and never removes the
+/// just-published snapshot.
+const KEEP_SNAPSHOTS: usize = 8;
+
+/// Sweep old extension snapshots, keeping the newest `keep`. A failure to sweep is
+/// a leak, not a correctness failure.
+fn sweep_old_snapshots(dir: &Path, keep: &Path, keep_count: usize) {
+    let mut snaps: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().map(|n| n.to_string_lossy().starts_with(".snap-")).unwrap_or(false))
+            .collect(),
+        Err(_) => return,
+    };
+    // Newest first by the millis prefix in the name.
+    snaps.sort();
+    snaps.reverse();
+    for (i, p) in snaps.iter().enumerate() {
+        if p == keep {
+            continue;
+        }
+        if i < keep_count {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(p);
     }
 }
 
-/// A unique-enough name suffix (millis + a counter) for staging/old dirs.
+/// A unique-enough name suffix (millis + a counter) for snapshot dirs.
 fn unique() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static C: AtomicU64 = AtomicU64::new(0);
@@ -161,11 +146,6 @@ fn unique() -> String {
         .unwrap_or_default()
         .as_millis();
     format!("{millis:x}-{:x}", C.fetch_add(1, Ordering::Relaxed))
-}
-
-/// Whether `p` is a directory (or a directory pointer).
-fn dir_exists(p: &Path) -> bool {
-    p.exists() || std::fs::symlink_metadata(p).is_ok()
 }
 
 /// Copy a directory tree.
@@ -201,6 +181,34 @@ mod tests {
             }
             _ => panic!("expected Unknown"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A returned snapshot is COMPLETE and contains exactly the selected set; two
+    /// calls produce two independent snapshots (S5).
+    #[test]
+    fn a_snapshot_is_complete_and_independent() {
+        let dir = std::env::temp_dir().join(format!("ext-snap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two shipped extensions, each with a file.
+        for (id, f) in [("e1", "a"), ("e2", "b")] {
+            let d = dir.join(format!("src-{id}"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(f), id).unwrap();
+        }
+        let shipped = vec![
+            ("e1".to_string(), dir.join("src-e1")),
+            ("e2".to_string(), dir.join("src-e2")),
+        ];
+        let s1 = install_for_harness(&dir, "pi", &shipped, &["e1".into(), "e2".into()]).unwrap();
+        assert!(s1.join("e1/a").is_file(), "the snapshot holds e1");
+        assert!(s1.join("e2/b").is_file(), "the snapshot holds e2");
+        let s2 = install_for_harness(&dir, "pi", &shipped, &["e1".into()]).unwrap();
+        assert!(s2.join("e1/a").is_file(), "the second snapshot holds e1");
+        assert!(!s2.join("e2").exists(), "a de-selected extension is absent from the new snapshot");
+        // The FIRST snapshot is untouched (independent, immutable).
+        assert!(s1.join("e2/b").is_file(), "the first snapshot is unchanged");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

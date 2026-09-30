@@ -342,3 +342,15 @@ unsupported-for-provider -> unsupported; requires-new-session -> requires_new_se
 validation-failed -> validation_failed; abort-failed -> adapter_unreachable. An unknown
 code is `adapter_crash` (never invented). `SessionError::from_start` uses it, so a typed
 refusal keeps its contract code through reopen/fork/PATCH. Test: `code_map_tests`.
+
+## S5: each start gets a complete, immutable extension snapshot (this pass)
+
+The two-rename per-extension publish had a missing window and could mix new/old across
+extensions. Replaced with a SNAPSHOT: `install_for_harness` builds the COMPLETE selected
+set under `<base>/extensions.snapshots/.snap-<rev>` and RETURNS that path;
+`harness_env` points the adapter at it. There is no shared mutable name to swap, so a
+reader cannot see a missing or mixed set. Old snapshots are swept by count (keep the
+newest few) so a running adapter's snapshot is not removed under it. A build failure
+leaves no snapshot; de-selected extensions are simply absent from the new snapshot while
+the old one stays intact. Test: `a_snapshot_is_complete_and_independent`. Live: a start
+produces a snapshot holding exactly the selected set.

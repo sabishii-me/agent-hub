@@ -150,7 +150,10 @@ impl Adapters {
         let base = self.data_dir.join("agents").join(id);
         let harness_dir = base.clone();
         let skills_dir = base.join("skills");
-        let extensions_dir = base.join("extensions");
+        // The extensions dir the adapter is pointed at is a COMPLETE, IMMUTABLE
+        // SNAPSHOT produced by `install_for_harness` below; a fallback keeps a
+        // harness with no shipped extensions working.
+        let mut extensions_dir = base.join("extensions");
         std::fs::create_dir_all(&harness_dir)?;
         std::fs::create_dir_all(&skills_dir)?;
         // The extensions pointer is REPLACED by install_for_harness (an atomic pointer
@@ -186,7 +189,10 @@ impl Adapters {
                 Some(sel) => sel,
                 None => shipped.iter().map(|(id, _)| id.clone()).collect(),
             };
-            agent_hub_extensions::install_for_harness(
+            // Hand the adapter the SNAPSHOT path this call produced: a complete,
+            // immutable set, so a start never sees a mixed/missing tree (TASK-048
+            // S5/N4).
+            extensions_dir = agent_hub_extensions::install_for_harness(
                 &self.data_dir.join("agents"),
                 id,
                 &shipped,
