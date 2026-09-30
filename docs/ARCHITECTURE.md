@@ -564,6 +564,18 @@ measured with a concurrent poll (ADR-0009), not asserted.
 
 This section records where the work actually stands. It is a **status**, not a new decision.
 
+> **CURRENT STATUS (read `docs/tasks/system-alignment.md` first).** The reconstruction is
+> **IN PROGRESS, not complete**. §17 remains the plan of record. The mounted-vs-contract
+> counts in §24 are a routing census, NOT a capability claim: a route can be "real" and the
+> capability still not reconnected to the real adapters. Capabilities are judged by the
+> per-capability table (gap owner + real acceptance). At this writing: G1 (adapter
+> bidirectional control / approvals) and G2 (harness connections/auth wire mapping) are
+> closed and live-verified; G3 (provider type authority), G4 (auth placeholder), G5 (preset
+> restart failure state / composite PATCH), G6 (`minHubVersion` gate) and the §17 remainder
+> (new skills/resources T2b, shared adapter layer) are OPEN, with the owner recorded in the
+> alignment table. "No compatibility/migration/legacy" holds; the plugin UPGRADE (manifest
+> contract + artifacts) is still required and is NOT a compatibility layer.
+
 **It was wrong before.** An earlier version of this section called whole domains "landed and
 verified" and pointed at component tests as if they proved the product capability. A cross-review
 (TASK-048) showed the opposite: sessions were never handed to an adapter yet answered `active` /

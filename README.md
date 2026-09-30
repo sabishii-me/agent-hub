@@ -15,46 +15,62 @@ one item until someone says "continue".
 - A reviewer handoff or a review report (`PROVIDER-TURN-REVIEW-*.md`) is **correction input**,
   not the task. Do not role-switch into reviewer mode, and do not copy its list as the whole task.
 
-### The current vertical chain (where the work is)
+### The system-alignment table (the real status)
 
-```
-hub-managed provider relationship state
--> persistent instance identity + secret reference
--> recoverable provider / credential lifecycle
--> resolver + credentials/grant
--> config/set target + actual applied identity confirmation
--> prompt / abort / terminal
--> restart & session recovery
-```
+The target is NOT "routes mounted" or "tests green": it is the UPGRADED system working
+with the REAL adapters/plugins through the formal `/v1`. The authoritative per-capability
+table is `docs/tasks/system-alignment.md`: for each capability it records the approved
+target, the hub entry + responsibility, the adapter/plugin responsibility, the CURRENT
+real implementation, the **gap owner** (HUB / PLUGIN / CONTRACT / UNAUTH), the required
+upgrade, and the real acceptance. Every remaining route is also classified in
+`docs/tasks/remaining-surface.md`.
 
-Every link has real code and live verification; the work records below hold the detail.
-What is NOT fully closed, honestly: a real model turn needs a provider credential this
-environment does not have (a credential authorization - it blocks only that call); and
-several fault/recovery branches are reasoned and unit-tested but only partly exercised
-on a real process (an unconfirmed cancel, a stop that fails, a config response that
-fails after the adapter applied it). These are tracked in `docs/tasks/lifecycle-chain.md`
-and `docs/tasks/review-*.md`, not claimed as done.
+Three real adapters exist and must be reconnected (their committed SHAs are recorded in
+the review): pi, jouzu, dsh/deepseek. A capability is DONE only when driven through
+`/v1` against a real adapter; a capable mock proves the hub's half, not the capability.
 
-### Current focus
+### Open links (at the recorded SHA), by owner
 
-**The slice is IN PROGRESS, not complete.** The provider/secret/turn chain and the
-session preset capability are the current work; several genuinely HUB-OWNED domains
-remain unimplemented (§17 order), and each remaining route is classified in
-`docs/tasks/remaining-surface.md` as ONE of: (a) hub work still to do, (b) a concrete
-external dependency, or (c) an unavailable real call (credentials/paid). A missing
-plugin or credential does NOT make a hub-side implementation complete.
+- **G3 (HUB+CONTRACT+PLUGIN)** provider TYPE authority: `GET /v1/model-providers/types`
+  reads descriptors, but `create` accepts any type, availability = "field present", and
+  grant ignores the type. Publish the descriptor artifact contract; use ONE type
+  authority for enumerate/create/availability/execution; upgrade the provider plugin.
+- **G4 (HUB)** delete the auth placeholder: `POST .../auth` creates a pending operation
+  with NO executor and returns 501. Replace with a no-side-effect refusal until the real
+  declarative flow exists.
+- **G5 (HUB)** preset restart failure state: a restart whose re-attach fails must leave the
+  session `needs-repair`, not `active`; a composite PATCH (preset + thinkingLevel) must run
+  every field, not early-return.
+- **G6 (HUB+CONTRACT+PLUGIN)** `minHubVersion` (ADR-0008) is declared nowhere and enforced
+  nowhere; add it to the manifest contract and enforce at ONE plugin accept/activate edge.
+- **§17 remainder** the new plugin-sourced skills/resources model (T2b) and the shared
+  adapter layer; C2 forbids restoring the OLD skills model, it does NOT cancel the new one.
 
-Delivered so far on this chain: preset switching WITHOUT wedging a session (restart +
-`session/start(resume)`, HTTP-verified across repeated switches), the confirmed
-`applied_preset` persisted, the provider pending barrier on every mutator/consumer, and
-the turn/abort delivery bound to the dispatched process generation. Still to do (hub
-side): the provider-type descriptor loading + auth execution (`/v1/model-providers/types`
-and `auth/*` are unconditional `501` today), the new plugin-sourced skills model
-(T2b), and the remaining §17 domains/surface.
+### Closed this session (live-verified through /v1)
+
+- **G1** the adapter bidirectional control protocol: a reverse request (`approval_need`)
+  keeps its JSON-RPC id and is answered. Live: adapter asks -> `/v1` approval visible ->
+  `/v1` allow -> adapter receives the reply to the SAME id -> turn ok; reject -> no side
+  effect, turn cancelled.
+- **G2** the harness `connections/delete` wire mapping (`{id}` not `{connectionId}`, plus
+  `validate`->`draft`, `auth/start`->`providerId`). Live: a real delete removes the target.
+- Preset switch without wedging (restart+resume) + persisted `applied_preset`; provider
+  pending barrier on every mutator/consumer; turn/abort bound to the dispatched process
+  generation; plugin install from git or a verified artifact; harness extension snapshot
+  per start; provider `types` loader + auth operation store (start/status/cancel).
+
+### Authorization boundary (blocks only the test action)
+
+A real-auth/paid model call and touching the real OS keychain are NOT authorized in
+general: the hub writes/reads/deletes a random keychain probe at startup. A real
+pi/jouzu/dsh acceptance therefore needs an EXPLICIT isolated-side-effect authorization
+and, for a real turn, a credential authorization. Missing authorization blocks that
+TEST, not the credential-free implementation. Tests not run are NOT accepted and are
+never reported green.
 
 ## Status
 
-**Not a product yet** (honest). What is real now:
+**The system is IN PROGRESS, not complete.** What is real now:
 
 - Sessions own a real adapter process (`session/start` + `config/set`; `active` only when both
   succeed); a session may name a hub-managed `modelProviderId`/`modelId` (resolved through an
