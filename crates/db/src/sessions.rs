@@ -29,6 +29,8 @@ pub struct SessionRow {
     /// The review state the harness confirmed (`applied.review`).
     pub applied_review: Option<bool>,
     pub cwd: Option<String>,
+    /// Extra roots the harness MAY activate (absolute), JSON-encoded.
+    pub additional_dirs: Vec<String>,
     pub title: Option<String>,
     pub status: String,
     pub created_at: String,
@@ -73,6 +75,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   applied_plan           INTEGER,
   applied_review         INTEGER,
   cwd                    TEXT,
+  additional_dirs        TEXT NOT NULL DEFAULT '[]',
   title                  TEXT,
   status                 TEXT NOT NULL,
   created_at             TEXT NOT NULL,
@@ -121,13 +124,13 @@ impl crate::Db {
 
     fn insert_session_tx(conn: &Connection, s: &SessionRow) -> Result<(), rusqlite::Error> {
         conn.execute(
-            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, additional_dirs, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
             params![
                 s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.preset_id, s.applied_preset,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64),
                 s.applied_plan.map(|b| b as i64), s.applied_review.map(|b| b as i64),
-                s.cwd, s.title,
+                s.cwd, serde_json::to_string(&s.additional_dirs).unwrap_or_else(|_| "[]".into()), s.title,
                 s.status, s.created_at, s.updated_at, s.deleted as i64,
                 s.forked_from_session, s.forked_from_turn, s.native_ref, s.start_error
             ],
@@ -151,19 +154,23 @@ impl crate::Db {
             applied_plan: r.get::<_, Option<i64>>(11)?.map(|v| v != 0),
             applied_review: r.get::<_, Option<i64>>(12)?.map(|v| v != 0),
             cwd: r.get(13)?,
-            title: r.get(14)?,
-            status: r.get(15)?,
-            created_at: r.get(16)?,
-            updated_at: r.get(17)?,
-            deleted: r.get::<_, i64>(18)? != 0,
-            forked_from_session: r.get(19)?,
-            forked_from_turn: r.get(20)?,
-            native_ref: r.get(21)?,
-            start_error: r.get(22)?,
+            additional_dirs: r
+                .get::<_, Option<String>>(14)?
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+            title: r.get(15)?,
+            status: r.get(16)?,
+            created_at: r.get(17)?,
+            updated_at: r.get(18)?,
+            deleted: r.get::<_, i64>(19)? != 0,
+            forked_from_session: r.get(20)?,
+            forked_from_turn: r.get(21)?,
+            native_ref: r.get(22)?,
+            start_error: r.get(23)?,
         })
     }
 
-    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
+    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, additional_dirs, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, DbError> {
         let conn = self.lock();
@@ -182,11 +189,12 @@ impl crate::Db {
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, preset_id=?7, applied_preset=?8, plan=?9, review=?10, applied_plan=?11, applied_review=?12, title=?13, status=?14, updated_at=?15, native_ref=?16, start_error=?17 WHERE id=?1",
+            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, preset_id=?7, applied_preset=?8, plan=?9, review=?10, applied_plan=?11, applied_review=?12, additional_dirs=?13, title=?14, status=?15, updated_at=?16, native_ref=?17, start_error=?18 WHERE id=?1",
             params![
                 s.id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.preset_id, s.applied_preset,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64),
                 s.applied_plan.map(|b| b as i64), s.applied_review.map(|b| b as i64),
+                serde_json::to_string(&s.additional_dirs).unwrap_or_else(|_| "[]".into()),
                 s.title, s.status, s.updated_at,
                 s.native_ref, s.start_error
             ],
@@ -467,6 +475,7 @@ pub fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     add("sessions", "start_error", "TEXT")?;
     add("sessions", "applied_provider", "TEXT")?;
     add("sessions", "applied_route", "TEXT")?;
+    add("sessions", "additional_dirs", "TEXT NOT NULL DEFAULT '[]'")?;
     add("sessions", "preset_id", "TEXT")?;
     add("sessions", "applied_preset", "TEXT")?;
     add("sessions", "applied_plan", "INTEGER")?;
@@ -531,6 +540,7 @@ mod turn_admission_tests {
             applied_plan: None,
             applied_review: None,
             cwd: None,
+            additional_dirs: Vec::new(),
             title: None,
             status: "active".into(),
             created_at: crate::now_utc(),
@@ -626,6 +636,7 @@ mod cancel_hold_tests {
             applied_plan: None,
             applied_review: None,
             cwd: None,
+            additional_dirs: Vec::new(),
             title: None,
             status: "active".into(),
             created_at: crate::now_utc(),

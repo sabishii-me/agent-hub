@@ -101,6 +101,8 @@ pub struct StartSpec {
     pub resume: Option<String>,
     /// The `config/set` payload (may be `{}`).
     pub config: Value,
+    /// Extra roots the harness MAY activate (absolute; `AGENT_HUB_ADDITIONAL_DIRS`).
+    pub additional_dirs: Vec<String>,
     /// Environment variables a session's adapter receives for the hub-managed
     /// connections (envName -> value). Populated only for ENABLED connections; a
     /// disabled connection contributes nothing (zero materialization).
@@ -434,6 +436,12 @@ fn build_env(spec: &StartSpec) -> Vec<(String, String)> {
     if let Some(argv) = &spec.runtime_argv {
         env.push(("AGENT_HUB_RUNTIME_COMMAND".into(), serde_json::to_string(argv).unwrap()));
     }
+    if !spec.additional_dirs.is_empty() {
+        env.push((
+            "AGENT_HUB_ADDITIONAL_DIRS".into(),
+            serde_json::to_string(&spec.additional_dirs).unwrap(),
+        ));
+    }
     // The hub-managed connections' credentials travel as env vars named by each
     // connection's envName - never in the config payload or the conversation.
     for (name, value) in &spec.connection_env {
@@ -478,6 +486,7 @@ mod env_tests {
             runtime_argv: None,
             resume: None,
             fork_from: None,
+            additional_dirs: Vec::new(),
             connection_env,
             config: json!({}),
             grant: None,
@@ -503,5 +512,18 @@ mod env_tests {
     fn no_connections_means_no_variable() {
         let env = build_env(&spec(vec![]));
         assert!(!env.iter().any(|(k, _)| k == "MY_CONN_TOKEN"));
+    }
+
+    /// Extra roots reach the adapter as AGENT_HUB_ADDITIONAL_DIRS; none means the
+    /// variable is absent (not an empty list).
+    #[test]
+    fn additional_dirs_land_or_are_absent() {
+        let mut sp = spec(vec![]);
+        sp.additional_dirs = vec!["E:/one".into(), "E:/two".into()];
+        let env = build_env(&sp);
+        let v = env.iter().find(|(k, _)| k == "AGENT_HUB_ADDITIONAL_DIRS").map(|(_, v)| v.clone());
+        assert_eq!(v.as_deref(), Some("[\"E:/one\",\"E:/two\"]"));
+        let empty = build_env(&spec(vec![]));
+        assert!(!empty.iter().any(|(k, _)| k == "AGENT_HUB_ADDITIONAL_DIRS"));
     }
 }

@@ -48,7 +48,8 @@ a plugin row is always null); recording it is plugin-domain work that must land 
 
 ## Not blocked (done since the last audit)
 
-sessions create/turn/cancel/compact/fork/patch/close/reopen + the read-through views
-(messages/stats/skills); the provider grant chain, presets, plan/review, model
+sessions create (including additionalDirectories, now passed to the adapter as
+AGENT_HUB_ADDITIONAL_DIRS)/turn/cancel/compact/fork/patch/close/reopen + the read-through
+views (messages/stats/skills); the provider grant chain, presets, plan/review, model
 selection; the connections domain; plugin enable/disable, catalog, registry refresh,
 icon; harness extension selection; the metadata routes (surface/openapi/shutdown).

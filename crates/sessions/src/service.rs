@@ -357,9 +357,6 @@ impl Sessions {
             req.plan,
             req.review,
         )?;
-        if req.additional_directories.as_ref().map(|d| !d.is_empty()).unwrap_or(false) {
-            return Err(SessionError::Unsupported("additionalDirectories are not supported yet".into()));
-        }
         Ok(())
     }
 
@@ -412,6 +409,7 @@ impl Sessions {
             applied_plan: None,
             applied_review: None,
             cwd: Some(cwd),
+            additional_dirs: req.additional_directories.clone().unwrap_or_default(),
             title: req.title.clone(),
             status: "starting".into(),
             created_at: now.clone(),
@@ -514,6 +512,7 @@ impl Sessions {
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
             fork_from: None,
+            additional_dirs: row.additional_dirs.clone(),
             connection_env: self.connection_env().unwrap_or_default(),
             config,
             grant,
@@ -873,6 +872,7 @@ impl Sessions {
             runtime_argv: harness.runtime_argv.clone(),
             resume: row.native_ref.clone(),
             fork_from: None,
+            additional_dirs: row.additional_dirs.clone(),
             connection_env: self.connection_env().unwrap_or_default(),
             config,
             grant,
@@ -966,6 +966,7 @@ impl Sessions {
             applied_plan: None,
             applied_review: None,
             cwd: Some(cwd.to_string_lossy().to_string()),
+            additional_dirs: source.additional_dirs.clone(),
             title: None,
             status: "starting".into(),
             created_at: now.clone(),
@@ -1006,6 +1007,7 @@ impl Sessions {
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
             fork_from: Some(crate::runtime::ForkFrom { source_ref, through_turn: through }),
+            additional_dirs: row.additional_dirs.clone(),
             connection_env: self.connection_env().unwrap_or_default(),
             config,
             grant,
@@ -1551,6 +1553,7 @@ mod reconcile_tests {
             applied_plan: None,
             applied_review: None,
             cwd: None,
+            additional_dirs: Vec::new(),
             title: None,
             status: status.into(),
             created_at: now_utc(),
