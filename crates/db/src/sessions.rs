@@ -410,17 +410,6 @@ impl crate::Db {
         Ok(rows)
     }
 
-    /// A turn that was admitted but never reached the adapter (its detached start
-    /// failed) is reconciled to `failed` so it does not hold the session busy.
-    pub fn fail_admitted_turn(&self, id: &str, reason: &str) -> Result<bool, DbError> {
-        let conn = self.lock();
-        let n = conn.execute(
-            "UPDATE turns SET state='ended', ended='failed', ended_at=?2 WHERE id=?1 AND state='admitted' AND ended IS NULL",
-            params![id, crate::now_utc()],
-        )?;
-        let _ = reason;
-        Ok(n > 0)
-    }
 
 }
 

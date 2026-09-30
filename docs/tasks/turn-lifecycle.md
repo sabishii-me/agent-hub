@@ -94,3 +94,9 @@ plaintext token is used to cross it.
   stalled cancels are settled `interrupted` at boot (F4).
 - `settle_turn` retries a transient DB failure and publishes only on a confirmed
   write.
+
+## Restart reconciliation (TASK-048 N2)
+
+At boot: `starting` -> `starting_failed`; `active` (no process) -> `needs-repair`;
+open turns (`ended IS NULL`) settled `failed` (or `interrupted` when `cancelling`).
+Verified live: kill-without-close -> restart -> `needs-repair` -> `reopen` -> `active`.

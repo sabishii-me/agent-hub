@@ -732,3 +732,20 @@ still unresolved and tracked in `docs/review/VERIFICATION-TASKS.md`.
   `provider_not_found`, `provider_catalog_failed`, `revision_conflict` and
   `catalog_not_loaded` are distinct; the resolver returns `<code>|<message>` and the
   sessions domain preserves the code to the response.
+
+## 21. Restart reconciliation and non-blocking placement (TASK-048 N2/N3/N4)
+
+- **N2 — restart reconciliation.** At boot no session process runs. Any session
+  claiming to run is repaired: `starting` -> `starting_failed`; `active` (process
+  gone) -> `needs-repair` (an orphaned tail; `reopen` restarts it on its stored
+  `nativeRef`); `readonly` is left alone. Any turn still open (`ended IS NULL`) is
+  settled honestly (`failed`, or `interrupted` if it was `cancelling`), so an
+  orphan can never hold `busy`. Verified live: kill-without-close -> restart ->
+  `needs-repair` -> `reopen` -> `active`.
+- **N3 — no live process behind a broken row.** Both `run_start` and `reopen`
+  stop the process if the session row cannot be persisted after a successful
+  spawn, and mark the session `needs-repair` rather than leaving a live adapter.
+- **N4 — placement off the request path.** The accept path does only a cheap
+  existence check with no side effect. The blocking placement (deleting/creating
+  the shared harness dir) runs in `spawn_blocking` inside the detached start/reopen,
+  so it never stalls the async runtime.

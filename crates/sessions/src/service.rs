@@ -415,9 +415,18 @@ impl Sessions {
         if row.status != "starting" || row.deleted {
             return;
         }
-        let harness = match self.harness(&row.harness_id) {
-            Ok(h) => h,
-            Err(e) => return self.fail_start(&sid, &e.to_string()).await,
+        // Placement (deleting/creating the shared harness dir) is BLOCKING file
+        // work. Run it off the async runtime, so it never stalls other sessions'
+        // tasks (TASK-048 N4). The accept path already did a cheap existence check
+        // and no side effect.
+        let harness = {
+            let this = self.clone();
+            let harness_id = row.harness_id.clone();
+            match tokio::task::spawn_blocking(move || this.harness(&harness_id)).await {
+                Ok(Ok(h)) => h,
+                Ok(Err(e)) => return self.fail_start(&sid, &e.to_string()).await,
+                Err(e) => return self.fail_start(&sid, &format!("placement task failed: {e}")).await,
+            }
         };
         // Resolve the credential grant (memory-only in the adapter) and the
         // config that selects the injected provider. A resolution failure here
@@ -487,13 +496,54 @@ impl Sessions {
     /// must not keep claiming it is starting. Mark it `starting_failed` so a
     /// client reads an honest terminal/unknown state, never a lie. No replay of
     /// unknown side effects.
+    /// At boot, no session process is running. Reconcile anything that claims
+    /// otherwise (N2):
+    /// * a `starting` session whose start was interrupted -> `starting_failed`;
+    /// * an `active` session whose process is gone -> `needs-repair` (an orphaned
+    ///   tail: the record survives and reopen can restart it);
+    /// * any turn still open (`ended IS NULL`) whose session is not running ->
+    ///   `interrupted` (we cannot prove it finished, so we do not pretend it did).
     pub fn reconcile_interrupted(&self) -> Result<usize, SessionError> {
         let mut n = 0;
         for row in self.db.list_sessions()? {
-            if row.status == "starting" && !self.runtime.is_running(&row.id) {
-                let mut row = row;
-                row.status = "starting_failed".into();
-                row.start_error = Some("the start was interrupted (the hub restarted or the process died)".into());
+            if self.runtime.is_running(&row.id) {
+                continue;
+            }
+            let mut changed = false;
+            let mut row = row;
+            match row.status.as_str() {
+                "starting" => {
+                    row.status = "starting_failed".into();
+                    row.start_error = Some(
+                        "the start was interrupted (the hub restarted or the process died)".into(),
+                    );
+                    changed = true;
+                }
+                "active" => {
+                    row.status = "needs-repair".into();
+                    changed = true;
+                }
+                _ => {}
+            }
+            // An open turn in a session we are not running cannot still be
+            // running: settle it honestly.
+            for t in self.db.list_turns(&row.id)? {
+                if t.ended.is_none() {
+                    let ended = if t.state == "cancelling" { "interrupted" } else { "failed" };
+                    let cause = if t.state == "cancelling" {
+                        "the cancel was not confirmed before the hub stopped"
+                    } else {
+                        "the turn was open when the hub stopped"
+                    };
+                    let _ = self.db.end_turn(&t.id, ended, &now_utc());
+                    self.bus.publish(
+                        "turn.ended",
+                        serde_json::json!({ "turn": { "state": "ended", "ended": ended, "cause": cause } }),
+                    );
+                    changed = true;
+                }
+            }
+            if changed {
                 row.updated_at = now_utc();
                 self.db.update_session(&row)?;
                 n += 1;
@@ -540,7 +590,13 @@ impl Sessions {
         if row.native_ref.is_none() {
             return Err(SessionError::Validation("the session has no native ref to reopen".into()));
         }
-        let harness = self.harness(&row.harness_id)?;
+        let harness = {
+            let this = self.clone();
+            let harness_id = row.harness_id.clone();
+            tokio::task::spawn_blocking(move || this.harness(&harness_id))
+                .await
+                .map_err(|e| SessionError::Start(format!("placement task failed: {e}")))??
+        };
         // A restart RE-GRANTS: the adapter's grant is memory-only, so a reopened
         // session must receive the credential again before its config is applied.
         let (grant, config) =
@@ -570,7 +626,18 @@ impl Sessions {
         row.applied_provider = process.applied_provider.clone();
         row.applied_route = process.applied_route.clone();
         row.updated_at = now_utc();
-        self.db.update_session(&row)?;
+        if let Err(e) = self.db.update_session(&row) {
+            // The process started but the row could not be persisted: stop it and
+            // mark the session for repair. A live adapter behind a stale row is
+            // exactly the leak N3 names (TASK-048).
+            let _ = self.runtime.stop(id).await;
+            row.status = "needs-repair".into();
+            row.updated_at = now_utc();
+            let _ = self.db.update_session(&row);
+            return Err(SessionError::Start(format!(
+                "the reopened session could not be persisted: {e}"
+            )));
+        }
         let view = self.view(&row);
         self.bus.publish("session.reopened", serde_json::json!({ "session": view, "reopened": true }));
         Ok(view)
@@ -951,5 +1018,78 @@ mod run_end_tests {
     fn an_unreadable_state_is_failed_not_completed() {
         assert_eq!(run_end_of(&json!({})).0, "failed");
         assert_eq!(run_end_of(&json!({"unexpected":true})).0, "failed");
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+    use agent_hub_db::{Db, SessionRow};
+
+    fn sessions(db: Db) -> Sessions {
+        Sessions::new(
+            db,
+            agent_hub_events::Bus::new(8, 8),
+            std::env::temp_dir(),
+            Box::new(|_| true),
+            Box::new(|id| {
+                Ok(HarnessSpec {
+                    id: id.into(),
+                    command: vec!["true".into()],
+                    plugin_dir: std::path::PathBuf::from("."),
+                    runtime_argv: None,
+                    harness_dir: std::path::PathBuf::from("."),
+                    skills_dir: std::path::PathBuf::from("."),
+                    extensions_dir: std::path::PathBuf::from("."),
+                })
+            }),
+        )
+    }
+
+    fn row(id: &str, status: &str) -> SessionRow {
+        SessionRow {
+            id: id.into(),
+            harness_id: "pi".into(),
+            model_provider_id: None,
+            model_id: None,
+            applied_model: None,
+            applied_provider: None,
+            applied_route: None,
+            plan: None,
+            review: None,
+            cwd: None,
+            title: None,
+            status: status.into(),
+            created_at: now_utc(),
+            updated_at: now_utc(),
+            deleted: false,
+            forked_from_session: None,
+            forked_from_turn: None,
+            native_ref: Some("ref".into()),
+            start_error: None,
+        }
+    }
+
+    /// N2: at boot an `active` session with no process becomes `needs-repair`, an
+    /// open turn becomes terminal, and a `starting` session becomes `starting_failed`.
+    #[test]
+    fn boot_reconciles_orphaned_sessions_and_open_turns() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_session(&row("a", "active")).unwrap();
+        db.insert_session(&row("b", "starting")).unwrap();
+        db.insert_session(&row("c", "readonly")).unwrap();
+        db.admit_turn("a", "k", "turn:x", "t1").unwrap();
+        db.set_turn_state("t1", "running").unwrap();
+
+        let s = sessions(db);
+        let n = s.reconcile_interrupted().unwrap();
+        assert!(n >= 2, "active + starting are reconciled");
+
+        assert_eq!(s.db.session("a").unwrap().unwrap().status, "needs-repair");
+        assert_eq!(s.db.session("b").unwrap().unwrap().status, "starting_failed");
+        assert_eq!(s.db.session("c").unwrap().unwrap().status, "readonly", "closed stays closed");
+        let t = s.db.turn("t1").unwrap().unwrap();
+        assert_eq!(t.state, "ended");
+        assert_eq!(t.ended.as_deref(), Some("failed"), "an open turn is settled, not left busy");
     }
 }

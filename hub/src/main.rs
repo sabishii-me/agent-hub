@@ -170,7 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     // A start interrupted by a restart must not keep claiming `starting`.
     match sessions.reconcile_interrupted() {
-        Ok(n) if n > 0 => tracing::info!(interrupted = n, "marked interrupted session starts as failed"),
+        Ok(n) if n > 0 => tracing::info!(reconciled = n, "reconciled sessions interrupted by a restart"),
         Ok(_) => {}
         Err(e) => tracing::error!(error = %e, "session reconciliation failed"),
     }
