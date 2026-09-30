@@ -18,3 +18,12 @@ noticed the exit, so a second capability call failed with `adapter_unreachable` 
 Verified live: `models` -> `presets` -> `models` -> `extensions` in sequence all answer
 (each one-shot cycle respawns); `models` carries `harnessId:"pi"`, `known:true`. Adapter
 test: a handle whose child exited reports dead.
+
+## A dead session adapter is not "running"
+
+`Runtime::is_running` now consults the cached handle's liveness (not just the map
+membership), so a session whose adapter process EXITED is not reported running. This
+makes the lifecycle truthful: `reopen` after the adapter dies RESTARTS it (instead of
+returning "already running"), and the read-through views respawn. Verified live: kill
+the pi-adapter process, then `reopen` -> the session restarts to `active`; a
+read-through before that also respawns.

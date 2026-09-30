@@ -397,9 +397,19 @@ impl Sessions {
         self.request(sid, "credentials/grant", params).await.map(|_| ())
     }
 
-    /// Whether a process is running for this session.
+    /// Whether a LIVE process is running for this session. The cached handle's
+    /// adapter may have exited (its stdout closed); a dead process is NOT running,
+    /// so lifecycle and reconciliation see the truth.
     pub fn is_running(&self, sid: &str) -> bool {
-        self.running.lock().expect("running").contains_key(sid)
+        if !self.running.lock().expect("running").contains_key(sid) {
+            return false;
+        }
+        self.requests
+            .lock()
+            .expect("requests")
+            .get(sid)
+            .map(|h| h.is_alive())
+            .unwrap_or(false)
     }
 
     /// Stop and drop a session's process. Idempotent. Returns an error if the
