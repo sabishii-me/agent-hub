@@ -18,8 +18,6 @@ can only forward what the adapter answers. Missing adapter-side:
   answer it (it stays `501`).
 - `approval_need` / `question_need` -> the humans domain routes are mounted and
   forward, but a real adapter must push them.
-- `resources/list` / `resources/read` -> `GET /v1/sessions/{id}/resources` and
-  `POST .../resources/read`.
 
 ## The provider-type data model
 
@@ -29,6 +27,15 @@ read a **type descriptor a model-provider plugin ships** (id, version, owner, na
 authMethods, configuration, catalog dialect). No such plugin/descriptor exists yet, so
 there is nothing to serve and nothing to run an auth flow from. A type no plugin ships
 stays absent by the contract's own wording.
+
+## `resources` is the skills model, not the adapter
+
+Correction: `GET /v1/sessions/{id}/resources` and `POST .../resources/read` are NOT
+adapter methods - the adapter contract's `skills` capability declares only
+`skills/list`. The contract describes these routes over the session's harness **skill
+selection** and logical `skills://` URIs, which IS the plugin-sourced skills model
+below (the `skills://` `node:fs` hook, ARCHITECTURE §7). They stay `501` with the
+`skills/{id}/files/*` routes, for the same decided reason.
 
 ## The plugin-sourced skills model
 

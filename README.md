@@ -57,6 +57,13 @@ reclamation, and one fact across GET/event/error. The whole-chain analysis is
   cancel is coordinated with dispatch, and a restart reconciles orphans (`needs-repair`).
 - Providers: relationship state in the database (rows with an `incarnation`/`revision` guard),
   credential in the **OS keychain** as a per-instance reference, never plaintext.
+- Plugins: `POST /v1/plugins` accepts BOTH declared sources — a git clone (`{url, ref?}`)
+  and a release artifact (`{artifact:{url,sha256,id,pluginType,version,size?}}`), verified
+  size-first then sha256 before unpacking; a recorded artifact is reported by
+  `GET /v1/sessions/{id}/artifacts`.
+- Sessions: `POST /v1/sessions/{id}/repair` recovers a session whose cancelled turn never
+  confirmed its end (hub-side re-abort, process replace, re-attach; `proven` only when the
+  re-attach succeeded); `preview:true` changes nothing.
 - Everything unbuilt answers `501`; the mounted-vs-contract surface is in `§24`.
 
 ## Build and run
