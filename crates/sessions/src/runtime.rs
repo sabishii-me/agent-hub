@@ -49,7 +49,12 @@ impl SessionProcess {
         self.requests
             .request(method, params)
             .await
-            .map_err(|e| StartError::Protocol(e.to_string()))
+            .map_err(|e| match e {
+                agent_hub_adapter::BusError::Rpc { code, message, data } => {
+                    StartError::Refused { code: code.to_string(), message, data }
+                }
+                other => StartError::Protocol(other.to_string()),
+            })
     }
 
     /// Stop the session's process and CONFIRM it exited. Idempotent. On a failure
@@ -293,10 +298,16 @@ impl Sessions {
                 None => true,
             };
             // The adapter must also report the RESOLVED NATIVE ROUTE
-            // (`applied.connectionId`). It need not equal the request (the adapter
-            // names the injected provider `hub-<id>`); but it must be PRESENT, or
-            // the session is not started against a confirmed route.
-            let ok_route = applied_route.is_some();
+            // (`applied.connectionId`). It is the route for the REQUESTED provider:
+            // the contract says an injected provider is named `hub-<id>`, so the
+            // route must be non-empty AND must be the requested id or its injected
+            // name. A route that points at a DIFFERENT provider is a mismatch, not
+            // a confirmation (TASK-048 F3).
+            let want = want_provider.unwrap_or("");
+            let ok_route = match applied_route.as_deref() {
+                Some(r) if !r.is_empty() => r == want || r == format!("hub-{want}"),
+                _ => false,
+            };
             if !applied.is_object() || !ok_provider || !ok_model || !ok_route {
                 let _ = bus.shutdown().await;
                 return Err(StartError::Protocol(format!(
@@ -385,8 +396,8 @@ impl Sessions {
             .cloned()
             .ok_or_else(|| StartError::Protocol(format!("session `{sid}` has no running process")))?;
         requests.request(method, params).await.map_err(|e| match e {
-            agent_hub_adapter::BusError::Rpc { code, message, .. } => {
-                StartError::Refused { code: code.to_string(), message }
+            agent_hub_adapter::BusError::Rpc { code, message, data } => {
+                StartError::Refused { code: code.to_string(), message, data }
             }
             other => StartError::Protocol(other.to_string()),
         })
@@ -477,7 +488,7 @@ pub enum StartError {
     /// is authoritative: the execution it was asked for did not run. Distinct from
     /// a transport failure, where the execution may still be in flight.
     #[error("adapter refused: {message}")]
-    Refused { code: String, message: String },
+    Refused { code: String, message: String, data: Value },
 }
 
 impl StartError {
@@ -485,7 +496,23 @@ impl StartError {
         match self {
             StartError::Spawn(_) => "adapter_unreachable",
             StartError::Protocol(_) => "adapter_crash",
-            StartError::Refused { .. } => "adapter_crash",
+            StartError::Refused { data, .. } => {
+                // Pass through the adapter's typed code ONLY when it is one the
+                // contract declares (a closed set); otherwise the honest fallback.
+                match data.get("code").and_then(|c| c.as_str()) {
+                    Some("provider_unauthorized") => "provider_unauthorized",
+                    Some("provider_not_found") => "provider_not_found",
+                    Some("model_not_found") => "model_not_found",
+                    Some("model_mismatch") => "model_mismatch",
+                    Some("model_not_applied") => "model_not_applied",
+                    Some("revision_conflict") => "revision_conflict",
+                    Some("requires_new_session") => "requires_new_session",
+                    Some("unsupported") => "unsupported",
+                    Some("validation_failed") => "validation_failed",
+                    Some("session_busy") => "session_busy",
+                    _ => "adapter_crash",
+                }
+            }
         }
     }
 }

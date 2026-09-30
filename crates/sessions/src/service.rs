@@ -220,6 +220,11 @@ pub struct Sessions {
     cancelled: Mutex<std::collections::HashSet<String>>,
     /// Turns already settled (a late result never overwrites a decided one).
     settled: Mutex<std::collections::HashSet<String>>,
+    /// Sessions whose adapter is in an UNKNOWN configuration (a config/set whose
+    /// outcome is unconfirmed, or a stop that failed). No turn may be accepted
+    /// while this holds, independent of the durable row: it is the authoritative
+    /// in-memory execution gate (TASK-048 F3).
+    quarantined: Mutex<std::collections::HashSet<String>>,
 }
 
 /// A canonical, unambiguous fingerprint of the semantic request (R2). Lengths are
@@ -263,6 +268,7 @@ impl Sessions {
             locks: Mutex::new(std::collections::HashMap::new()),
             cancelled: Mutex::new(std::collections::HashSet::new()),
             settled: Mutex::new(std::collections::HashSet::new()),
+            quarantined: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -577,7 +583,13 @@ impl Sessions {
     /// the process and mark it `needs-repair`, so the next use reopens and re-grants
     /// (TASK-048 F3).
     async fn quarantine_session(&self, sid: &str, reason: &str) -> SessionError {
-        let _ = self.runtime.stop(sid).await;
+        // Block FIRST: the in-memory gate is authoritative even if the stop or the
+        // DB write fails (TASK-048 F3).
+        self.quarantined.lock().await.insert(sid.to_string());
+        let stopped = self.runtime.stop(sid).await.is_ok();
+        if !stopped {
+            tracing::error!(session = %sid, "quarantine could not stop the adapter; the in-memory gate still blocks turns");
+        }
         if let Ok(Some(mut row)) = self.db.session(sid) {
             row.status = "needs-repair".into();
             row.start_error = Some(reason.to_string());
@@ -788,21 +800,39 @@ impl Sessions {
                 )
                 .await?;
             if let Some(g) = &grant {
-                self.runtime
-                    .grant(id, g)
-                    .await
-                    .map_err(|e| SessionError::Start(format!("credentials/grant failed: {e}")))?;
+                if let Err(e) = self.runtime.grant(id, g).await {
+                    // A grant may have reached the adapter: fail closed.
+                    return Err(self
+                        .quarantine_session(id, &format!("credentials/grant failed: {e}"))
+                        .await);
+                }
             }
-            let r = self
+            let r = match self
                 .runtime
                 .request(id, "config/set", serde_json::json!({ "sid": id, "config": config }))
                 .await
-                .map_err(|e| SessionError::Start(format!("config/set failed: {e}")))?;
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    // config/set may have APPLIED in the adapter before the response
+                    // failed: the session is in an unknown configuration, so fail
+                    // closed rather than keep serving prompts on the old identity.
+                    return Err(self
+                        .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
+                        .await);
+                }
+            };
             let applied = r.get("applied").cloned().unwrap_or(serde_json::Value::Null);
             let ap = applied.get("modelProviderId").and_then(|v| v.as_str()).map(str::to_string);
             let am = applied.get("model").and_then(|v| v.as_str()).map(str::to_string);
             let ar = applied.get("connectionId").and_then(|v| v.as_str()).map(str::to_string);
-            let route_ok = ar.is_some();
+            // The route must be the requested provider's route (the injected name
+            // `hub-<id>` or the id itself), non-empty - not merely present.
+            let route_ok = match (new_provider.as_deref(), ar.as_deref()) {
+                (Some(want), Some(r)) if !r.is_empty() => r == want || r == format!("hub-{want}"),
+                (None, Some(r)) => !r.is_empty(),
+                _ => false,
+            };
             let mut mismatch: Option<String> = None;
             if let Some(want) = new_provider.as_deref() {
                 if ap.as_deref() != Some(want) {
@@ -958,6 +988,7 @@ impl Sessions {
                 "the reopened session could not be persisted: {e}"
             )));
         }
+        self.quarantined.lock().await.remove(id);
         let view = self.view(&row);
         self.bus.publish("session.reopened", serde_json::json!({ "session": view, "reopened": true }));
         Ok(view)
@@ -1311,6 +1342,13 @@ impl Sessions {
         }
         let intent = format!("turn:{}", text);
 
+        // A quarantined session (an adapter in an unknown configuration) accepts no
+        // turn, whatever the durable row says.
+        if self.quarantined.lock().await.contains(session_id) {
+            return Err(SessionError::Validation(
+                "the session's configuration is unresolved (needs repair); reopen it before sending a turn".into(),
+            ));
+        }
         // Admit the turn: identity AND busy are ONE atomic decision. A refused
         // admission leaves no `admitted` row (TASK-048 P1).
         let turn_id = new_id("t");
@@ -1347,37 +1385,23 @@ impl Sessions {
             self.settle_turn(&turn_id, "failed", Some("the session has no running process")).await;
             return;
         }
-        // Dispatch is a single decision with the cancel intent: if the turn is
-        // already terminal (a cancel settled it) or was cancelled before the
-        // prompt was sent, do NOT dispatch - a prompt sent for a cancelled turn is
-        // exactly the race that used to leave an unconfirmed stop (TASK-048 F4).
-        let already_cancelled = self.cancelled.lock().await.contains(&turn_id);
-        if already_cancelled {
-            self.settle_turn(&turn_id, "cancelled", None).await;
-            return;
-        }
-        // `running` is a NON-terminal move: if a terminal was already committed
-        // (a cancel raced us) the guarded update is a no-op, and `false` means the
-        // turn was settled - do not dispatch.
-        if !self.db.set_turn_state(&turn_id, "running").unwrap_or(false) {
+        // DISPATCH is an atomic DB claim: `admitted` -> `running`, only if still
+        // `admitted`. A cancel (which sets `cancelling` from `admitted`/`running`)
+        // and this claim are mutually exclusive on the SAME row, so exactly one
+        // wins and there is no window where a cancelled turn still dispatches
+        // (TASK-048 F4). If we did not win, the turn is cancelled/terminal: settle
+        // without sending.
+        if !self.db.claim_running(&turn_id).unwrap_or(false) {
+            let cur = self.db.turn(&turn_id).ok().flatten();
+            if cur.as_ref().map(|t| t.state.as_str()) == Some("cancelling") {
+                self.settle_turn(&turn_id, "cancelled", None).await;
+            }
             return;
         }
         self.bus.publish(
             "turn.running",
             serde_json::json!({ "turn": { "state": "running" }, "sessionId": session_id, "turnId": turn_id }),
         );
-        // The DISPATCH gate: right before sending the prompt, re-read BOTH the
-        // durable turn state (a cancel writes `cancelling`) and the in-memory cancel
-        // set. If a cancel landed between the `running` commit and here, do NOT
-        // send - the turn is cancelled, not dispatched (TASK-048 F4).
-        {
-            let cur = self.db.turn(&turn_id).ok().flatten().map(|t| t.state).unwrap_or_default();
-            let cancelled = self.cancelled.lock().await.contains(&turn_id);
-            if cancelled || cur == "cancelling" {
-                self.settle_turn(&turn_id, "cancelled", None).await;
-                return;
-            }
-        }
         let params = serde_json::json!({
             "sid": session_id,
             "message": text,
@@ -1484,11 +1508,35 @@ impl Sessions {
         for (turn_id, session_id, state) in
             self.db.unconfirmed_turns_older_than(cancel_secs, running_secs)?
         {
-            // A cancel that was delivered but never confirmed, or a prompt that
-            // never returned while its adapter may still be alive: neither can hold
-            // the execution occupancy forever. STOP the adapter (a performed action)
-            // and settle `interrupted`.
-            let _ = self.runtime.stop(&session_id).await;
+            // Serialize against admission/dispatch and RE-CHECK the target: the sweep
+            // saw a row in an earlier query, and the turn may have finished and a NEW
+            // turn may have started. Stopping by a stale snapshot could kill the new
+            // turn's process (TASK-048 F4).
+            let lock = self.lock_for(&session_id).await;
+            let _guard = lock.lock().await;
+            // The OLD turn must still be the ACTIVE one, still non-terminal, and
+            // still in the state the query saw.
+            let still_active = self
+                .db
+                .active_turn(&session_id)?
+                .map(|t| t.id == turn_id && t.ended.is_none() && t.state == state)
+                .unwrap_or(false);
+            if !still_active {
+                continue;
+            }
+            // STOP the adapter and require the stop to be CONFIRMED before releasing
+            // the occupancy: an unconfirmed stop must not let a new turn run on a
+            // live adapter (TASK-048 F4).
+            if self.runtime.stop(&session_id).await.is_err() {
+                // Could not confirm the stop: KEEP the occupancy (do not settle) and
+                // try again next tick. The session stays blocked for new turns
+                // because the turn is still open (busy).
+                tracing::warn!(session = %session_id, turn = %turn_id, "cancel/execution timeout could not stop the adapter; keeping the turn held");
+                continue;
+            }
+            // The adapter is gone: the session needs a repair before reuse. Mark it
+            // so no prompt runs against a stopped process.
+            self.quarantined.lock().await.insert(session_id.clone());
             let cause = if state == "cancelling" {
                 "the cancel was not confirmed within the timeout"
             } else {

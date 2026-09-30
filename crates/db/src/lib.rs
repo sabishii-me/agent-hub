@@ -18,7 +18,7 @@ pub mod sessions;
 
 pub use recovery::{install, recover, Layout, RecoveryOutcome};
 pub use connections::ConnectionRow;
-pub use providers::ProviderRow;
+pub use providers::{PendingOp, ProviderRow};
 pub use sessions::{ReserveOutcome, SessionRow, TurnAdmission, TurnRow};
 
 /// The externally visible state of a plugin (mirrors the contract's `plugin.state`).

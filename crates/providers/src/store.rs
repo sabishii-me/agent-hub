@@ -57,9 +57,18 @@ impl ProviderStore {
     }
 
     /// Record an in-flight credential transition (see `db::providers`). Returns
-    /// the op id; it REFUSES when an unresolved transition already exists.
-    pub fn begin_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<String, StoreError> {
-        match self.db.begin_provider_op(provider, op, secret_ref) {
+    /// the op id; it REFUSES when an unresolved transition already exists. It also
+    /// records the ROW STATE the operation intends to write, so recovery can tell a
+    /// completed write from a mismatched one.
+    pub fn begin_op(
+        &self,
+        provider: &str,
+        op: &str,
+        secret_ref: &str,
+        expected_incarnation: &str,
+        expected_revision: u64,
+    ) -> Result<String, StoreError> {
+        match self.db.begin_provider_op(provider, op, secret_ref, expected_incarnation, expected_revision) {
             Ok(id) => Ok(id),
             Err(agent_hub_db::DbError::Conflict(m)) => Err(StoreError::Pending(m)),
             Err(e) => Err(StoreError::Db(e)),
@@ -77,9 +86,8 @@ impl ProviderStore {
         Ok(())
     }
 
-    /// In-flight credential transitions (for the boot sweep), as
-    /// `(id, provider, op, secret_ref)`.
-    pub fn pending_ops(&self) -> Result<Vec<(String, String, String, String)>, StoreError> {
+    /// In-flight credential transitions (for the boot sweep).
+    pub fn pending_ops(&self) -> Result<Vec<agent_hub_db::PendingOp>, StoreError> {
         Ok(self.db.pending_provider_ops()?)
     }
 

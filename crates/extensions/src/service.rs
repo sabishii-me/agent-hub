@@ -61,10 +61,15 @@ pub fn install_for_harness(
         }
     }
 
-    let target = agents_root.join(harness_id).join("extensions");
-    // Replace the installed set so a removed extension is gone from the next run.
-    std::fs::remove_dir_all(&target).ok();
-    std::fs::create_dir_all(&target)?;
+    let base = agents_root.join(harness_id);
+    std::fs::create_dir_all(&base)?;
+    let target = base.join("extensions");
+    // Build the NEW set in a temp sibling, then RENAME it into place: a reader (a
+    // starting adapter) sees either the old complete tree or the new complete tree,
+    // never a half-copied one (TASK-048 N4). The rename is atomic on one volume.
+    let staging = base.join(format!(".extensions.staging-{}", std::process::id()));
+    std::fs::remove_dir_all(&staging).ok();
+    std::fs::create_dir_all(&staging)?;
     for want in selected {
         let src = &shipped.iter().find(|(id, _)| id == want).unwrap().1;
         if !src.exists() {
@@ -72,11 +77,29 @@ pub fn install_for_harness(
             // component, not an installed one. An empty marker (an earlier
             // version) would make a missing approval extension look installed
             // (TASK-048 F07). Fail loudly; never fabricate a placement.
+            std::fs::remove_dir_all(&staging).ok();
             return Err(ExtensionError::SourceMissing(want.clone(), src.display().to_string()));
         }
-        copy_tree(src, &target.join(want))?;
+        copy_tree(src, &staging.join(want))?;
     }
-    Ok(target)
+    // Swap: move the current tree aside, move the new one in, then drop the aside.
+    let previous = base.join(format!(".extensions.old-{}", std::process::id()));
+    std::fs::remove_dir_all(&previous).ok();
+    if target.exists() {
+        std::fs::rename(&target, &previous)?;
+    }
+    match std::fs::rename(&staging, &target) {
+        Ok(()) => {
+            std::fs::remove_dir_all(&previous).ok();
+            Ok(target)
+        }
+        Err(e) => {
+            // Put the old tree back so the harness keeps a usable set.
+            let _ = std::fs::rename(&previous, &target);
+            std::fs::remove_dir_all(&staging).ok();
+            Err(ExtensionError::Io(e))
+        }
+    }
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), ExtensionError> {

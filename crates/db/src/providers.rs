@@ -179,9 +179,26 @@ CREATE TABLE IF NOT EXISTS provider_ops (
   provider   TEXT NOT NULL,
   op         TEXT NOT NULL,
   secret_ref TEXT,
+  expected_incarnation TEXT,
+  expected_revision    INTEGER,
   created_at TEXT NOT NULL
 );
 "#;
+
+    /// A pending credential transition, with the ROW STATE the operation intended
+    /// to write (`expected_incarnation`/`expected_revision`). Recovery may only
+    /// "confirm" the credential when the row STILL matches that intent; a row that
+    /// changed under a failed write must NOT be blessed with the new credential.
+    #[derive(Debug, Clone)]
+    pub struct PendingOp {
+        pub id: String,
+        pub provider: String,
+        pub op: String,
+        pub secret_ref: String,
+        pub expected_incarnation: Option<String>,
+        pub expected_revision: Option<u64>,
+    }
+
 
 impl crate::Db {
     /// Record an in-flight credential transition. It REFUSES (Conflict) when a
@@ -190,7 +207,14 @@ impl crate::Db {
     /// pending op first (boot sweep or an explicit resolution), then begins.
     ///
     /// The insert and the duplicate check are one transaction.
-    pub fn begin_provider_op(&self, provider: &str, op: &str, secret_ref: &str) -> Result<String, DbError> {
+    pub fn begin_provider_op(
+        &self,
+        provider: &str,
+        op: &str,
+        secret_ref: &str,
+        expected_incarnation: &str,
+        expected_revision: u64,
+    ) -> Result<String, DbError> {
         let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction()?;
         let existing: Option<String> = tx
@@ -207,8 +231,8 @@ impl crate::Db {
         }
         let id = format!("{provider}:{op}");
         tx.execute(
-            "INSERT INTO provider_ops (id, provider, op, secret_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, provider, op, secret_ref, crate::now_utc()],
+            "INSERT INTO provider_ops (id, provider, op, secret_ref, expected_incarnation, expected_revision, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, provider, op, secret_ref, expected_incarnation, expected_revision as i64, crate::now_utc()],
         )?;
         tx.commit()?;
         Ok(id)
@@ -233,14 +257,23 @@ impl crate::Db {
         Ok(n > 0)
     }
 
-    /// Every in-flight credential transition (for the boot sweep), as
-    /// `(id, provider, op, secret_ref)` so the sweep can finish the EXACT op it
-    /// resolved.
-    pub fn pending_provider_ops(&self) -> Result<Vec<(String, String, String, String)>, DbError> {
+    /// Every in-flight credential transition (for the boot sweep).
+    pub fn pending_provider_ops(&self) -> Result<Vec<PendingOp>, DbError> {
         let conn = self.lock();
-        let mut stmt = conn.prepare("SELECT id, provider, op, secret_ref FROM provider_ops")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, provider, op, secret_ref, expected_incarnation, expected_revision FROM provider_ops",
+        )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .query_map([], |r| {
+                Ok(PendingOp {
+                    id: r.get(0)?,
+                    provider: r.get(1)?,
+                    op: r.get(2)?,
+                    secret_ref: r.get(3)?,
+                    expected_incarnation: r.get(4)?,
+                    expected_revision: r.get::<_, Option<i64>>(5)?.map(|v| v as u64),
+                })
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -254,10 +287,11 @@ mod op_journal_tests {
     #[test]
     fn a_pending_op_is_visible_and_cleared_by_its_id() {
         let db = Db::open_in_memory().unwrap();
-        let id = db.begin_provider_op("p1", "create", "ns:provider-p1").unwrap();
+        let id = db.begin_provider_op("p1", "create", "ns:provider-p1", "inc1", 1).unwrap();
         let pending = db.pending_provider_ops().unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].1, "p1");
+        assert_eq!(pending[0].provider, "p1");
+        assert_eq!(pending[0].expected_incarnation.as_deref(), Some("inc1"));
         db.finish_provider_op_id(&id).unwrap();
         assert!(db.pending_provider_ops().unwrap().is_empty());
     }
@@ -267,14 +301,14 @@ mod op_journal_tests {
     #[test]
     fn a_second_op_is_refused_while_one_is_pending() {
         let db = Db::open_in_memory().unwrap();
-        db.begin_provider_op("p1", "create", "r1").unwrap();
+        db.begin_provider_op("p1", "create", "r1", "inc", 1).unwrap();
         assert!(matches!(
-            db.begin_provider_op("p1", "delete", "r1"),
+            db.begin_provider_op("p1", "delete", "r1", "inc", 1),
             Err(DbError::Conflict(_))
         ));
         let pending = db.pending_provider_ops().unwrap();
         assert_eq!(pending.len(), 1, "the unresolved op is not replaced");
-        assert_eq!(pending[0].2, "create");
+        assert_eq!(pending[0].op, "create");
     }
 }
 

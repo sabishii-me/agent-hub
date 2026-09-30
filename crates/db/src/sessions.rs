@@ -406,6 +406,19 @@ impl crate::Db {
         Ok(conn.query_row(&sql, params![session_id], Self::read_turn).optional()?)
     }
 
+    /// Atomically claim the DISPATCH of a turn: `admitted` -> `running`, and only
+    /// if the turn is STILL `admitted` (no cancel won the race) and non-terminal.
+    /// Returns true for the caller that won; a `cancelling`/terminal turn returns
+    /// false, so the winner is exactly one of dispatch or cancel (TASK-048 F4).
+    pub fn claim_running(&self, id: &str) -> Result<bool, DbError> {
+        let conn = self.lock();
+        let n = conn.execute(
+            "UPDATE turns SET state='running', running_at=?2 WHERE id=?1 AND state='admitted' AND ended IS NULL",
+            params![id, crate::now_utc()],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Move a turn to a **non-terminal** state (`running`, `cancelling`). This
     /// refuses (returns `false`) if the turn is already terminal, so a late
     /// lifecycle write can never resurrect a settled turn (the previous bug let a
@@ -415,8 +428,10 @@ impl crate::Db {
         // Entering `cancelling` records WHEN, so a core-side cancel timeout can see
         // an unconfirmed stop (TASK-048 F4).
         let n = if state == "cancelling" {
+            // A cancel wins over a not-yet-dispatched turn too (admitted), so it is
+            // an atomic alternative to claim_running (TASK-048 F4).
             conn.execute(
-                "UPDATE turns SET state = ?2, cancel_requested_at = ?3 WHERE id = ?1 AND ended IS NULL",
+                "UPDATE turns SET state = ?2, cancel_requested_at = ?3 WHERE id = ?1 AND ended IS NULL AND state IN ('admitted','running','cancelling')",
                 params![id, state, crate::now_utc()],
             )?
         } else if state == "running" {

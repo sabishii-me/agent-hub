@@ -179,6 +179,14 @@ impl Providers {
             incarnation: String::new(),
         }
         .with_defaults();
+        // 1b. An unresolved credential transition for this id blocks a REBUILD: a
+        //     create over a pending op would leave a row whose ownership the journal
+        //     still describes (TASK-048 F1).
+        if self.store.has_pending_op(&id)? {
+            return Err(ProviderError::RevisionConflict(format!(
+                "provider `{id}` has an unresolved credential transition; resolve it before creating"
+            )));
+        }
         // 2. the row first: a duplicate id is refused with no secret written.
         //    Re-read it: the database minted the incarnation our save is guarded by.
         record = self.store.create(&record)?;
@@ -188,7 +196,13 @@ impl Providers {
             // Record the transition BEFORE the credential write: a crash between
             // the two stores leaves a visible, recoverable marker. begin_op
             // REFUSES when an unresolved transition exists for this provider.
-            let op = self.store.begin_op(&id, "create", &self.secret_ref(&id))?;
+            let op = self.store.begin_op(
+                &id,
+                "create",
+                &self.secret_ref(&id),
+                &record.incarnation,
+                record.revision,
+            )?;
             if let Err(e) = self.secrets.set(&self.secret_ref(&id), t) {
                 // Roll back the row so a failed credential does not leave a
                 // half-created provider. If the rollback ITSELF fails, the error
@@ -258,7 +272,7 @@ impl Providers {
                     if !self.secrets.is_available() {
                         return Err(ProviderError::NoSecretStore);
                     }
-                    op = Some(self.store.begin_op(id, "patch", &reference)?);
+                    op = Some(self.store.begin_op(id, "patch", &reference, &rec.incarnation, rec.revision)?);
                     self.secrets
                         .set(&reference, &t)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
@@ -266,7 +280,7 @@ impl Providers {
                     bump = true;
                 }
                 None => {
-                    op = Some(self.store.begin_op(id, "patch", &reference)?);
+                    op = Some(self.store.begin_op(id, "patch", &reference, &rec.incarnation, rec.revision)?);
                     self.secrets
                         .delete(&reference)
                         .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
@@ -310,7 +324,7 @@ impl Providers {
         // boot sweep finishes the row deletion (no orphan credential).
         let row = self.store.get(id)?;
         let reference = row.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
-        let op = self.store.begin_op(id, "delete", &reference)?;
+        let op = self.store.begin_op(id, "delete", &reference, &row.incarnation, row.revision)?;
         self.secrets
             .delete(&reference)
             .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
@@ -325,7 +339,7 @@ impl Providers {
         let _guard = lock.lock().await;
         let mut rec = self.store.get(id)?;
         let reference = rec.secret_ref.clone().unwrap_or_else(|| self.secret_ref(id));
-        let op = self.store.begin_op(id, "logout", &reference)?;
+        let op = self.store.begin_op(id, "logout", &reference, &rec.incarnation, rec.revision)?;
         self.secrets
             .delete(&reference)
             .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
@@ -448,26 +462,30 @@ impl Providers {
                 return;
             }
         };
-        for (op_id, provider, op, secret_ref) in pending {
-            match self.recover_one(&provider, &op, &secret_ref) {
+        for p in pending {
+            match self.recover_one(&p) {
                 Ok(()) => {
-                    if let Err(e) = self.store.finish_op(&op_id) {
-                        tracing::warn!(provider, error = %e, "recovery finished but the journal entry could not be cleared");
+                    if let Err(e) = self.store.finish_op(&p.id) {
+                        tracing::warn!(provider = %p.provider, error = %e, "recovery finished but the journal entry could not be cleared");
                     }
                 }
                 Err(e) => {
                     // Keep the entry: the state is still unresolved and must stay
                     // visible for the next boot. Never clear the journal on a
                     // failure.
-                    tracing::warn!(provider, op, error = %e, "provider recovery deferred (journal kept)");
+                    tracing::warn!(provider = %p.provider, op = %p.op, error = %e, "provider recovery deferred (journal kept)");
                 }
             }
         }
     }
 
     /// Resolve ONE journal entry. `Ok` means every necessary step was confirmed;
-    /// any error leaves the entry in place.
-    fn recover_one(&self, provider: &str, op: &str, secret_ref: &str) -> Result<(), ProviderError> {
+    /// any error leaves the entry in place. It may only CONFIRM a credential when
+    /// the row STILL matches the state the operation intended to write; a row that
+    /// changed under a failed write must not be handed a mismatched credential
+    /// (TASK-048 F1).
+    fn recover_one(&self, p: &agent_hub_db::PendingOp) -> Result<(), ProviderError> {
+        let (provider, op, secret_ref) = (p.provider.as_str(), p.op.as_str(), p.secret_ref.as_str());
         if op == "delete" {
             // The row is the source of truth after a delete: remove the credential
             // (a missing one is fine), then the row (a missing one is fine).
@@ -494,11 +512,38 @@ impl Providers {
                 Err(StoreError::NotFound(_)) => None,
                 Err(e) => return Err(ProviderError::Store(e)),
             };
+            // Did the row land EXACTLY as the operation intended? Only then may we
+            // bless the credential with this row.
+            let intent_matches = |r: &ProviderRecord| {
+                Some(r.incarnation.as_str()) == p.expected_incarnation.as_deref()
+                    && Some(r.revision) == p.expected_revision
+            };
             match row {
-                Some(mut r) => {
-                    // The row exists: make its ownership match reality.
+                Some(mut r) if intent_matches(&r) => {
+                    // The row is the one the operation wrote (or a save that did not
+                    // land, so the row is unchanged and its reference is authoritative).
                     r.secret_ref = if has { Some(secret_ref.to_string()) } else { None };
                     self.store.save(&r)?;
+                    Ok(())
+                }
+                Some(mut r) => {
+                    // The row CHANGED under the failed operation (a URL/token patch
+                    // that did not persist, a rebuild). We must NOT attach the new
+                    // credential to a row it was not intended for: drop the
+                    // credential and leave the row pointing at whatever it owns.
+                    tracing::warn!(
+                        provider,
+                        "a credential transition did not land on its intended row; dropping the credential rather than mispairing it"
+                    );
+                    if has {
+                        self.secrets
+                            .delete(secret_ref)
+                            .map_err(|e| ProviderError::SecretUnreadable(e.to_string()))?;
+                    }
+                    if r.secret_ref.as_deref() == Some(secret_ref) {
+                        r.secret_ref = None;
+                        self.store.save(&r)?;
+                    }
                     Ok(())
                 }
                 None if has => {
@@ -592,7 +637,7 @@ mod recovery_tests {
         // An unavailable secret store: every read/write errors.
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe_unavailable_for_test());
         let p = Providers::new(store, secrets, "test-instance");
-        p.store.begin_op("p1", "create", "test-instance:provider-p1").unwrap();
+        p.store.begin_op("p1", "create", "test-instance:provider-p1", "inc", 1).unwrap();
         p.recover_pending();
         // The entry is still there: the failure kept it for retry.
         let pending = p.store.pending_ops().unwrap();
@@ -626,7 +671,7 @@ mod recovery_tests {
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe_unavailable_for_test());
         let p = Providers::new(store, secrets, "test-instance");
         p.store.create(&arecord("p1", Some("https://x.test"))).unwrap();
-        p.store.begin_op("p1", "patch", "test-instance:provider-p1").unwrap();
+        p.store.begin_op("p1", "patch", "test-instance:provider-p1", "inc", 1).unwrap();
         let e = p.resolve_grant("p1").await;
         assert!(matches!(e, Err(ProviderError::RevisionConflict(_))));
     }
