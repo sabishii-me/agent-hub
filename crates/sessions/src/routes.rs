@@ -14,7 +14,8 @@ use axum::{Json, Router};
 use agent_hub_transport::{Accepted, DomainError, ErrorRenderer, RouteTable};
 
 use crate::service::{
-    CreateOutcome, CreateSession, PatchSession, SessionError, Sessions, TurnOutcome, TurnRequest,
+    CompactRequest, CreateOutcome, CreateSession, ForkRequest, PatchSession, SessionError, Sessions,
+    TurnOutcome, TurnRequest,
 };
 
 #[derive(Clone)]
@@ -45,8 +46,8 @@ fn table() -> RouteTable<SessionsState> {
         .post("/v1/sessions/{id}/cancel", cancel_turn)
         .post("/v1/sessions/{id}/close", close)
         .post("/v1/sessions/{id}/reopen", reopen)
-        .post("/v1/sessions/{id}/fork", not_implemented)
-        .post("/v1/sessions/{id}/compact", not_implemented)
+        .post("/v1/sessions/{id}/fork", fork)
+        .post("/v1/sessions/{id}/compact", compact)
         .get("/v1/sessions/{id}/messages", messages)
         .get("/v1/sessions/{id}/stats", stats)
         .get("/v1/sessions/{id}/skills", session_skills)
@@ -131,6 +132,39 @@ async fn session_skills(State(s): State<SessionsState>, AxumPath(id): AxumPath<S
                 "skills": skills
             }))
             .into_response()
+        }
+        Err(e) => err(&s, e),
+    }
+}
+
+/// POST /v1/sessions/{id}/compact - ask the harness to compact its own
+/// conversation. The hub reports the harness's own result (nothing is computed
+/// here).
+async fn compact(
+    State(s): State<SessionsState>,
+    AxumPath(id): AxumPath<String>,
+    body: Option<Json<CompactRequest>>,
+) -> Response {
+    let req = body.map(|Json(r)| r).unwrap_or_default();
+    let sessions = s.sessions.clone();
+    match sessions.compact(&id, req).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(&s, e),
+    }
+}
+
+/// POST /v1/sessions/{id}/fork - start a NEW session whose conversation ends at a
+/// completed turn of this one (the source is untouched).
+async fn fork(
+    State(s): State<SessionsState>,
+    AxumPath(id): AxumPath<String>,
+    body: Option<Json<ForkRequest>>,
+) -> Response {
+    let req = body.map(|Json(r)| r).unwrap_or_default();
+    let sessions = s.sessions.clone();
+    match sessions.fork(&id, req).await {
+        Ok((session, forked_from)) => {
+            Json(serde_json::json!({ "session": session, "forkedFrom": forked_from })).into_response()
         }
         Err(e) => err(&s, e),
     }

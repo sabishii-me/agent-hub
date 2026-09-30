@@ -71,6 +71,14 @@ impl SessionProcess {
     }
 }
 
+/// A fork source: the source session's native ref and an optional 1-based
+/// completed-turn anchor.
+#[derive(Debug, Clone)]
+pub struct ForkFrom {
+    pub source_ref: String,
+    pub through_turn: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StartSpec {
     pub sid: String,
@@ -93,6 +101,11 @@ pub struct StartSpec {
     pub resume: Option<String>,
     /// The `config/set` payload (may be `{}`).
     pub config: Value,
+    /// When set, the process is spawned as a FORK of another session: the first
+    /// request is `session/fork {sid, from, throughTurn}` instead of
+    /// `session/start`. `from` is the SOURCE's native ref; the returned ref becomes
+    /// THIS session's own ref (the source is untouched).
+    pub fork_from: Option<ForkFrom>,
     /// The preset that was requested (confirmed against `applied.preset`).
     pub requested_preset_id: Option<String>,
     /// The plan mode requested (confirmed against `applied.plan`), if any.
@@ -154,14 +167,27 @@ impl Sessions {
         let mut bus = AgentBus::spawn(&spec.command, &spec.plugin_dir, &env)
             .map_err(|e| StartError::Spawn(e.to_string()))?;
 
-        // session/start
-        let mut params = json!({ "sid": spec.sid });
-        if let Some(r) = &spec.resume {
-            params["resume"] = json!(r);
-        }
+        // The FIRST request: `session/fork` for a fork (this process becomes the
+        // child conversation), else `session/start` (open or resume).
+        let (method, params) = match &spec.fork_from {
+            Some(f) => {
+                let mut p = json!({ "sid": spec.sid, "from": f.source_ref });
+                if let Some(n) = f.through_turn {
+                    p["throughTurn"] = json!(n);
+                }
+                ("session/fork", p)
+            }
+            None => {
+                let mut p = json!({ "sid": spec.sid });
+                if let Some(r) = &spec.resume {
+                    p["resume"] = json!(r);
+                }
+                ("session/start", p)
+            }
+        };
         let started = bus
             .requests
-            .request("session/start", params)
+            .request(method, params)
             .await
             .map_err(|e| StartError::Protocol(e.to_string()))?;
         let native_ref = match started.get("ref").and_then(Value::as_str) {

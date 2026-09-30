@@ -619,7 +619,10 @@ follows distinguishes a real, narrow component fact from a product capability.
   an idle turn (`409 session_busy`), a title is renamed IN the harness, and a switch
   runs the same resolver -> grant -> `config/set` -> applied-confirmation path. `messages`/`stats`/`skills` are
   now real read-through views (a read starts the process if needed, caches nothing).
-  Still `501`: `fork`, `compact`, `artifacts`, `repair`, `resources`.
+  `compact` and `fork` are
+  now real (`compact` reports the harness's own result; `fork` starts a new session
+  from a completed-turn anchor, source untouched). Still `501`: `artifacts`, `repair`,
+  `resources`.
 
 - **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
   identity is the body `idempotencyKey`, reserved **durably** by the UNIQUE
@@ -809,7 +812,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) - 40
+### Real (mounted, real handler) - 42
 
 ```
 DELETE /v1/model-providers/{id}
@@ -849,12 +852,14 @@ POST /v1/sessions
 POST /v1/sessions/{id}/approvals/{aid}
 POST /v1/sessions/{id}/cancel
 POST /v1/sessions/{id}/close
+POST /v1/sessions/{id}/compact
+POST /v1/sessions/{id}/fork
 POST /v1/sessions/{id}/questions/{qid}
 POST /v1/sessions/{id}/reopen
 POST /v1/sessions/{id}/turns
 ```
 
-### Mounted but `501` - 11
+### Mounted but `501` - 9
 
 ```
 GET /v1/model-providers/types
@@ -864,8 +869,6 @@ GET /v1/sessions/{id}/resources
 PATCH /v1/model-providers/{id}/models
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel
-POST /v1/sessions/{id}/compact
-POST /v1/sessions/{id}/fork
 POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```

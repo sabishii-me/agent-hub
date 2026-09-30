@@ -489,6 +489,7 @@ impl Sessions {
             presets_dir: harness.presets_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: None,
+            fork_from: None,
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),
@@ -846,6 +847,7 @@ impl Sessions {
             presets_dir: harness.presets_dir.clone(),
             runtime_argv: harness.runtime_argv.clone(),
             resume: row.native_ref.clone(),
+            fork_from: None,
             config,
             grant,
             requested_preset_id: row.preset_id.clone(),
@@ -878,6 +880,163 @@ impl Sessions {
         let view = self.view(&row);
         self.bus.publish("session.reopened", serde_json::json!({ "session": view, "reopened": true }));
         Ok(view)
+    }
+
+    /// Fork: start a NEW session whose conversation ends at a completed turn of
+    /// this one (or the whole conversation when `afterTurnId` is absent). The
+    /// source is NOT changed - same log, same ref, still usable, and it does not
+    /// even need a live process. The child is a real session with its own process.
+    pub async fn fork(
+        self: Arc<Self>,
+        source_id: &str,
+        req: ForkRequest,
+    ) -> Result<(SessionView, serde_json::Value), SessionError> {
+        let source = self
+            .db
+            .session(source_id)?
+            .ok_or_else(|| SessionError::NotFound(source_id.into()))?;
+        let source_ref = source.native_ref.clone().ok_or_else(|| {
+            SessionError::Validation("the source session has no native ref to fork from".into())
+        })?;
+        let through = match &req.after_turn_id {
+            None => None,
+            Some(tid) => {
+                let turns = self.db.list_turns(source_id)?;
+                let mut n = 0u32;
+                let mut found = false;
+                for t in &turns {
+                    if t.ended.as_deref() == Some("completed") {
+                        n += 1;
+                        if &t.id == tid {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if !found {
+                    return Err(SessionError::Validation(format!(
+                        "`{tid}` is not a completed turn of this session"
+                    )));
+                }
+                Some(n)
+            }
+        };
+        let child_id = new_id("s");
+        let cwd = self.data_dir.join("sessions").join(&child_id);
+        std::fs::create_dir_all(&cwd)?;
+        let now = now_utc();
+        let mut row = SessionRow {
+            id: child_id.clone(),
+            harness_id: source.harness_id.clone(),
+            model_provider_id: source.model_provider_id.clone(),
+            model_id: source.model_id.clone(),
+            applied_model: None,
+            applied_provider: None,
+            applied_route: None,
+            preset_id: source.preset_id.clone(),
+            applied_preset: None,
+            plan: source.plan,
+            review: source.review,
+            applied_plan: None,
+            applied_review: None,
+            cwd: Some(cwd.to_string_lossy().to_string()),
+            title: None,
+            status: "starting".into(),
+            created_at: now.clone(),
+            updated_at: now,
+            deleted: false,
+            forked_from_session: Some(source_id.to_string()),
+            forked_from_turn: req.after_turn_id.clone(),
+            native_ref: None,
+            start_error: None,
+        };
+        self.db.insert_session(&row)?;
+        let lock = self.lock_for(&child_id).await;
+        let _guard = lock.lock().await;
+        let harness = {
+            let this = self.clone();
+            let harness_id = row.harness_id.clone();
+            tokio::task::spawn_blocking(move || this.harness(&harness_id))
+                .await
+                .map_err(|e| SessionError::Start(format!("placement task failed: {e}")))??
+        };
+        let (grant, config) = self.resolve_grant(
+            row.model_provider_id.as_deref(),
+            row.model_id.as_deref(),
+            row.preset_id.as_deref(),
+            row.plan,
+            row.review,
+        )?;
+        let spec = StartSpec {
+            sid: child_id.clone(),
+            harness_id: harness.id.clone(),
+            command: harness.command.clone(),
+            plugin_dir: harness.plugin_dir.clone(),
+            cwd: PathBuf::from(row.cwd.clone().unwrap_or_default()),
+            harness_dir: harness.harness_dir.clone(),
+            skills_dir: harness.skills_dir.clone(),
+            extensions_dir: harness.extensions_dir.clone(),
+            presets_dir: harness.presets_dir.clone(),
+            runtime_argv: harness.runtime_argv.clone(),
+            resume: None,
+            fork_from: Some(crate::runtime::ForkFrom { source_ref, through_turn: through }),
+            config,
+            grant,
+            requested_preset_id: row.preset_id.clone(),
+            requested_plan: row.plan,
+            requested_review: row.review,
+        };
+        let process = match self.runtime.start(spec).await {
+            Ok(p) => p,
+            Err(e) => {
+                row.status = "starting_failed".into();
+                row.start_error = Some(e.to_string());
+                row.updated_at = now_utc();
+                let _ = self.db.update_session(&row);
+                return Err(SessionError::Start(e.to_string()));
+            }
+        };
+        row.status = "active".into();
+        row.native_ref = Some(process.native_ref.clone());
+        row.applied_model = process.applied_model.clone();
+        row.applied_provider = process.applied_provider.clone();
+        row.applied_route = process.applied_route.clone();
+        row.applied_preset = process.applied_preset.clone();
+        row.applied_plan = process.applied_plan;
+        row.applied_review = process.applied_review;
+        row.updated_at = now_utc();
+        if let Err(e) = self.db.update_session(&row) {
+            let _ = self.runtime.stop(&child_id).await;
+            row.status = "needs-repair".into();
+            let _ = self.db.update_session(&row);
+            return Err(SessionError::Start(format!("the fork could not be persisted: {e}")));
+        }
+        let view = self.view(&row);
+        self.bus.publish("session.forked", serde_json::json!({ "session": view }));
+        let forked_from = serde_json::json!({
+            "sessionId": source_id,
+            "afterTurnId": req.after_turn_id,
+        });
+        Ok((view, forked_from))
+    }
+    /// Compact a session's own conversation. The hub does not compact anything and
+    /// computes no numbers: it asks the harness (starting the process if needed) and
+    /// reports what the harness says, tagged `source: harness`. A field the harness
+    /// does not report is ABSENT.
+    pub async fn compact(
+        self: Arc<Self>,
+        id: &str,
+        req: CompactRequest,
+    ) -> Result<serde_json::Value, SessionError> {
+        let mut params = serde_json::json!({});
+        if let Some(i) = &req.instructions {
+            params["instructions"] = serde_json::json!(i);
+        }
+        let v = self.clone().read_through(id, "session/compact", params).await?;
+        let mut body = v.as_object().cloned().unwrap_or_default();
+        body.insert("sessionId".into(), serde_json::json!(id));
+        body.insert("source".into(), serde_json::json!("harness"));
+        Ok(serde_json::Value::Object(body))
     }
 
     /// A READ-THROUGH capability call on a session: start its process if it is not
@@ -1000,6 +1159,20 @@ pub struct PatchSession {
     #[serde(rename = "thinkingLevel")]
     pub thinking_level: Option<String>,
     pub title: Option<String>,
+}
+
+/// The fork body: an optional 1-based completed-turn anchor. Absent = the whole
+/// conversation.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ForkRequest {
+    #[serde(rename = "afterTurnId")]
+    pub after_turn_id: Option<String>,
+}
+
+/// The compact body: optional instructions for the harness's own compaction.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct CompactRequest {
+    pub instructions: Option<String>,
 }
 
 /// What a PATCH returns: the session and an optional warning (an unconfirmed

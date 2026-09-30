@@ -115,3 +115,20 @@ All three are READ-THROUGH: a read starts the session's process if it is not run
 included) and caches nothing. Verified live: on a CLOSED (`readonly`) session, `GET
 /stats` started the process (status back to `active`) and answered from the harness.
 Real-hub gated test `read_through_routes_start_the_process_and_answer_from_the_harness`.
+
+## Compact and fork
+
+`POST .../compact` -> adapter `session/compact` (read-through): the hub computes no
+numbers; it reports the harness's own result tagged `source:"harness"`, and an empty
+session answers `{compacted:false, detail:"Nothing to compact"}` — honest, not a fake
+success.
+
+`POST .../fork` starts a NEW session whose conversation ends at a completed turn of
+the source (or the whole conversation when `afterTurnId` is absent). The child is a
+real session with its own process: the hub spawns it with `session/fork {sid, from,
+throughTurn?}` (the source's native ref) instead of `session/start`, then reuses the
+grant/config/applied-confirmation path. `afterTurnId` is resolved to the 1-based count
+of COMPLETED turns up to it; a non-completed turn is refused. The source is NOT
+changed (same log, same ref, still usable). Verified live: child `active` with its own
+ref, source still `active`, a bad `afterTurnId` -> `validation_failed`. Real-hub gated
+test `compact_and_fork_are_real`.
