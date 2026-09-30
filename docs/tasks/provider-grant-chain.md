@@ -38,3 +38,23 @@ The adapter reads `<plugin>/presets/` via `AGENT_HUB_PRESETS_DIR` (declared
 `presets` capability). Verified live: `presets/list` returns `standard` and
 `heavy-review`; a valid preset applies (`appliedPreset=standard`); an unknown preset
 is refused (`starting_failed`, adapter reason).
+
+## PATCH /v1/sessions/{id} (the next capability)
+
+Mid-session configuration. Serialized on the session lock with start/close/reopen
+and turn admission. Two classes of knob (owning contract):
+
+- **policy** (`plan`/`review`): allowed during a running turn; the adapter's
+  `applied.plan`/`applied.review` is confirmed before the row is updated.
+- **model/provider/preset/thinking**: require an idle turn (`409 session_busy` while
+  one runs). A provider switch runs the SAME path as create/reopen: resolver ->
+  `credentials/grant` -> `config/set`, with `applied.modelProviderId`/`applied.model`/
+  `applied.connectionId` confirmed and persisted. An unconfirmed `thinkingLevel` is
+  reported as null plus a warning, never the requested value.
+- **title**: renamed IN the harness (`session/rename`); the session reports the title
+  the harness ACCEPTED (a title the harness did not accept is an error).
+
+Verified live: title rename (`title=Renamed Via Patch`); `plan`/`review` ->
+`appliedPlan`/`appliedReview` true; a model change during a running turn ->
+`409 session_busy`; a plan change during a running turn -> `200`; an unknown session
+-> `unknown_session`. Real-hub gated test `a_session_patch_renames_and_sets_policy`.

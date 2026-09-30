@@ -353,6 +353,18 @@ impl Sessions {
             .map_err(|e| StartError::Protocol(e.to_string()))
     }
 
+    /// Deliver a credential grant to a session's live adapter (a mid-session
+    /// provider switch: `credentials/grant` precedes `config/set`).
+    pub async fn grant(&self, sid: &str, grant: &Grant) -> Result<(), StartError> {
+        let params = json!({
+            "connectionId": grant.connection_id,
+            "value": grant.value,
+            "url": grant.url,
+            "declarations": grant.declarations,
+        });
+        self.request(sid, "credentials/grant", params).await.map(|_| ())
+    }
+
     /// Whether a process is running for this session.
     pub fn is_running(&self, sid: &str) -> bool {
         self.running.lock().expect("running").contains_key(sid)

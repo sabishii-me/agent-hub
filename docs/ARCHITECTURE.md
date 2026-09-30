@@ -614,8 +614,11 @@ follows distinguishes a real, narrow component fact from a product capability.
   (resolved through an injected resolver -> `credentials/grant` -> `config/set`, with the adapter's
   `applied` identity CONFIRMED and persisted), `presetId` (confirmed against `applied.preset`),
   and `plan`/`review` (confirmed against `applied.plan`/`applied.review`). `null` plan/review means
-  "do not intervene". Still unavailable and answering `501`: `PATCH /v1/sessions/{id}` (mid-session
-  switching), `fork`, `compact`, `messages`, `stats`, `skills` (read-through), `artifacts`,
+  "do not intervene". `PATCH /v1/sessions/{id}` is now real: policy knobs
+  (`plan`/`review`) apply during a running turn, model/provider/preset/thinking require
+  an idle turn (`409 session_busy`), a title is renamed IN the harness, and a switch
+  runs the same resolver -> grant -> `config/set` -> applied-confirmation path. Still
+  `501`: `fork`, `compact`, `messages`, `stats`, `skills` (read-through), `artifacts`,
   `repair`, `resources`.
 
 - **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
@@ -806,7 +809,7 @@ Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables
 Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
 logs the count and refuses to START only if the hub serves a route the contract does not declare.
 
-### Real (mounted, real handler) — 36
+### Real (mounted, real handler) - 37
 
 ```
 DELETE /v1/model-providers/{id}
@@ -833,6 +836,7 @@ GET /v1/sessions/{id}/turns
 GET /v1/skills
 GET /v1/status
 PATCH /v1/model-providers/{id}
+PATCH /v1/sessions/{id}
 POST /v1/model-providers
 POST /v1/model-providers/{id}/logout
 POST /v1/model-providers/{id}/models/refresh
@@ -847,7 +851,7 @@ POST /v1/sessions/{id}/reopen
 POST /v1/sessions/{id}/turns
 ```
 
-### Mounted but `501` — 15
+### Mounted but `501` - 14
 
 ```
 GET /v1/model-providers/types
@@ -858,7 +862,6 @@ GET /v1/sessions/{id}/resources
 GET /v1/sessions/{id}/skills
 GET /v1/sessions/{id}/stats
 PATCH /v1/model-providers/{id}/models
-PATCH /v1/sessions/{id}
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel
 POST /v1/sessions/{id}/compact
@@ -867,7 +870,7 @@ POST /v1/sessions/{id}/repair
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted — 23
+### Not mounted - 23
 
 ```
 DELETE /v1/connections/{id}

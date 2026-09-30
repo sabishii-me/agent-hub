@@ -34,6 +34,8 @@ pub enum SessionError {
     Start(String),
     #[error("the abort could not be delivered: {0}")]
     AbortFailed(String),
+    #[error("the session has a running turn; this change requires an idle turn")]
+    Busy,
     /// A provider resolution failure with its OWN contract code (e.g.
     /// `provider_unauthorized`), so the identity survives to the response
     /// (TASK-048 F5).
@@ -65,6 +67,7 @@ impl SessionError {
             SessionError::Validation(_) => "validation_failed",
             SessionError::Unsupported(_) => "unsupported",
             SessionError::AbortFailed(_) => "abort_failed",
+            SessionError::Busy => "session_busy",
             SessionError::Provider { code, .. } => {
                 // A leaked &'static is fine here: the codes are a closed set.
                 match code.as_str() {
@@ -623,6 +626,168 @@ impl Sessions {
         Ok(self.view(&row))
     }
 
+    /// PATCH: change session configuration. Serialized with start/close/reopen and
+    /// turn admission on the session lock, so a config change never races a turn.
+    ///
+    /// The knobs fall into two classes (owning contract):
+    /// * **policy** (`plan`/`review`) may apply during a running turn;
+    /// * **model/provider/preset/thinking** require an IDLE turn (`409 session_busy`
+    ///   while one runs).
+    ///
+    /// A change is only recorded when the adapter CONFIRMS it (`applied.*`); an
+    /// unconfirmed value is never written as if applied (the one exception the
+    /// contract names is `thinkingLevel`, reported as null plus a warning).
+    pub async fn patch_session(
+        self: Arc<Self>,
+        id: &str,
+        req: PatchSession,
+    ) -> Result<PatchOutcome, SessionError> {
+        let lock = self.lock_for(id).await;
+        let _guard = lock.lock().await;
+        let mut row = self.db.session(id)?.ok_or_else(|| SessionError::NotFound(id.into()))?;
+        if row.deleted {
+            return Err(SessionError::NotFound(id.into()));
+        }
+        let running = self.db.active_turn(id)?.is_some();
+        let wants_model_change = req.model_provider_id.is_some()
+            || req.model_id.is_some()
+            || req.preset_id.is_some()
+            || req.thinking_level.is_some();
+        if running && wants_model_change {
+            return Err(SessionError::Busy);
+        }
+        if !self.runtime.is_running(id) && (wants_model_change || req.title.is_some()) {
+            return Err(SessionError::Validation(
+                "the session is not running; reopen it before changing its configuration".into(),
+            ));
+        }
+
+        let mut warning: Option<String> = None;
+
+        // policy knobs: allowed during a running turn
+        if let Some(v) = req.plan {
+            let r = self
+                .runtime
+                .request(id, "config/set", serde_json::json!({ "sid": id, "config": { "plan": v } }))
+                .await
+                .map_err(|e| SessionError::Start(e.to_string()))?;
+            let applied = r.get("applied").and_then(|a| a.get("plan")).and_then(|p| p.as_bool());
+            if applied != Some(v) {
+                return Err(SessionError::Validation(format!("the adapter did not confirm plan={v}")));
+            }
+            row.plan = Some(v);
+            row.applied_plan = Some(v);
+        }
+        if let Some(v) = req.review {
+            let r = self
+                .runtime
+                .request(id, "config/set", serde_json::json!({ "sid": id, "config": { "review": v } }))
+                .await
+                .map_err(|e| SessionError::Start(e.to_string()))?;
+            let applied = r.get("applied").and_then(|a| a.get("review")).and_then(|p| p.as_bool());
+            if applied != Some(v) {
+                return Err(SessionError::Validation(format!("the adapter did not confirm review={v}")));
+            }
+            row.review = Some(v);
+            row.applied_review = Some(v);
+        }
+
+        // title: renamed IN the harness; the harness holds the accepted title
+        if let Some(t) = &req.title {
+            let r = self
+                .runtime
+                .request(id, "session/rename", serde_json::json!({ "sid": id, "title": t }))
+                .await
+                .map_err(|e| SessionError::Start(format!("rename failed: {e}")))?;
+            match r.get("title").and_then(|v| v.as_str()) {
+                Some(h) => row.title = Some(h.to_string()),
+                None => return Err(SessionError::Validation("the harness did not accept the title".into())),
+            }
+        }
+
+        // model/provider/preset: idle only, confirmed applied
+        let model_changing =
+            req.model_provider_id.is_some() || req.model_id.is_some() || req.preset_id.is_some();
+        if model_changing {
+            let new_provider =
+                req.model_provider_id.clone().or_else(|| row.model_provider_id.clone());
+            let new_model = req.model_id.clone().or_else(|| row.model_id.clone());
+            let new_preset = req.preset_id.clone().or_else(|| row.preset_id.clone());
+            let (grant, config) = self.resolve_grant(
+                new_provider.as_deref(),
+                new_model.as_deref(),
+                new_preset.as_deref(),
+                row.plan,
+                row.review,
+            )?;
+            if let Some(g) = &grant {
+                self.runtime
+                    .grant(id, g)
+                    .await
+                    .map_err(|e| SessionError::Start(format!("credentials/grant failed: {e}")))?;
+            }
+            let r = self
+                .runtime
+                .request(id, "config/set", serde_json::json!({ "sid": id, "config": config }))
+                .await
+                .map_err(|e| SessionError::Start(format!("config/set failed: {e}")))?;
+            let applied = r.get("applied").cloned().unwrap_or(serde_json::Value::Null);
+            let ap = applied.get("modelProviderId").and_then(|v| v.as_str()).map(str::to_string);
+            let am = applied.get("model").and_then(|v| v.as_str()).map(str::to_string);
+            let ar = applied.get("connectionId").and_then(|v| v.as_str()).map(str::to_string);
+            if let Some(want) = new_provider.as_deref() {
+                if ap.as_deref() != Some(want) {
+                    return Err(SessionError::Validation(format!(
+                        "the adapter did not confirm provider `{want}`: applied={applied}"
+                    )));
+                }
+            }
+            if let Some(want) = new_model.as_deref() {
+                if am.as_deref() != Some(want) {
+                    return Err(SessionError::Validation(format!(
+                        "the adapter did not confirm model `{want}`: applied={applied}"
+                    )));
+                }
+            }
+            if let Some(want) = new_preset.as_deref() {
+                let apreset = applied.get("preset").and_then(|v| v.as_str());
+                if apreset != Some(want) {
+                    return Err(SessionError::Validation(format!(
+                        "the adapter did not confirm preset `{want}`: applied={applied}"
+                    )));
+                }
+            }
+            row.model_provider_id = new_provider;
+            row.model_id = new_model;
+            row.preset_id = new_preset;
+            row.applied_provider = ap;
+            row.applied_model = am;
+            row.applied_route = ar;
+        }
+
+        // thinkingLevel: unconfirmed -> reported as null + warning, never the
+        // requested value (owning contract).
+        if let Some(level) = &req.thinking_level {
+            let r = self
+                .runtime
+                .request(id, "config/set", serde_json::json!({ "sid": id, "config": { "thinkingLevel": level } }))
+                .await
+                .map_err(|e| SessionError::Start(format!("thinking level not applied: {e}")))?;
+            let applied =
+                r.get("applied").and_then(|a| a.get("thinkingLevel")).and_then(|v| v.as_str());
+            if applied != Some(level.as_str()) {
+                warning =
+                    Some(format!("the thinking level `{level}` was not confirmed by the harness"));
+            }
+        }
+
+        row.updated_at = now_utc();
+        self.db.update_session(&row)?;
+        let view = self.view(&row);
+        self.bus.publish("session.patched", serde_json::json!({ "session": view }));
+        Ok(PatchOutcome { session: view, warning })
+    }
+
     /// Reopen: restart on the stored ref. Refuses a session that is still running
     /// (never overwrite a live instance, R4); serialized on the session lock.
     pub async fn reopen(self: Arc<Self>, id: &str) -> Result<SessionView, SessionError> {
@@ -782,7 +947,31 @@ pub enum TurnOutcome {
     Replay(TurnView),
 }
 
-#[derive(Debug, Deserialize)]
+/// The PATCH /v1/sessions/{id} body. Every field is optional; an absent field is
+/// unchanged.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct PatchSession {
+    #[serde(rename = "modelProviderId")]
+    pub model_provider_id: Option<String>,
+    #[serde(rename = "modelId")]
+    pub model_id: Option<String>,
+    #[serde(rename = "presetId")]
+    pub preset_id: Option<String>,
+    pub plan: Option<bool>,
+    pub review: Option<bool>,
+    #[serde(rename = "thinkingLevel")]
+    pub thinking_level: Option<String>,
+    pub title: Option<String>,
+}
+
+/// What a PATCH returns: the session and an optional warning (an unconfirmed
+/// thinking level is reported as null plus a warning).
+pub struct PatchOutcome {
+    pub session: SessionView,
+    pub warning: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 pub struct TurnRequest {
     pub content: serde_json::Value,
     #[serde(rename = "idempotencyKey")]

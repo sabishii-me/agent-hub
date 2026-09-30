@@ -463,3 +463,111 @@ async fn a_session_with_a_managed_provider_is_accepted_and_granted() {
     let _ = hub.0.kill();
     let _ = std::fs::remove_dir_all(&data);
 }
+
+/// PATCH /v1/sessions/{id} through the REAL hub: a title is renamed IN the
+/// harness (the harness's accepted title is what the session reports), and
+/// plan/review apply as confirmed policy knobs.
+#[tokio::test]
+async fn a_session_patch_renames_and_sets_policy() {
+    let Some(pdir) = plugin_dir() else {
+        eprintln!("SKIP patch_slice: set AGENT_HUB_TEST_PLUGIN_DIR");
+        return;
+    };
+    let harness = std::env::var("AGENT_HUB_TEST_HARNESS").unwrap_or_else(|_| "pi".into());
+    install_provider();
+
+    let unique = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        format!("{}-{}", std::process::id(), nanos)
+    };
+    let data = std::env::temp_dir().join(format!("agent-hub-patch-{unique}"));
+    let _ = std::fs::remove_dir_all(&data);
+    std::fs::create_dir_all(&data).unwrap();
+    let plugins_root = data.join("plugins");
+    std::fs::create_dir_all(&plugins_root).unwrap();
+    copy_tree(&pdir, &plugins_root.join(&harness));
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agent-hub"))
+        .env("AGENT_HUB_DATA_DIR", &data)
+        .env("AGENT_HUB_ADDR", "127.0.0.1:0")
+        .env("AGENT_HUB_CONTRACT_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/../contract"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hub");
+    let mut hub = Hub(child);
+    let (addr, token) = wait_ready(&data, Duration::from_secs(30)).await;
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let created: serde_json::Value = client
+        .post(format!("{base}/v1/sessions"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "harnessId": harness, "commandKey": "patch-1" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["session"]["id"].as_str().unwrap().to_string();
+    for _ in 0..400 {
+        let s: serde_json::Value = client
+            .get(format!("{base}/v1/sessions/{id}"))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if s["session"]["status"] == "active" || s["session"]["status"] == "starting_failed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Rename: the harness's ACCEPTED title is what the session reports.
+    let renamed: serde_json::Value = client
+        .patch(format!("{base}/v1/sessions/{id}"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "title": "Renamed Via Patch" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        renamed["session"]["title"], "Renamed Via Patch",
+        "the harness accepted the title: {renamed}"
+    );
+
+    // Policy knobs: confirmed applied.
+    let pol: serde_json::Value = client
+        .patch(format!("{base}/v1/sessions/{id}"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "plan": true, "review": true }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pol["session"]["appliedPlan"], true, "plan confirmed: {pol}");
+    assert_eq!(pol["session"]["appliedReview"], true, "review confirmed: {pol}");
+
+    // An unknown session is `unknown_session`, not a silent create.
+    let missing = client
+        .patch(format!("{base}/v1/sessions/does-not-exist"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({ "plan": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    let _ = hub.0.kill();
+    let _ = std::fs::remove_dir_all(&data);
+}

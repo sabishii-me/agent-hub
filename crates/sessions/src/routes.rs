@@ -13,7 +13,9 @@ use axum::{Json, Router};
 
 use agent_hub_transport::{Accepted, DomainError, ErrorRenderer, RouteTable};
 
-use crate::service::{CreateOutcome, CreateSession, SessionError, Sessions, TurnOutcome, TurnRequest};
+use crate::service::{
+    CreateOutcome, CreateSession, PatchSession, SessionError, Sessions, TurnOutcome, TurnRequest,
+};
 
 #[derive(Clone)]
 pub struct SessionsState {
@@ -36,7 +38,7 @@ fn table() -> RouteTable<SessionsState> {
         .get("/v1/sessions", list)
         .post("/v1/sessions", create)
         .get("/v1/sessions/{id}", get_one)
-        .patch("/v1/sessions/{id}", not_implemented)
+        .patch("/v1/sessions/{id}", patch_one)
         .delete("/v1/sessions/{id}", remove)
         .get("/v1/sessions/{id}/turns", list_turns)
         .post("/v1/sessions/{id}/turns", send_turn)
@@ -112,6 +114,22 @@ async fn create(
 async fn get_one(State(s): State<SessionsState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.sessions.get(&id) {
         Ok(session) => Json(serde_json::json!({ "session": session })).into_response(),
+        Err(e) => err(&s, e),
+    }
+}
+
+async fn patch_one(
+    State(s): State<SessionsState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<PatchSession>,
+) -> Response {
+    let sessions = s.sessions.clone();
+    match sessions.patch_session(&id, req).await {
+        Ok(out) => {
+            let mut body = serde_json::json!({ "session": out.session });
+            body["warning"] = serde_json::json!(out.warning);
+            Json(body).into_response()
+        }
         Err(e) => err(&s, e),
     }
 }
