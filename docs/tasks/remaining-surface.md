@@ -28,13 +28,13 @@ is a **verification-gated unknown (VERIFICATION-TASKS T2b)**. The hub-side piece
 `GET /v1/sessions/{id}/resources`, `POST .../resources/read`) stay `501` until that model
 lands. This is HUB work, not restored legacy.
 
-## Harness connections / auth: EXT-DEP (adapter protocol)
+## Harness connections / auth: mounted + forwarded (HUB done); EXT-DEP for data
 
-`/v1/harnesses/{id}/connections*` (5 routes) and `/v1/harnesses/{id}/auth*` (3 routes)
-forward to the adapter's `connections/*` and `auth/*`, which the pi adapter does not
-implement. HUB-TODO portion: mount and forward these routes (returning a typed
-`unsupported`/absent answer) rather than leaving them unmounted. EXT-DEP: the adapter
-methods that make them return real data.
+`/v1/harnesses/{id}/connections*` (5 routes) and `/v1/harnesses/{id}/auth*` (3 routes) are
+now MOUNTED and forward verbatim to the adapter's `connections/*`/`auth/*`, capability-
+gated: a harness without the `providers` capability gets `unsupported`, never a fabricated
+answer. EXT-DEP: the pi adapter does not implement those adapter methods, so a real pi
+answer stays absent (the hub side is complete).
 
 ## Small hub-owned gaps: HUB-TODO
 

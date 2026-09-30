@@ -848,7 +848,7 @@ logs the count and refuses to START only if the hub serves a route the contract 
 remaining route** (adapter protocol, the provider-type data model, the plugin-sourced skills
 model, artifact recording).
 
-### Real (mounted, real handler) - 60
+### Real (mounted, real handler) - 68
 
 ```
 DELETE /v1/connections/{id}
@@ -858,10 +858,14 @@ DELETE /v1/sessions/{id}
 GET /v1/connections
 GET /v1/events
 GET /v1/harnesses
+GET /v1/harnesses/{id}/auth/{op}
+GET /v1/harnesses/{id}/connections
+GET /v1/harnesses/{id}/connections/schema
 GET /v1/harnesses/{id}/extensions
 GET /v1/harnesses/{id}/models
 GET /v1/harnesses/{id}/presets
 GET /v1/harnesses/{id}/tools
+DELETE /v1/harnesses/{id}/connections/{cid}
 GET /v1/model-providers
 GET /v1/model-providers/types
 GET /v1/model-providers/{id}
@@ -890,6 +894,10 @@ PATCH /v1/model-providers/{id}
 PATCH /v1/model-providers/{id}/models
 PATCH /v1/sessions/{id}
 POST /v1/connections
+POST /v1/harnesses/{id}/auth
+POST /v1/harnesses/{id}/auth/{op}/cancel
+POST /v1/harnesses/{id}/connections
+POST /v1/harnesses/{id}/connections/validate
 POST /v1/model-providers
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel
@@ -922,17 +930,13 @@ GET /v1/skills
 POST /v1/sessions/{id}/resources/read
 ```
 
-### Not mounted - 10
+### Not mounted - 2
 
 ```
-DELETE /v1/harnesses/{id}/connections/{cid}
-GET /v1/harnesses/{id}/auth/{op}
-GET /v1/harnesses/{id}/connections
-GET /v1/harnesses/{id}/connections/schema
 GET /v1/skills/{id}/files/{file...}
-POST /v1/harnesses/{id}/auth
-POST /v1/harnesses/{id}/auth/{op}/cancel
-POST /v1/harnesses/{id}/connections
-POST /v1/harnesses/{id}/connections/validate
 PUT /v1/skills/{id}/files/{file...}
 ```
+
+(The two skills file routes belong to the new plugin-sourced skills model - see
+`docs/tasks/remaining-surface.md`; the other 8 harness-private routes are now mounted and
+forward to the adapter's `connections/*`/`auth/*`.)

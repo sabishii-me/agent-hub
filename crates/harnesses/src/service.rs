@@ -154,6 +154,23 @@ impl Harnesses {
         Ok(Value::Object(obj))
     }
 
+    /// Forward a harness-private request to the adapter, capability-gated and
+    /// verbatim: the hub owns the route and the pass-through, the ADAPTER owns the
+    /// harness's own connection/auth mechanism (ARCHITECTURE 6). A harness that does
+    /// not declare the capability is `unsupported`, never a fabricated answer.
+    pub async fn forward(
+        &self,
+        id: &str,
+        capability: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, HarnessError> {
+        self.adapters
+            .call(id, capability, method, params)
+            .await
+            .map_err(HarnessError::Adapter)
+    }
+
     /// The extension ids this harness may be given (the plugin's shipped set),
     /// harness-scoped (a bare id is meaningless across harnesses).
     pub fn extensions(&self, id: &str) -> Result<Value, HarnessError> {
