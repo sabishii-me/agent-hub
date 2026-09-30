@@ -277,3 +277,142 @@ async fn state_change_is_announced_on_the_event_stream() {
     assert!(seen.contains("hub.plugins.changed"), "no change frame: {seen}");
     assert!(seen.contains("\"id\":\"beta\""), "frame: {seen}");
 }
+
+/// Build a release zip in memory: a single wrapper dir with a manifest.
+fn build_artifact_zip(id: &str, version: &str, wrapper: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = Vec::new();
+    {
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        let manifest = format!(
+            r#"{{"id":"{id}","name":"{id}","pluginType":"harness-adapter","version":"{version}"}}"#
+        );
+        zw.start_file(format!("{wrapper}/manifest.json"), opts).unwrap();
+        zw.write_all(manifest.as_bytes()).unwrap();
+        zw.finish().unwrap();
+    }
+    buf
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// Serve raw bytes once at a stable path, so the artifact URL is real HTTP.
+async fn serve_bytes(bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+    use axum::body::Body;
+    use axum::http::StatusCode;
+    use axum::response::Response;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new().route(
+        "/artifact.zip",
+        axum::routing::get(move || {
+            let bytes = bytes.clone();
+            async move { Response::builder().status(StatusCode::OK).body(Body::from(bytes)).unwrap() }
+        }),
+    );
+    let h = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}/artifact.zip"), h)
+}
+
+#[tokio::test]
+async fn install_from_a_release_artifact_verifies_and_records_it() {
+    let dir = tmp("artifact");
+    let db = Db::open_in_memory().unwrap();
+    let bus = Bus::new(8, 8);
+    let root = dir.join("plugins");
+    fs::create_dir_all(&root).unwrap();
+    let plugins = Plugins::new(db, &root, bus.clone());
+    let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
+    let base = serve(PluginsState::new(plugins, transport, errors(), empty_adapters())).await;
+    let client = reqwest::Client::new();
+
+    let zip = build_artifact_zip("art", "2.0.0", "art-2.0.0");
+    let sha = sha256_hex(&zip);
+    let size = zip.len() as u64;
+    let (url, _h) = serve_bytes(zip).await;
+
+    // A correct artifact lands the plugin and RECORDS the artifact on the row.
+    let body = serde_json::json!({ "source": { "artifact": {
+        "url": url, "sha256": sha, "id": "art", "version": "2.0.0",
+        "pluginType": "harness-adapter", "size": size } } });
+    let r = client.post(format!("{base}/v1/plugins")).json(&body).send().await.unwrap();
+    assert_eq!(r.status(), 202, "artifact install is a long op");
+    let plugin = wait_for_plugin(&client, &base, "art").await;
+    assert_eq!(plugin["state"], "ready");
+    assert_eq!(plugin["artifact"]["version"], "2.0.0");
+    assert_eq!(plugin["artifact"]["sha256"], sha);
+    // The wrapper dir was stripped: the manifest sits at the plugin root.
+    let target = root.join("art").join("manifest.json");
+    assert!(target.is_file(), "manifest must land at the plugin root");
+}
+
+#[tokio::test]
+async fn a_wrong_digest_is_refused_before_unpacking() {
+    let dir = tmp("artifact-bad");
+    let db = Db::open_in_memory().unwrap();
+    let bus = Bus::new(8, 8);
+    let root = dir.join("plugins");
+    fs::create_dir_all(&root).unwrap();
+    let plugins = Plugins::new(db, &root, bus.clone());
+    let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
+    let base = serve(PluginsState::new(plugins, transport, errors(), empty_adapters())).await;
+    let client = reqwest::Client::new();
+
+    let zip = build_artifact_zip("bad", "1.0.0", "bad-1.0.0");
+    let (url, _h) = serve_bytes(zip).await;
+    let body = serde_json::json!({ "source": { "artifact": {
+        "url": url, "sha256": "0".repeat(64), "id": "bad", "version": "1.0.0" } } });
+    let r = client.post(format!("{base}/v1/plugins")).json(&body).send().await.unwrap();
+    // Resolving runs before the 202 (the id comes from the archive), so a digest
+    // mismatch is refused up front with the contract code.
+    assert_eq!(r.status(), 502, "a bad digest is a 502 artifact_digest_mismatch");
+    let err: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(err["error"], "artifact_digest_mismatch");
+    assert!(!root.join("bad").exists(), "nothing lands on a refused artifact");
+}
+
+#[tokio::test]
+async fn install_from_a_git_source_checks_out_and_lands() {
+    let dir = tmp("git");
+    let db = Db::open_in_memory().unwrap();
+    let bus = Bus::new(8, 8);
+    let root = dir.join("plugins");
+    fs::create_dir_all(&root).unwrap();
+    let plugins = Plugins::new(db, &root, bus.clone());
+    let transport = Transport::new(bus.clone(), agent_hub_transport::Admission::new(8));
+    let base = serve(PluginsState::new(plugins, transport, errors(), empty_adapters())).await;
+    let client = reqwest::Client::new();
+
+    // A real local git repo with a manifest and a marker file.
+    let repo = dir.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(
+        repo.join("manifest.json"),
+        r#"{"id":"gitp","name":"GitP","pluginType":"harness-adapter","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(repo.join("marker.txt"), "hello").unwrap();
+    let git = |args: &[&str]| {
+        let st = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(st.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&st.stderr));
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"]);
+
+    let body = serde_json::json!({ "source": { "url": repo.to_string_lossy() } });
+    let r = client.post(format!("{base}/v1/plugins")).json(&body).send().await.unwrap();
+    assert_eq!(r.status(), 202, "a git install is a long op");
+    let plugin = wait_for_plugin(&client, &base, "gitp").await;
+    assert_eq!(plugin["state"], "ready");
+    assert!(root.join("gitp").join("marker.txt").is_file(), "the cloned tree landed");
+}

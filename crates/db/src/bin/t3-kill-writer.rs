@@ -30,6 +30,7 @@ fn main() {
         state: PluginState::Ready,
         detail: None,
         installed_at: None,
+        artifact: None,
     })
     .expect("upsert");
     db.set_step("p", step).expect("record step");

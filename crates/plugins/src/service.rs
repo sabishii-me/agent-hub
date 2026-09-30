@@ -26,6 +26,8 @@ pub enum PluginError {
     Conflict(String),
     #[error("install failed: {0}")]
     InstallFailed(String),
+    #[error(transparent)]
+    Source(#[from] crate::source::SourceError),
     #[error("no registry URL is configured")]
     RegistryUrlMissing(String),
     #[error(transparent)]
@@ -46,6 +48,7 @@ impl PluginError {
             PluginError::InvalidManifest(_) => "plugin_archive_invalid",
             PluginError::Conflict(_) => "idempotency_conflict",
             PluginError::InstallFailed(_) => "plugin_install_failed",
+            PluginError::Source(e) => e.code(),
             PluginError::RegistryUrlMissing(_) => "plugin_install_failed",
             PluginError::Db(_) | PluginError::Io(_) => "internal_error",
         }
@@ -256,6 +259,7 @@ impl Plugins {
             state: PluginState::Ready,
             detail: None,
             installed_at: None,
+            artifact: None,
         }
     }
 
@@ -297,7 +301,10 @@ impl Plugins {
             state: self.state_of(id),
             prepare: None,
             invalid,
-            artifact: None,
+            artifact: row
+                .artifact
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok()),
         }
     }
 }
@@ -310,9 +317,41 @@ impl Plugins {
     pub fn begin_install(
         &self,
         command_id: &str,
-        source_dir: &Path,
+        source: &crate::source::Source,
     ) -> Result<InstallIntent, PluginError> {
-        let raw = std::fs::read_to_string(source_dir.join("manifest.json"))
+        let staging = self.staging_dir();
+        if let Some(parent) = staging.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging)?;
+        let artifact_json = match source {
+            crate::source::Source::Artifact(spec) => serde_json::to_string(&serde_json::json!({
+                "id": spec.id, "version": spec.version, "url": spec.url,
+                "sha256": spec.sha256, "size": spec.size,
+                "pluginType": spec.plugin_type,
+            }))
+            .ok(),
+            crate::source::Source::Git { .. } => None,
+        };
+        let staged: Result<(), crate::source::SourceError> = match source {
+            crate::source::Source::Git { url, .. } => {
+                let p = PathBuf::from(url);
+                if p.is_dir() && p.join("manifest.json").is_file() {
+                    copy_dir(&p, &staging).map_err(crate::source::SourceError::Io)
+                } else {
+                    crate::source::resolve(source, &staging).map(|_| ())
+                }
+            }
+            crate::source::Source::Artifact(_) => {
+                crate::source::resolve(source, &staging).map(|_| ())
+            }
+        };
+        if let Err(e) = staged {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(PluginError::Source(e));
+        }
+        let raw = std::fs::read_to_string(staging.join("manifest.json"))
             .map_err(|_| PluginError::InvalidManifest("no manifest.json".into()))?;
         let manifest = Manifest::parse(&raw).map_err(PluginError::InvalidManifest)?;
         if let Some(reason) = manifest.invalid_reason() {
@@ -326,38 +365,53 @@ impl Plugins {
         // Same identity + same request (install of this id) is a retry.
         match self.ids.present(command_id, &format!("install:{id}")) {
             Idempotency::Replay => {
+                let _ = std::fs::remove_dir_all(&staging);
                 let row = self.row_for_dir(&id);
                 return Ok(InstallIntent::Replay(self.view(&id, row)));
             }
-            Idempotency::Conflict => return Err(PluginError::Conflict(command_id.into())),
+            Idempotency::Conflict => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(PluginError::Conflict(command_id.into()));
+            }
             Idempotency::New => {}
         }
 
         // A conflicting command on the same plugin is refused while one runs.
         if let Some(op) = self.current_op(&id) {
+            let _ = std::fs::remove_dir_all(&staging);
             return Err(PluginError::Busy(id.clone(), op.as_str().into()));
         }
 
         self.enter(&id, Op::Installing);
         self.announce(&id);
-        Ok(InstallIntent::Proceed { id })
+        Ok(InstallIntent::Proceed { id, artifact_json })
+    }
+
+    /// The staging directory for the next install (one at a time per root).
+    fn staging_dir(&self) -> PathBuf {
+        self.root.join(".stage").join("install")
     }
 
     /// The detached half of an install: land the tree and commit the row. The
     /// caller has already answered `202`; failures are reported on the event
     /// stream (the resource's `state` becomes `failed`).
-    pub fn finish_install(&self, id: &str, source_dir: &Path) -> Result<(), PluginError> {
+    pub fn finish_install(
+        &self,
+        id: &str,
+        artifact_json: Option<String>,
+    ) -> Result<(), PluginError> {
+        let source_dir = self.staging_dir();
+        let record_artifact = artifact_json.clone();
         let manifest = std::fs::read_to_string(source_dir.join("manifest.json"))
             .ok()
             .and_then(|raw| Manifest::parse(&raw).ok());
         let layout = Layout::for_plugin(&self.root, id);
         std::fs::create_dir_all(&self.root)?;
-
-        std::fs::create_dir_all(&self.root)?;
         let result: Result<(), PluginError> =
-            agent_hub_db::install(&self.db, id, &layout, source_dir, None)
+            agent_hub_db::install(&self.db, id, &layout, &source_dir, None)
                 .map(|_| ())
                 .map_err(|e| PluginError::InstallFailed(e.to_string()));
+        let _ = std::fs::remove_dir_all(&source_dir);
 
         self.leave(id, Op::Installing);
         match result {
@@ -373,6 +427,7 @@ impl Plugins {
                     state: PluginState::Ready,
                     detail: None,
                     installed_at: Some(agent_hub_db::now_utc()),
+                    artifact: record_artifact.clone(),
                 };
                 self.db.upsert_plugin(&row)?;
                 self.announce(id);
@@ -436,12 +491,27 @@ impl Plugins {
 pub enum InstallIntent {
     /// A retry: return the original result, run nothing.
     Replay(PluginView),
-    /// First time: run the install detached for this id.
-    Proceed { id: String },
+    /// First time: run the install detached for this id, landing the staged tree.
+    Proceed { id: String, artifact_json: Option<String> },
 }
 
 /// What `begin_remove` decided.
 pub enum RemoveIntent {
     Replay,
     Proceed,
+}
+
+/// Copy a directory tree (used for a LOCAL plugin source used in place).
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
 }

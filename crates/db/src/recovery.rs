@@ -159,6 +159,7 @@ fn set_state(
             state,
             detail: if detail.is_empty() { None } else { Some(detail.to_string()) },
             installed_at: None,
+            artifact: None,
         })?;
     }
     Ok(())
@@ -180,6 +181,8 @@ pub fn install(
     staging_src: &Path,
     crash_after: Option<InstallStep>,
 ) -> Result<RecoveryOutcome, crate::DbError> {
+    // NOTE: the caller records the artifact (a plugin-domain fact) on the row
+    // BEFORE calling install; install only owns the tree + step machine.
     // 0. A validated tree is staged.
     db.set_step(id, InstallStep::Staged)?;
     if crash_after == Some(InstallStep::Staged) {

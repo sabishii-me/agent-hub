@@ -1,7 +1,7 @@
 # What remains, and why it is not hub-ownable yet
 
-Verified at `3426411` against `contract/v1.json` (74 endpoints): 56 real, 8 mounted
-but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
+Verified at the plugin-install-sources commit against `contract/v1.json` (74
+endpoints): 57 real, 7 mounted but `501`, 10 not mounted. Every remaining route is blocked on work OUTSIDE the hub's
 own code, not on a hub omission. This file records the reason per group, so the next
 session does not re-derive it.
 
@@ -40,16 +40,20 @@ decided direction is a plugin-sourced, layered delivery with a `skills://` `node
 hook (ARCHITECTURE §7), which is a verification-gated unknown (T2b). Re-enabling the
 routes over the old model would revert an approved correction.
 
-## Artifact recording
+## Artifact recording (DONE)
 
-`GET /v1/sessions/{id}/artifacts` lists the release artifacts a session's harness
-depends on. The hub does not yet record an install's artifact (the `artifact` field on
-a plugin row is always null); recording it is plugin-domain work that must land first.
+`POST /v1/plugins` now supports BOTH declared sources: a git clone (`{url, ref?}`)
+and a release artifact (`{artifact:{url,sha256,id,pluginType,version,size?}}`),
+verified size-first then sha256 before unpacking (the mature `zip` crate, ADR-0010).
+An artifact install is RECORDED on the plugin row and reported by
+`GET /v1/sessions/{id}/artifacts` (the session's harness plugin's artifact). See
+`docs/tasks/plugin-install-sources.md`.
 
 ## Not blocked (done since the last audit)
 
 sessions create (including additionalDirectories, now passed to the adapter as
 AGENT_HUB_ADDITIONAL_DIRS)/turn/cancel/compact/fork/patch/close/reopen + the read-through
-views (messages/stats/skills); the provider grant chain, presets, plan/review, model
-selection; the connections domain; plugin enable/disable, catalog, registry refresh,
-icon; harness extension selection; the metadata routes (surface/openapi/shutdown).
+views (messages/stats/skills/artifacts); the provider grant chain, presets, plan/review,
+model selection; the connections domain; plugin install from a git ref OR a release
+artifact (verified + recorded), enable/disable, catalog, registry refresh, icon; harness
+extension selection; the metadata routes (surface/openapi/shutdown).

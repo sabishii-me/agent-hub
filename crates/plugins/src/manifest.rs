@@ -8,6 +8,8 @@ pub struct Manifest {
     pub id: Option<String>,
     pub name: Option<String>,
     pub summary: Option<String>,
+    /// The plugin's own version (a release names it in the artifact).
+    pub version: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
     #[serde(rename = "pluginType")]

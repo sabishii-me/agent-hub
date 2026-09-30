@@ -204,9 +204,27 @@ struct InstallBody {
     source: InstallSource,
 }
 
+/// A source is EITHER a git reference (`url` + optional `ref`) OR a release
+/// `artifact` (a zip + its digest). Exactly one is honoured; an artifact wins if
+/// both are present (the contract names two distinct shapes).
 #[derive(Deserialize)]
 struct InstallSource {
-    url: String,
+    url: Option<String>,
+    #[serde(rename = "ref")]
+    reference: Option<String>,
+    artifact: Option<crate::source::ArtifactSpec>,
+}
+
+impl InstallSource {
+    fn into_source(self) -> Option<crate::source::Source> {
+        use crate::source::{ArtifactSpec, Source};
+        if let Some(a) = self.artifact {
+            // A complete artifact needs every required field.
+            let _ = &a;
+            return Some(Source::Artifact(ArtifactSpec { ..a }));
+        }
+        self.url.map(|url| Source::Git { url, reference: self.reference })
+    }
 }
 
 /// POST /v1/plugins (long): `202 Accepted` + `Location`; the install runs
@@ -217,17 +235,29 @@ async fn install(
     Json(body): Json<InstallBody>,
 ) -> Response {
     let command_id = command_id(&headers);
-    let source = std::path::PathBuf::from(&body.source.url);
-    // Validate + register the command identity synchronously (cheap), then run
-    // the move detached. A replay is identified before any work starts.
-    match s.plugins.begin_install(&command_id, &source) {
-        Ok(crate::service::InstallIntent::Replay(view)) => {
+    let Some(source) = body.source.into_source() else {
+        return s.errors.render(&agent_hub_transport::DomainError::new(
+            "validation_failed",
+            "the source must name a git url or an artifact",
+        ));
+    };
+    // Resolving the source (clone / download+verify+unpack) is blocking network+fs
+    // work, so it runs on the blocking pool; it also registers the command identity
+    // before any landing starts. A replay is identified before any work.
+    let plugins_begin = s.plugins.clone();
+    let cid = command_id.clone();
+    let begin = tokio::task::spawn_blocking(move || {
+        plugins_begin.begin_install(&cid, &source)
+    })
+    .await;
+    match begin {
+        Ok(Ok(crate::service::InstallIntent::Replay(view))) => {
             Json(serde_json::json!({ "plugin": view, "updated": false })).into_response_ok()
         }
-        Ok(crate::service::InstallIntent::Proceed { id }) => {
+        Ok(Ok(crate::service::InstallIntent::Proceed { id, artifact_json })) => {
             let plugins = s.plugins.clone();
             let location = format!("/v1/plugins/{id}");
-            // The install does synchronous fs + SQLite work; it MUST run on the
+            // The landing does synchronous fs + SQLite work; it MUST run on the
             // blocking pool, not on the async runtime (TASK-048 F06).
             Accepted::detached(
                 location,
@@ -235,7 +265,7 @@ async fn install(
                 async move {
                     let id2 = id.clone();
                     let outcome = tokio::task::spawn_blocking(move || {
-                        plugins.finish_install(&id2, &source)
+                        plugins.finish_install(&id2, artifact_json)
                     })
                     .await;
                     match outcome {
@@ -246,7 +276,11 @@ async fn install(
                 },
             )
         }
-        Err(e) => s.errors.render(&e.to_domain_error()),
+        Ok(Err(e)) => s.errors.render(&e.to_domain_error()),
+        Err(e) => s.errors.render(&agent_hub_transport::DomainError::new(
+            "internal_error",
+            format!("the install task failed: {e}"),
+        )),
     }
 }
 

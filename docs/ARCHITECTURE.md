@@ -621,7 +621,8 @@ follows distinguishes a real, narrow component fact from a product capability.
   now real read-through views (a read starts the process if needed, caches nothing).
   `compact` and `fork` are
   now real (`compact` reports the harness's own result; `fork` starts a new session
-  from a completed-turn anchor, source untouched). Still `501`: `artifacts`, `repair`,
+  from a completed-turn anchor, source untouched). `artifacts` is now real (the
+  session's harness plugin's recorded install artifact). Still `501`: `repair`,
   `resources`.
 
 - **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
@@ -846,7 +847,7 @@ logs the count and refuses to START only if the hub serves a route the contract 
 remaining route** (adapter protocol, the provider-type data model, the plugin-sourced skills
 model, artifact recording).
 
-### Real (mounted, real handler) - 56
+### Real (mounted, real handler) - 57
 
 ```
 DELETE /v1/connections/{id}
@@ -907,12 +908,11 @@ POST /v1/sessions/{id}/turns
 POST /v1/shutdown
 ```
 
-### Mounted but `501` - 8
+### Mounted but `501` - 7
 
 ```
 GET /v1/model-providers/types
 GET /v1/model-providers/{id}/auth/{op}
-GET /v1/sessions/{id}/artifacts
 GET /v1/sessions/{id}/resources
 POST /v1/model-providers/{id}/auth
 POST /v1/model-providers/{id}/auth/{op}/cancel

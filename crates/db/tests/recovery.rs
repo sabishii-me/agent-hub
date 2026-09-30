@@ -34,6 +34,7 @@ fn db_with_ready_plugin(id: &str) -> Db {
         state: PluginState::Ready,
         detail: None,
         installed_at: None,
+        artifact: None,
     }
     .pipe(|row| db.upsert_plugin(&row).unwrap());
     db

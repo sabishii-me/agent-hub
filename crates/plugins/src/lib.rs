@@ -9,9 +9,11 @@ pub mod identity;
 pub mod manifest;
 pub mod routes;
 pub mod service;
+pub mod source;
 pub mod state;
 
 pub use identity::{CommandIds, Idempotency};
 pub use manifest::{Manifest, PluginView};
 pub use service::{InstallIntent, PluginError, Plugins, RemoveIntent};
+pub use source::{ArtifactSpec, Source, SourceError};
 pub use state::{Op, Ops};

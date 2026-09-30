@@ -1639,6 +1639,27 @@ impl Sessions {
 
     /// Cancel: idempotent. Sends `session/abort`; the turn ends when the adapter
     /// confirms (an adapter ACK is NOT "stopped").
+    /// The release artifacts the session's HARNESS plugin depends on. The hub
+    /// records an install's artifact on the plugin row; a session inherits its
+    /// harness's recorded artifact. A git/local install records none, and a session
+    /// whose harness is not an installed plugin reports an empty list (a fact, not
+    /// an error) - the hub never invents an artifact.
+    pub fn artifacts(&self, session_id: &str) -> Result<serde_json::Value, SessionError> {
+        let row = self
+            .db
+            .session(session_id)?
+            .ok_or_else(|| SessionError::NotFound(session_id.into()))?;
+        let mut artifacts = Vec::new();
+        if let Some(plugin) = self.db.plugin(&row.harness_id)? {
+            if let Some(raw) = plugin.artifact {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    artifacts.push(v);
+                }
+            }
+        }
+        Ok(serde_json::json!({ "artifacts": artifacts, "next_cursor": serde_json::Value::Null }))
+    }
+
     pub async fn cancel_turn(self: Arc<Self>, session_id: &str) -> Result<TurnView, SessionError> {
         // The cancel INTENT is recorded under the session lock (serialized with
         // admission/dispatch), but the lock is RELEASED before the abort request:
@@ -1823,6 +1844,47 @@ mod reconcile_tests {
             native_ref: Some("ref".into()),
             start_error: None,
         }
+    }
+
+    /// The artifacts route reads the SESSION's harness plugin row: a recorded
+    /// artifact is reported verbatim; a plugin with none (git/local) reports an
+    /// empty list; an unknown session is `not_found`.
+    #[test]
+    fn artifacts_reflects_the_harness_artifact() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_session(&row("s1", "active")).unwrap();
+        db.insert_session(&row("s2", "active")).unwrap();
+
+        // s1's harness (`pi`) has a recorded artifact; s2's harness does not.
+        let s = sessions(db);
+        let mut prow = agent_hub_db::PluginRow {
+            id: "pi".into(),
+            name: None,
+            summary: None,
+            plugin_type: Some("harness-adapter".into()),
+            source: None,
+            reference: None,
+            commit: None,
+            state: agent_hub_db::PluginState::Ready,
+            detail: None,
+            installed_at: Some(now_utc()),
+            artifact: Some(
+                r#"{"id":"pi","version":"0.1.8","url":"u","sha256":"abc","size":10}"#.into(),
+            ),
+        };
+        s.db.upsert_plugin(&prow).unwrap();
+
+        let a1 = s.artifacts("s1").unwrap();
+        assert_eq!(a1["artifacts"].as_array().unwrap().len(), 1);
+        assert_eq!(a1["artifacts"][0]["version"], "0.1.8");
+        assert!(a1["next_cursor"].is_null());
+
+        prow.artifact = None;
+        s.db.upsert_plugin(&prow).unwrap();
+        let a2 = s.artifacts("s2").unwrap();
+        assert_eq!(a2["artifacts"].as_array().unwrap().len(), 0);
+
+        assert!(s.artifacts("nope").is_err(), "an unknown session is not_found");
     }
 
     /// N2: at boot an `active` session with no process becomes `needs-repair`, an

@@ -79,6 +79,10 @@ pub struct PluginRow {
     pub state: PluginState,
     pub detail: Option<String>,
     pub installed_at: Option<String>,
+    /// The release artifact this plugin was installed FROM, if any (the
+    /// `{id,version,url,sha256,size}` the install named, stored as JSON). `None`
+    /// for a git/local install. Recorded once at install; never re-derived.
+    pub artifact: Option<String>,
 }
 
 /// The store. One `Connection` behind a mutex; long work must **not** hold the
@@ -113,6 +117,7 @@ impl Db {
         // This is the upgrade path: adding a column that is missing (idempotent).
         sessions::migrate(&conn)?;
         providers::migrate(&conn)?;
+        migrate_plugins(&conn)?;
         Ok(Db { conn: std::sync::Mutex::new(conn) })
     }
 
@@ -132,7 +137,7 @@ impl Db {
     }
 
     const COLUMNS: &'static str =
-        "id, name, summary, plugin_type, source, reference, commit_ref, state, detail, installed_at";
+        "id, name, summary, plugin_type, source, reference, commit_ref, state, detail, installed_at, artifact";
 
     fn read_row(r: &rusqlite::Row<'_>) -> Result<PluginRow, rusqlite::Error> {
         Ok(PluginRow {
@@ -146,21 +151,24 @@ impl Db {
             state: parse_state(&r.get::<_, String>(7)?),
             detail: r.get(8)?,
             installed_at: r.get(9)?,
+            artifact: r.get(10)?,
         })
     }
 
     pub fn upsert_plugin(&self, row: &PluginRow) -> Result<(), DbError> {
         self.with(|conn| {
             conn.execute(
-                "INSERT INTO plugins (id, name, summary, plugin_type, source, reference, commit_ref, state, detail, installed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO plugins (id, name, summary, plugin_type, source, reference, commit_ref, state, detail, installed_at, artifact)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET
                    name=excluded.name, summary=excluded.summary, plugin_type=excluded.plugin_type,
                    source=excluded.source, reference=excluded.reference, commit_ref=excluded.commit_ref,
-                   state=excluded.state, detail=excluded.detail, installed_at=excluded.installed_at",
+                   state=excluded.state, detail=excluded.detail, installed_at=excluded.installed_at,
+                   artifact=excluded.artifact",
                 params![
                     row.id, row.name, row.summary, row.plugin_type, row.source,
-                    row.reference, row.commit, row.state.as_str(), row.detail, row.installed_at
+                    row.reference, row.commit, row.state.as_str(), row.detail, row.installed_at,
+                    row.artifact
                 ],
             )?;
             Ok(())
@@ -309,7 +317,8 @@ CREATE TABLE IF NOT EXISTS plugins (
   commit_ref   TEXT,
   state        TEXT NOT NULL,
   detail       TEXT,
-  installed_at TEXT
+  installed_at TEXT,
+  artifact     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS plugin_ops (
@@ -321,6 +330,27 @@ CREATE TABLE IF NOT EXISTS plugin_ops (
 "#;
 
 /// RFC 3339 UTC, dependency-free (shared by the domains).
+
+/// Additive, idempotent upgrade of the `plugins` table: an existing database
+/// (created before the column existed) gains `artifact` so a recorded install
+/// source survives. `CREATE TABLE IF NOT EXISTS` does NOT extend an existing
+/// table, so a column added later must be added explicitly.
+fn migrate_plugins(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let has = |name: &str| -> Result<bool, rusqlite::Error> {
+        let mut stmt = conn.prepare("PRAGMA table_info(plugins)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            if r.get::<_, String>(1)? == name {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    if !has("artifact")? {
+        conn.execute_batch("ALTER TABLE plugins ADD COLUMN artifact TEXT")?;
+    }
+    Ok(())
+}
 
 /// RFC 3339 UTC (a maintained date library, shared by the domains).
 pub fn now_utc() -> String {
