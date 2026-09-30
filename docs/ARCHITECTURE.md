@@ -603,10 +603,20 @@ follows distinguishes a real, narrow component fact from a product capability.
   reservation and returns the refusal - a `starting` row is never left for a refused command.
   The **accept path is side-effect-free** (an existence check only); the placement work and the
   adapter start run in the **detached** start. A start interrupted by a restart is reconciled at
-  boot to `starting_failed` (no process, no lie), never left `starting`. `close` confirms the
-  process exited (a stop failure is surfaced, not claimed as release) and is idempotent; `reopen`
-  refuses a session that is still running. A database created by an older build gains the new
-  columns through the additive `migrate` path on open.
+  boot: a `starting` session -> `starting_failed`; an `active` session whose process is gone ->
+  `needs-repair` (an orphaned tail, reopenable on its stored ref); any open turn is settled
+  (`failed`, or `interrupted` when it was `cancelling`). `close` confirms the process exited (a
+  stop failure is surfaced, not claimed as release) and is idempotent; `reopen` refuses a session
+  that is still running and re-grants a managed provider. A database created by an older build
+  gains the new columns through the additive `migrate` path on open.
+
+  **create also accepts a hub-managed provider and the session knobs**: `modelProviderId`/`modelId`
+  (resolved through an injected resolver -> `credentials/grant` -> `config/set`, with the adapter's
+  `applied` identity CONFIRMED and persisted), `presetId` (confirmed against `applied.preset`),
+  and `plan`/`review` (confirmed against `applied.plan`/`applied.review`). `null` plan/review means
+  "do not intervene". Still unavailable and answering `501`: `PATCH /v1/sessions/{id}` (mid-session
+  switching), `fork`, `compact`, `messages`, `stats`, `skills` (read-through), `artifacts`,
+  `repair`, `resources`.
 
 - **turns** (now): `POST /v1/sessions/{id}/turns` is a long command (`202 + Location`). The turn
   identity is the body `idempotencyKey`, reserved **durably** by the UNIQUE
@@ -629,14 +639,24 @@ follows distinguishes a real, narrow component fact from a product capability.
   (`501`). `create` writes the row FIRST (a duplicate `already_exists` has no credential side
   effect) then the secret; `delete` removes the credential AND the row; `logout` removes the
   credential only. `tokenConfigured` is **read back from the secret store** at GET/list (never a
-  persisted flag). The full model-provider/auth-flow surface (types, device-code) stays `501`.
+  persisted flag). A provider row carries an **`incarnation`** (minted on insert) and a
+  **`revision`**; `save_provider` is guarded by `(id, incarnation)` and `refresh` re-reads after
+  its network await and refuses a changed incarnation/revision, so a stale writer cannot overwrite
+  a rebuilt provider. Still `501`: `PATCH /v1/model-providers/{id}/models` (the selection mutator;
+  the service exists), `GET /v1/model-providers/types` (the provider-type data surface),
+  `POST /v1/model-providers/{id}/auth` + `GET`/`cancel` (the OAuth/device-code flow).
 - **the served binary** (now): every route requires a **bearer token** (the inbound boundary
-  exists). That is a possession check, not an authorization boundary (§7); the binary is still
-  not a product (sessions/skills are `501`, no secret store).
-- **adapter / harnesses / skills / extensions / humans**: adapter plugins can be spoken to over
-  the bus at the protocol level, but nothing product-level is wired through them; the skills and
-  extensions models here follow the **pre-decision** contract (see
-  `docs/review/ROUTE-SURFACE-DEVIATION.md`).
+  exists). That is a possession check, not an authorization boundary (§7).
+- **skills / humans**: the hub stores skills and lists/removes them; approvals and questions are
+  routed to the adapter. Neither is a finished product surface (skills file read/write is `501`).
+- **connections — NOT built**: there is no managed-connection domain. `HarnessEnv.connection_env`
+  exists but is always empty; the `/v1/connections*` and `/v1/harnesses/{id}/connections*` routes
+  are not mounted. This is the largest remaining domain (§17 order: after providers).
+- **harnesses**: the thin projection (`GET /v1/harnesses`, and `presets`/`models`/`tools`/
+  `extensions` gated capability calls) is real; harness `auth` and `PATCH .../extensions` are not
+  mounted.
+- **plugins**: install/get/list/remove/prepare/recovery are real; the catalog, registry refresh,
+  enable/disable and icon routes are not mounted.
 
 ### What was fake and is being removed
 
@@ -779,3 +799,99 @@ the session view). A requested value the adapter does not confirm fails the star
 we never record a knob the harness did not apply. `null` means "do not intervene".
 Verified live: `{plan:true, review:true, presetId:standard}` -> active with
 `appliedPlan=true`, `appliedReview=true`, `appliedPreset=standard`.
+
+## 24. The remaining surface (single source of truth)
+
+Compiled from `contract/v1.json` (74 endpoints) against the mounted route tables.
+Regenerate whenever a route lands. A route not mounted is unfinished work, not a defect: `selfcheck`
+logs the count and refuses to START only if the hub serves a route the contract does not declare.
+
+### Real (mounted, real handler) — 36
+
+```
+DELETE /v1/model-providers/{id}
+DELETE /v1/plugins/{id}
+DELETE /v1/sessions/{id}
+DELETE /v1/skills/{id}
+GET /v1/events
+GET /v1/harnesses
+GET /v1/harnesses/{id}/extensions
+GET /v1/harnesses/{id}/models
+GET /v1/harnesses/{id}/presets
+GET /v1/harnesses/{id}/tools
+GET /v1/model-providers
+GET /v1/model-providers/{id}
+GET /v1/model-providers/{id}/models
+GET /v1/models
+GET /v1/plugins
+GET /v1/plugins/{id}
+GET /v1/sessions
+GET /v1/sessions/{id}
+GET /v1/sessions/{id}/approvals
+GET /v1/sessions/{id}/questions
+GET /v1/sessions/{id}/turns
+GET /v1/skills
+GET /v1/status
+PATCH /v1/model-providers/{id}
+POST /v1/model-providers
+POST /v1/model-providers/{id}/logout
+POST /v1/model-providers/{id}/models/refresh
+POST /v1/plugins
+POST /v1/plugins/{id}/prepare
+POST /v1/sessions
+POST /v1/sessions/{id}/approvals/{aid}
+POST /v1/sessions/{id}/cancel
+POST /v1/sessions/{id}/close
+POST /v1/sessions/{id}/questions/{qid}
+POST /v1/sessions/{id}/reopen
+POST /v1/sessions/{id}/turns
+```
+
+### Mounted but `501` — 15
+
+```
+GET /v1/model-providers/types
+GET /v1/model-providers/{id}/auth/{op}
+GET /v1/sessions/{id}/artifacts
+GET /v1/sessions/{id}/messages
+GET /v1/sessions/{id}/resources
+GET /v1/sessions/{id}/skills
+GET /v1/sessions/{id}/stats
+PATCH /v1/model-providers/{id}/models
+PATCH /v1/sessions/{id}
+POST /v1/model-providers/{id}/auth
+POST /v1/model-providers/{id}/auth/{op}/cancel
+POST /v1/sessions/{id}/compact
+POST /v1/sessions/{id}/fork
+POST /v1/sessions/{id}/repair
+POST /v1/sessions/{id}/resources/read
+```
+
+### Not mounted — 23
+
+```
+DELETE /v1/connections/{id}
+DELETE /v1/harnesses/{id}/connections/{cid}
+GET /v1/connections
+GET /v1/harnesses/{id}/auth/{op}
+GET /v1/harnesses/{id}/connections
+GET /v1/harnesses/{id}/connections/schema
+GET /v1/openapi.json
+GET /v1/plugins/catalog
+GET /v1/plugins/{id}/icon/{variant}
+GET /v1/skills/{id}/files/{file...}
+GET /v1/surface
+PATCH /v1/connections/{id}
+PATCH /v1/harnesses/{id}/extensions
+POST /v1/connections
+POST /v1/harnesses/{id}/auth
+POST /v1/harnesses/{id}/auth/{op}/cancel
+POST /v1/harnesses/{id}/connections
+POST /v1/harnesses/{id}/connections/validate
+POST /v1/plugins/registry/refresh
+POST /v1/plugins/{id}/disable
+POST /v1/plugins/{id}/enable
+POST /v1/shutdown
+PUT /v1/skills/{id}/files/{file...}
+```
+
