@@ -932,6 +932,7 @@ impl Sessions {
         // model/provider/preset: idle only, confirmed applied
         let model_changing =
             req.model_provider_id.is_some() || req.model_id.is_some() || req.preset_id.is_some();
+        'model_block: {
         if model_changing {
             let new_provider =
                 req.model_provider_id.clone().or_else(|| row.model_provider_id.clone());
@@ -996,9 +997,20 @@ impl Sessions {
                     // unrelated refusal.
                     let is_preset_change = new_preset.as_deref() != row.applied_preset.as_deref();
                     if is_preset_change && code == "agent_preset_locked" {
-                        return self
-                            .restart_for_preset(id, &mut row, new_preset, new_provider, new_model)
-                            .await;
+                        // Restart + resume and CONTINUE the composite PATCH: any other
+                        // field (e.g. thinkingLevel) still runs against the FRESH
+                        // process. Do not early-return and drop the rest of the
+                        // command (TASK-048 G5).
+                        self.restart_for_preset(id, &mut row, new_preset.clone(), new_provider.clone(), new_model.clone())
+                            .await?;
+                        // `ensure_running_locked` wrote the CONFIRMED applied identity
+                        // (preset included) into the DB; re-read so the final save
+                        // below does not overwrite it with the stale local row
+                        // (TASK-048 G5).
+                        if let Ok(Some(fresh)) = self.db.session(id) {
+                            row = fresh;
+                        }
+                        break 'model_block;
                     }
                     // Any other typed refusal: quarantine (fail closed) but KEEP its
                     // contract code (TASK-048 F5).
@@ -1073,6 +1085,7 @@ impl Sessions {
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
         }
+        }
 
         // thinkingLevel: a BOUNDED config/set. An adapter that ANSWERED without
         // confirming the level is a WARNING (the contract reports the unconfirmed
@@ -1140,7 +1153,7 @@ impl Sessions {
         new_preset: Option<String>,
         new_provider: Option<String>,
         new_model: Option<String>,
-    ) -> Result<PatchOutcome, SessionError> {
+    ) -> Result<(), SessionError> {
         // Stop first so the fresh process reads the new preset at spawn.
         if let Err(e) = self.runtime.stop(id).await {
             return Err(self
@@ -1157,18 +1170,22 @@ impl Sessions {
         self.db.update_session(row)?;
         // Restart + resume; ensure_running_locked re-grants and confirms the newly
         // applied identity (preset included).
-        let view = match self.ensure_running_locked(id, false).await {
-            Ok(v) => v,
-            Err(e) => {
-                // The restart did not prove itself: keep the session repairable, and
-                // report the failure honestly.
-                return Err(SessionError::RepairFailed(format!(
-                    "the preset switch could not re-establish the session: {e}"
-                )));
+        if let Err(e) = self.ensure_running_locked(id, false).await {
+            // The restart did NOT prove a live process. The old one is stopped, so
+            // the session MUST NOT keep claiming `active`: mark it needs-repair
+            // (in memory AND durably) and report the failure honestly (TASK-048 G5).
+            self.quarantined.lock().await.insert(id.to_string());
+            if let Ok(Some(mut r)) = self.db.session(id) {
+                r.status = "needs-repair".into();
+                r.start_error = Some(format!("the preset switch could not re-establish the session: {e}"));
+                r.updated_at = now_utc();
+                let _ = self.db.update_session(&r);
             }
-        };
-        self.bus.publish("session.patched", serde_json::json!({ "session": view }));
-        Ok(PatchOutcome { session: view, warning: None })
+            return Err(SessionError::RepairFailed(format!(
+                "the preset switch could not re-establish the session: {e}"
+            )));
+        }
+        Ok(())
     }
 
     /// Reopen: restart on the stored ref. Refuses a session that is still running

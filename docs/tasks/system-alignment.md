@@ -101,6 +101,12 @@ an authorized real call).
   SAME id -> turn ok; reject -> no side effect, turn cancelled.
 - 4aa9b99 G2 CLOSED (live): harness connections/delete sends {id} (not {connectionId});
   validate->draft; auth/start->providerId. Live: a real delete removes the target.
+- G5 CLOSED: a preset restart that cannot re-establish the session now lands
+  `needs-repair` (in memory AND durably) instead of staying `active`; a COMPOSITE PATCH
+  (preset + thinkingLevel) runs every field against the fresh process and re-reads the
+  confirmed applied identity before the final save. Live: composite switch -> applied
+  tracks the effect and thinkingLevel reaches the new process; a resume failure ->
+  502 repair_failed + status needs-repair (not active).
 - G4 CLOSED: POST /v1/model-providers/{id}/auth NO LONGER fabricates a pending operation.
   The interactive-method check runs first and the route refuses 501 with NO side effect;
   an operation is created only by a real flow executor. Live: a refused start leaves no
@@ -112,8 +118,6 @@ an authorized real call).
 - G4 remainder (HUB+CONTRACT): implement the real declarative auth flow (accept/execute/
   result/cancel) once the step schema is published; the placeholder is gone, the executor
   is still owed.
-- G5 (HUB): preset restart failure must land needs-repair (GET must not show active without
-  a live confirmed process); a composite PATCH must execute every field.
 - G3 (HUB+CONTRACT+PLUGIN): ONE type authority; publish the descriptor artifact; upgrade the
   provider plugin.
 - G6 (HUB+CONTRACT+PLUGIN): minHubVersion in the manifest contract, enforced at one
