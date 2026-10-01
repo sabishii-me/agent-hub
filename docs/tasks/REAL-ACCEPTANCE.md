@@ -96,6 +96,33 @@ Both fetched the real catalog (`/models/refresh -> 200`: deepseek-flash, deepsee
 and a real turn answered `pong`. The descriptor differs only in
 `configuration.endpoint` (present for `deepseek`, absent for `compatible`).
 
+## Shisa via a device-code sign-in (2026-10-01)
+
+A REAL device-code sign-in (account `colin@shisa.ai`, workspace "colin's workspace")
+produced the credential. `tests/e2e/shisa-provider.mjs` then drove the full chain:
+
+```
+GET /v1/model-providers/types -> 200 [shisa] broken=[]
+POST /v1/model-providers {token, providerType:shisa} -> 200
+     url=https://api.shisa.ai/openai/v1 api=openai-completions  (type owns endpoint)
+POST /models/refresh -> 200  real catalog: 11 models
+     (glm-5.2, qwen3.7-flash/max/plus, qwen3.8-27b, shisa-ai/*, ...)
+POST /v1/sessions {modelProviderId:sh, modelId:qwen3.7-flash} -> 202 -> active
+POST /turns -> 202 -> real answer "pong"
+```
+
+`prts-providers/shisa/provider.json` declares `authMethods:["device-code"]` and an
+`auth` block (gateway, paths, clientId) as DATA, plus the account-owned endpoint the
+type supplies.
+
+HONEST BOUNDARY: the credential used here came from a device-code flow run OUT OF BAND
+(the plugin's own protocol: `POST gateway.shisa.ai/device/code` -> the user visits
+`platform.shisa.ai/connect?...` -> `POST /device/token`). The RUST hub's
+`POST /v1/model-providers/{id}/auth` does NOT yet execute that flow in-process (G4
+refuses honestly rather than fabricate). So shisa's SIGN-IN is exercised plugin-side; the
+provider RECORD, catalog and a real model turn are exercised through /v1. Making the hub
+own the device-code flow in-process is the remaining shisa work.
+
 ## What this is and is NOT
 
 - IS: a real end-to-end model turn through the hub, the real adapter, the real runtime and
