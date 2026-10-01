@@ -1,7 +1,7 @@
 # CURRENT STATE — read this first (durable handoff)
 
-Updated at hub SHA `c9063f7b1cbe9db226c43bfe489b46a1a2baffa4` (branch
-`feat/hub-modular-redesign`, pushed). Working tree clean.
+Updated at hub SHA `b9bef5a459fed2cd2b7b6ec22aa1143de84c71de` (branch
+`feat/hub-modular-redesign`). Working tree has UNCOMMITTED, UNFINISHED edits (see below).
 
 ## The task (unchanged)
 
@@ -10,77 +10,71 @@ capabilities **against the REAL adapters/plugins**. NOT: fixing reviewer numbers
 tests green, mounting routes, or mock-driven "verification". §17 of `docs/ARCHITECTURE.md`
 is the order of work. A reviewer report is correction INPUT, not the task.
 
-## The rule I violated (do not repeat)
+## Rules established with the user (do not repeat)
 
-Using a MOCK adapter to drive `/v1` and calling it "verified" is FORBIDDEN. A mock proves
-the hub's half, not the capability. The three REAL adapters are present locally at the
-exact reviewed SHAs and must be used:
+- A MOCK anywhere = the whole chain is fake. Acceptance uses the REAL adapters/plugins.
+- NEVER `git checkout` / `git reset --hard` / discard uncommitted work. Keep it.
+- `_`-prefixed scratch dirs are forbidden. Use the real repos.
+- Docs FIRST, then code. Update the ledger per change.
+- If a document LACKS a definition, SAY SO plainly (it is missing external input); do NOT
+  silently invent a schema, and do NOT blindly attack the doc either.
+- No invented concepts. The contract is the interface; a field it does not define is not
+  mine to add in code.
 
-- pi:      `/e/AI/ideas/_sess2/plugins/pi` (also `prts-harness-pi`) @ `23ae330d2beb5d567b556a358117c3f7c768a027`
-- jouzu:   `/e/AI/ideas/prts-harness-jouzu` @ `453eff2ea06d05438320b1d30eeac18f74a498d2`
-- deepseek:`/e/AI/ideas/prts-harness-deepseek` @ `580aca8984978cead650c2389aa189a4313e96ad`
+## Real inputs present locally (reviewed SHAs)
 
-## The ONE blocker to a real run (needs authorization)
+- pi adapter:      `/e/AI/ideas/prts-harness-pi`     @ `23ae330d2beb5d567b556a358117c3f7c768a027` (runtime materialised: pi-coding-agent 0.85.1)
+- jouzu adapter:   `/e/AI/ideas/prts-harness-jouzu`  @ `453eff2ea06d05438320b1d30eeac18f74a498d2` (runtime jouzu 0.1.13)
+- deepseek adapter:`/e/AI/ideas/prts-harness-deepseek` (not yet run)
+- provider plugins:`/e/AI/ideas/prts-providers/{compatible,deepseek,shisa}` (each now ships `provider.json`, a DATA descriptor the Rust hub reads; the hub never runs plugin code)
+- real provider creds: `~/.pi/agent/models.json` provider `HOME-JP-prod` (anthropic-messages)
 
-The hub UNCONDITIONALLY probes the real OS keychain at startup
-(`crates/secrets/src/lib.rs::probe_store`: writes/reads/deletes a random `__probe__<hex>`
-entry under service `agent-hub:<instance>`). That side effect is NOT authorized, and the
-handoff forbids dodging it with a test switch / alternate backend / borrowed instance.
+## Real acceptance DONE (recorded)
 
-**Authorization needed (minimal):** allow starting the hub against an ISOLATED data dir
-while it touches the real OS keychain with that random probe (and any provider credential
-entries I create). I will record the service name + entries and confirm deletion after.
+- `docs/tasks/REAL-ACCEPTANCE.md`: pi + jouzu (real adapters + real runtimes + HOME-JP-prod)
+  -> session active, real turn answers "pong"; workspace suite 39 ok against each, no SKIPs.
+- deepseek via BOTH provider plugins (deepseek type-owned endpoint; compatible caller endpoint)
+  -> /models/refresh 200 (real catalog), session active, real turn "pong".
+- shisa via the shisa provider plugin: a REAL device-code sign-in (colin@shisa.ai) was run
+  OUT OF BAND; the hub then read the descriptor, used the type's owned endpoint
+  (https://api.shisa.ai/openai/v1), fetched 11 real models, session active, real turn "pong".
 
-Secondary (only for a real model turn): a real vendor/paid call authorization. WITHOUT it,
-approval / session / preset / connections / restart acceptance can still be run.
+## UNCOMMITTED WORK IN PROGRESS (do not lose; do not commit until the schema question is settled)
 
-Until that authorization: **no real acceptance is run; every capability stays NOT
-accepted. Never fill green.**
+Files: `crates/providers/src/{auth.rs,routes.rs,service.rs}`, `crates/providers/Cargo.toml`,
+`Cargo.lock`. It implements a HUB-OWNED device-code flow driven by the provider type's
+descriptor (contract 2262: the hub owns the flow, the type declares it as data).
 
-## Per-capability status (REAL evidence classes)
+BLOCKER before committing: the FIELD SCHEMA is NOT defined by any document.
+- `contract/v1.json` says only `next: object`; my field names (`userCode`,`verifyUrl`,
+  `expiresInSeconds`,`intervalSeconds`) appear ZERO times in the contract.
+- `ROUTES-REVIEW.md:308` writes `auth: { method:"device-code", gateway, clientId, ... }` — the
+  field is `method`; I wrote `kind`. The `...` (clientVersion/codePath/tokenPath/linkAckPath)
+  is NOT documented.
+- `ARCHITECTURE.md` §438 says the auth sub-operation must SURVIVE A RESTART; my `AuthStore`
+  is in-memory (does not).
+- The edits do NOT compile yet (`into_response_ok_created`, `op_id_provider` do not exist).
 
-Legend: STATIC = source comparison against the real adapter; RUN-MOCK = driven through
-/v1 with a mock (NOT acceptance); REAL = driven through /v1 against a real adapter (NONE
-yet — blocked by the keychain authorization).
+DECISION OWED BY THE USER: either (1) the user/contract defines the `auth` block + `next`
+step fields and I implement exactly that; or (2) the user authorises me to take the fields
+from a named existing fact (the plugin `beginAuth`/`device/token` shapes) AND register them
+as an explicit contract change in `contract/v1.json`. Until then: do NOT commit, do NOT
+invent further.
 
-| Link | Code state | Real acceptance |
-|---|---|---|
-| G1 adapter bidirectional control (approval_need round-trip) | CODE DONE (`5a7139c`), reply vocabulary aligned to the real `{approved, reason:'allowed'|'denied'}` (`85db400`) | NOT RUN |
-| G2 harness connections/auth wire mapping (`connections/delete` -> `id`) | CODE DONE (`4aa9b99`), confirmed against real dsh `rows.find(r=>r.id===p.id)` | NOT RUN |
-| G3 provider type authority (create/availability/grant) | CODE DONE (`57bcd3d`) | NOT RUN |
-| G4 auth route does not fabricate a pending op | CODE DONE (`714f9be`) | NOT RUN |
-| G5 preset restart failure -> needs-repair; composite PATCH runs all fields | CODE DONE (`bb952ad`) | NOT RUN |
-| G6 minHubVersion gate at accept + activation | CODE DONE (`3274034`) | NOT RUN |
-| A2 preset switch without wedging | CODE DONE (`248f6be`..) | NOT RUN |
+## Per-capability status
 
-Static wire findings vs the REAL adapters: `docs/tasks/real-adapter-wire.md`.
-
-## Open hub-side remainder (only real acceptance unblocks "done")
-
-- G3 remainder (CONTRACT+PLUGIN): publish the `provider.json` descriptor artifact in the
-  owning contract; upgrade the provider plugin.
-- HUB: real declarative auth flow (needs the step schema in the contract); new
-  plugin-sourced skills/resources (T2b — verification-gated on a REAL node child);
-  shared adapter layer (§17.4).
-- DONE: `prompt` is now bound to the turn's recorded process generation (the turn
-  dispatches through `send_if_generation(process_gen)`, symmetric with cancel's abort;
-  a stale target is a DEFINITE non-delivery, never an unknown result).
+`docs/tasks/system-alignment.md` (table + delivery log). Legend for evidence: STATIC vs
+RUN-MOCK (not acceptance) vs REAL (through /v1 against a real adapter).
 
 ## Docs map
 
-- `README.md` — target + open/closed links by owner; authorization boundary.
-- `docs/ARCHITECTURE.md` §17 (order), §18 (CURRENT STATUS block), §24 (route census —
-  a COUNT, NOT a capability claim).
-- `docs/tasks/system-alignment.md` — per-capability table + delivery log.
-- `docs/tasks/real-adapter-wire.md` — static comparison against the real adapters.
-- `docs/review/VERIFICATION-TASKS.md` — T1–T6 exit conditions.
+- `README.md` (target), `docs/ARCHITECTURE.md` (§17 order, §18 status, §5 providers-are-DATA,
+  §438 auth flow), `docs/ROUTES-REVIEW.md` (§ Model providers are DATA; auth is a hub protocol),
+  `contract/v1.json` (the interface), `docs/tasks/{system-alignment,real-adapter-wire,REAL-ACCEPTANCE}.md`.
 
 ## Command facts
 
-- `cargo test --workspace` green (39 result sets); zero warnings. Mock rehearsal dirs live
-  under `E:/AI/ideas/_mock` (NOT in the repo).
-- Build: `cargo build --workspace`; run needs `AGENT_HUB_CONTRACT_DIR`,
-  `AGENT_HUB_DATA_DIR`, `AGENT_HUB_ADDR`. Keys: `AGENT_HUB_CONTROL_TIMEOUT_SECS`,
-  `AGENT_HUB_TEST_PLUGIN_DIR` (gated real-adapter tests; a missing dir prints SKIP).
-- Tooling note: the `write`/`edit`/`read` tools target a wrong cwd (`E:\e\...`); use
-  bash heredocs to absolute paths.
+- `cargo test --workspace` with `AGENT_HUB_TEST_PLUGIN_DIR=<real plugin> AGENT_HUB_TEST_HARNESS=<id>`.
+- e2e runners: `node tests/e2e/{real-provider,deepseek-provider,shisa-provider}.mjs`.
+- Run needs `AGENT_HUB_CONTRACT_DIR`, `AGENT_HUB_DATA_DIR`, `AGENT_HUB_ADDR`.
+- Tooling: the read/write/edit tools target a wrong cwd; use bash heredocs to absolute paths.

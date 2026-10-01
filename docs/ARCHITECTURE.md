@@ -32,6 +32,9 @@ The decisions live in the **desktop repository's** ADR log (`sabishii-dev-agent-
 - **ADR-0010** - transport and infrastructure use mature components; business and contract logic
   stay ours.
 - **ADR-0011** - the contract is the interface; implementations are private.
+- **ADR-0012** - authorization is a hub protocol, declared by the provider type as DATA
+  (`configuration.auth`); the hub runs the flow, the contract defines the step
+  (`defs.authStep`) and the state (`defs.authOperation`); no plugin code runs in-process.
 
 This file is how they are carried out here.
 
