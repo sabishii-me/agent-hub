@@ -61,6 +61,13 @@ from a named existing fact (the plugin `beginAuth`/`device/token` shapes) AND re
 as an explicit contract change in `contract/v1.json`. Until then: do NOT commit, do NOT
 invent further.
 
+## Blocked (owner = PLUGIN/UPSTREAM, not the hub)
+
+- **dsh (DeepSeek Harness)** cannot start: its runtime does not boot on this machine.
+  Three real causes recorded in `docs/tasks/dsh-blocked.md`; needs an upstream upgrade to a
+  consistent released version + a complete recorded closure + the HMR/loader fix. Do NOT
+  mark dsh as accepted. pi and jouzu are unaffected.
+
 ## Per-capability status
 
 `docs/tasks/system-alignment.md` (table + delivery log). Legend for evidence: STATIC vs
