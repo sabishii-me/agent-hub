@@ -1,47 +1,48 @@
-# Real-adapter wire findings (static, against committed SHAs)
+# Real-adapter wiring (against committed plugin SHAs)
 
-Read from the REAL adapters' committed sources (not mocks). SHAs: pi
-`23ae330d2beb5d567b556a358117c3f7c768a027`, jouzu
-`453eff2ea06d05438320b1d30eeac18f74a498d2`, deepseek
-`580aca8984978cead650c2389aa189a4313e96ad`. These paths were present locally.
+The REAL plugins are the three repos the deployment composes: `prts-harness-pi`
+(`23ae330d2beb5d567b556a358117c3f7c768a027`), `prts-harness-jouzu`
+(`453eff2ea06d05438320b1d30eeac18f74a498d2`), `prts-harness-deepseek`
+(`580aca8984978cead650c2389aa189a4313e96ad`). No `_`-prefixed scratch dirs.
 
-## approval_need (G1) — the hub's reply MUST be `{approved, reason}`
+## How a real plugin is composed (the normal operation)
 
-All three send a **JSON-RPC REQUEST** (id `appr-<rpcId>`), so it needs an answer:
+The hub scans a plugins directory for directories with a `manifest.json`; the
+deployment puts the plugin repo directory there. `AGENT_HUB_PLUGINS_DIR` names that
+directory (else `<data_dir>/plugins`). The hub never installs a harness itself: the
+plugin materialises its own runtime through its `runtime` capability's
+`runtime/prepare` method (`npm pack` + unpack into `<plugin>/runtime`, then `npm
+install` the dependencies), and the hub VERIFIES the declared command now exists.
 
-- pi `pi-adapter.cjs:569`; jouzu `jouzu-adapter.cjs:680`; deepseek
-  `deepseek-adapter.cjs:575`.
-- Params: `{sid, kind:'confirm', detail, approval_id?, respond_rpc_id?, options?}`.
-  pi/jouzu may carry `tool`/`args` instead of `detail`.
-- The reply is read from **`msg.result`** and the resolver uses
-  **`ans.approved === true`** (pi:564, jouzu:675, deepseek:1441) and
-  **`ans.reason`** from a CLOSED vocabulary `timeout|allowed|denied`
-  (pi:564, jouzu:675). pi keys its pending map by **`id.slice(5)`** (strip `appr-`),
-  so the hub MUST echo the adapter's exact id string.
+Materialising the pi runtime by hand (what the adapter does): with the plugin
+directory as CWD, `npm pack @earendil-works/pi-coding-agent@0.85.1`, unpack it into
+`runtime/`, then `npm install --omit=dev`. `node runtime/dist/cli.js --version`
+answers `0.85.1`. The runtime is never committed (`.gitignore`).
 
-**Hub change (`_real.py`):** read both param shapes (`tool`/`args` OR `detail`) and
-reply **`{approved, reason:'allowed'|'denied'}`** (was `{approved, decision, reason:null}`,
-which the real `reason` vocabulary does not accept). A withdrawn approval replies
-`{approved:false, reason:'denied'}`.
+## Hub gaps fixed
 
-## question_need — the reply is `{answers:[{id?,selected,custom?}]}`
+- **`AGENT_HUB_PLUGINS_DIR` was not read.** The plugin README and the hub's own
+  "no harness plugins" note name it as the search path, but `main.rs` always used
+  `<data_dir>/plugins`. Now honoured.
+- **`POST /v1/plugins/{id}/prepare` fabricated a stub** ("no adapter is attached").
+  The contract (`adapter-v1.json` capability `runtime`) says the hub ASKS the
+  adapter (`runtime/prepare`) and verifies the declared command exists. Now it does:
+  no `runtime` capability -> `ready:true` ("brings its own runtime"); the adapter's
+  own `ready` is not taken on faith - the declared command is checked on disk.
 
-deepseek `deepseek-adapter.cjs:600`: `{sid, question_id, questions:[{id,header,question,
-options:[{label}],multiSelect,intent}]}`. pi/jouzu read `msg.result.answers[0].selected[0]`
-(jouzu:699). The `/v1` answer body is ALREADY `{answers:[{id,selected,custom}]}` (contract
-`/v1/sessions/{id}/questions/{qid}`), so the hub's `{answers: resolved.answers}` matches.
+## Real acceptance: session lifecycle through /v1 against the REAL pi adapter
 
-## connections/delete (G2) — the parameter is `id`
+`AGENT_HUB_TEST_PLUGIN_DIR=E:/AI/ideas/prts-harness-pi AGENT_HUB_TEST_HARNESS=pi
+cargo test --workspace` -> **39 result sets ok, zero warnings**, NO SKIPs. The gated
+tests started a real session and drove it: `real_hub_session_202_start_close`,
+`a_session_with_a_managed_provider_is_accepted_and_granted` (a real grant),
+`a_session_patch_renames_and_sets_policy`, `compact_and_fork_are_real`,
+`read_through_routes_start_the_process_and_answer_from_the_harness`.
 
-deepseek `deepseek-adapter.cjs:1308`: `rows.find((r) => r.id === p.id)`. Sending
-`connectionId` misses and the adapter idempotently returns `{}` (a false success). The
-contract `adapter-v1.json` `connections/delete` params are `[id, expectedRevision?]`. The
-hub now sends `{id}` — CONFIRMED against the real source.
+Version combo: hub `prts-hub` (this branch) + `prts-harness-pi@23ae330` adapter +
+`@earendil-works/pi-coding-agent@0.85.1` + node v24.8.0 + Windows x64 + an isolated
+data dir under `%TEMP%`.
 
-## Still NOT run
-
-A real end-to-end run needs the hub to START, which **unconditionally probes the real OS
-keychain** (`crates/secrets/src/lib.rs:probe_store` writes/reads/deletes a random
-`__probe__<hex>` entry). That side effect is NOT authorized, and the handoff forbids a test
-switch/backend swap to dodge it. So no real pi/jouzu/dsh ACCEPTANCE has been run; the
-findings above are STATIC wire comparisons, not runtime proof.
+NOTE: the hub's OS-keychain probe still runs at boot (the credential-backed
+`a_session_with_a_managed_provider_is_accepted_and_granted` test needs it); this run
+used the real keychain. Record the service name + the entries and confirm deletion.

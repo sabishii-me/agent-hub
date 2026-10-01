@@ -322,15 +322,94 @@ async fn remove(
     }
 }
 
+/// POST /v1/plugins/{id}/prepare - ask the plugin's ADAPTER to materialise the
+/// runtime its manifest pins (`runtime/prepare`), then VERIFY the declared command
+/// now exists. The hub installs no harness and knows no package names: it asks,
+/// waits, and verifies (contract `adapter-v1.json` capability `runtime`). A plugin
+/// that brings its own runtime does not declare the capability; it is not an error
+/// to ask, but there is nothing to do.
 async fn prepare(State(s): State<PluginsState>, AxumPath(id): AxumPath<String>) -> Response {
-    if s.plugins.db.plugin(&id).ok().flatten().is_none() {
-        return s.errors.render(&DomainError::new("not_found", format!("plugin `{id}`")));
+    let server_known = s.plugins.db.plugin(&id).ok().flatten().is_some();
+    let harness = match s.adapters.get(&id) {
+        Ok(h) => h,
+        Err(_) => {
+            // Not a harness: a plugin the hub can see whose directory carries no
+            // adapter manifest has nothing to prepare.
+            if server_known {
+                return Json(serde_json::json!({
+                    "harnessId": id,
+                    "runtimeReady": false,
+                    "ready": false,
+                    "detail": "this plugin declares no adapter; there is no runtime to prepare"
+                }))
+                .into_response_ok();
+            }
+            return s.errors.render(&DomainError::new("not_found", format!("plugin `{id}`")));
+        }
+    };
+    if !harness.manifest.capabilities.iter().any(|c| c == "runtime") {
+        // The plugin does not declare the runtime capability: it brings its own
+        // runtime, so `runtime/prepare` is not part of its contract. That is a
+        // valid, ready state - not a failure.
+        return Json(serde_json::json!({
+            "harnessId": id,
+            "runtimeReady": false,
+            "ready": true,
+            "detail": "this plugin declares no runtime capability; it brings its own runtime"
+        }))
+        .into_response_ok();
     }
-    Json(serde_json::json!({
-        "harnessId": id,
-        "runtimeReady": false,
-        "ready": false,
-        "detail": "no adapter is attached; runtime prepare is not available yet"
-    }))
-    .into_response_ok()
+    match s.adapters.call(&id, "runtime", "runtime/prepare", serde_json::json!({})).await {
+        Ok(v) => {
+            let adapter_ready = v.get("ready").and_then(serde_json::Value::as_bool).unwrap_or(false);
+            let detail = v
+                .get("detail")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            // The hub VERIFIES the declared command now exists: the adapter's own
+            // `ready` is not taken on faith, because "which version runs" is only
+            // true if the manifest's command is on disk.
+            let runtime_ready = runtime_target_present(&harness);
+            Json(serde_json::json!({
+                "harnessId": id,
+                "runtimeReady": runtime_ready,
+                "ready": adapter_ready && runtime_ready,
+                "package": v.get("package").cloned().unwrap_or(serde_json::Value::Null),
+                "version": v.get("version").cloned().unwrap_or(serde_json::Value::Null),
+                "target": v.get("target").cloned().unwrap_or(serde_json::Value::Null),
+                "detail": if detail.is_empty() {
+                    if runtime_ready { "runtime present".to_string() } else { "the declared runtime command is not on disk".to_string() }
+                } else { detail }
+            }))
+            .into_response_ok()
+        }
+        Err(agent_hub_adapter::AdapterError::Unsupported(_)) => s.errors.render(&DomainError::new(
+            "unsupported",
+            format!("the `{id}` adapter does not implement `runtime/prepare`"),
+        )),
+        Err(e) => s.errors.render(&DomainError::new(
+            "plugin_install_failed",
+            format!("runtime prepare failed: {e}"),
+        )),
+    }
+}
+
+/// Whether the runtime command the manifest declares is on disk. The command is
+/// relative to the plugin directory (`["node","runtime/dist/cli.js"]`); a plugin
+/// whose runtime command is just `node` (brings its own) is trivially present.
+fn runtime_target_present(harness: &agent_hub_adapter::Harness) -> bool {
+    let Some(cmd) = harness.manifest.command.as_ref() else {
+        return false;
+    };
+    let Some(program) = cmd.first() else {
+        return false;
+    };
+    // The runtime argv is the FIRST non-flag argument after the interpreter, when
+    // the manifest declares one (e.g. `node runtime/dist/cli.js`).
+    let rel = cmd.iter().skip(1).find(|a| !a.starts_with('-'));
+    match rel {
+        Some(rel) => harness.directory.join(rel).exists(),
+        None => std::path::Path::new(program).exists(),
+    }
 }

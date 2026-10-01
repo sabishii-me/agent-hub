@@ -107,7 +107,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The data layer and the plugins domain. Recovery runs before serving.
     let db = Db::open(data_dir.join("hub.sqlite"))?;
-    let plugins_root = data_dir.join("plugins");
+    // The plugins directory: `AGENT_HUB_PLUGINS_DIR` when a deployment composes
+    // plugins from elsewhere (the plugin README documents this as the search
+    // path); else `<data_dir>/plugins`. Either way the hub scans for directories
+    // with a `manifest.json` - a deployment puts the plugin directory there, it is
+    // never installed by the hub.
+    let plugins_root: PathBuf = std::env::var("AGENT_HUB_PLUGINS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data_dir.join("plugins"));
     std::fs::create_dir_all(&plugins_root)?;
     match agent_hub_db::recover(&db, &plugins_root) {
         Ok(done) if !done.is_empty() => {
