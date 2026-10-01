@@ -6,6 +6,13 @@ repository and holds the reviewer tasks.
 
 ## The continuous main task (read this first)
 
+> **RESUME HERE**: `docs/tasks/CURRENT-STATE.md` is the durable handoff (goal, the exact
+> open/closed links, the ONE authorization that blocks a real run, and the docs map). A
+> MOCK proves only the hub's half — it is NOT acceptance. The three REAL adapters are
+> present locally (pi `23ae330`, jouzu `453eff2`, deepseek `580aca8`); a capability is
+> DONE only when driven through `/v1` against one of them.
+
+
 **Implement the Rust agent-hub per the approved architecture, delivering real, usable `/v1`
 capabilities.** Not: completing a reviewer's checklist, making tests green, or stopping after
 one item until someone says "continue".
@@ -46,14 +53,19 @@ the review): pi, jouzu, dsh/deepseek. A capability is DONE only when driven thro
 - **§17 remainder** the new plugin-sourced skills/resources model (T2b) and the shared
   adapter layer; C2 forbids restoring the OLD skills model, it does NOT cancel the new one.
 
-### Closed this session (live-verified through /v1)
+### Code DONE this session — but NOT acceptance-tested against a real adapter
+
+Everything below was exercised with a MOCK adapter (or static comparison), which is NOT
+acceptance. The hub's code is in place; the REAL pi/jouzu/dsh run is BLOCKED by the
+unauthorized OS-keychain startup probe (see `docs/tasks/CURRENT-STATE.md`). Do not read
+these as capability passes.
 
 - **G1** the adapter bidirectional control protocol: a reverse request (`approval_need`)
-  keeps its JSON-RPC id and is answered. Live: adapter asks -> `/v1` approval visible ->
-  `/v1` allow -> adapter receives the reply to the SAME id -> turn ok; reject -> no side
-  effect, turn cancelled.
-- **G2** the harness `connections/delete` wire mapping (`{id}` not `{connectionId}`, plus
-  `validate`->`draft`, `auth/start`->`providerId`). Live: a real delete removes the target.
+  keeps its JSON-RPC id and is answered; the reply vocabulary is aligned to the REAL
+  adapters' `{approved, reason:'allowed'|'denied'}` (static read of pi `23ae330`, jouzu
+  `453eff2`, deepseek `580aca8`).
+- **G2** the harness `connections/delete` wire mapping (`{id}` not `{connectionId}`), which
+  the REAL dsh `deepseek-adapter.cjs:1308` confirms (`rows.find(r=>r.id===p.id)`).
 - Preset switch without wedging (restart+resume) + persisted `applied_preset`; provider
   pending barrier on every mutator/consumer; turn/abort bound to the dispatched process
   generation; plugin install from git or a verified artifact; harness extension snapshot

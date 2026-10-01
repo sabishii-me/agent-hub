@@ -92,36 +92,41 @@ an authorized real call).
 
 ## Delivery log
 
+NOTE ON EVIDENCE: everything below was driven with a MOCK adapter (or static comparison).
+That is NOT acceptance. Real pi/jouzu/dsh acceptance is BLOCKED by the unauthorized OS
+keychain startup probe. Each entry is CODE DONE, not capability-tested. See
+`docs/tasks/CURRENT-STATE.md`.
+
 - 248f6be..7af2866: A2 preset switch (success) + applied_preset persisted; GET
   /v1/model-providers/types loader; provider auth operation store (start/status/cancel); the
   8 harness connections/auth routes mounted + forwarded.
-- 5a7139c G1 CLOSED (live): the adapter bidirectional control protocol. A reverse request
+- 5a7139c G1 CODE DONE (mock-driven, reply vocabulary realigned in 85db400): the adapter bidirectional control protocol. A reverse request
   (approval_need) keeps its id and is answered; Humans raises the resource and awaits the /v1
   decision. Live: request -> /v1 visible -> /v1 allow -> the adapter gets the reply to the
   SAME id -> turn ok; reject -> no side effect, turn cancelled.
-- 4aa9b99 G2 CLOSED (live): harness connections/delete sends {id} (not {connectionId});
+- 4aa9b99 G2 CODE DONE (mock-driven; the `id` param confirmed against real dsh source): harness connections/delete sends {id} (not {connectionId});
   validate->draft; auth/start->providerId. Live: a real delete removes the target.
-- G3 CLOSED: ONE provider-type authority (`Providers::with_type_resolver`, wired from the
+- G3 CODE DONE (mock-driven): ONE provider-type authority (`Providers::with_type_resolver`, wired from the
   plugins root) serves create validation, `providerTypeAvailable` and grant admission. An
   explicit unknown type is refused BEFORE any row/secret write; a provider whose type later
   becomes unavailable is readable but UNUSABLE (grant refused with a reason); the built-in
   `custom-compatible` type is always available (the hub provides it). Live: unknown type ->
   400 before write; shipped type -> available; descriptor removed -> available=false and
   grant refused.
-- G6 CLOSED: minHubVersion is declared in the manifest contract (adapter-v1.json) and
+- G6 CODE DONE (mock-driven): minHubVersion is declared in the manifest contract (adapter-v1.json) and
   enforced at the plugin accept (begin_install) and the adapter ACTIVATION scan; a plugin
   that needs a newer hub is registered disabled with a named reason
   ("needs hub >= X, this is Y"), never started. The harness view publishes
   `disabledReason`; the harness def gained an optional `disabledReason` (contract + openapi
   regenerated). Live: a plugin requiring 9.9.9 -> disabled + reason; a normal plugin ->
   enabled.
-- G5 CLOSED: a preset restart that cannot re-establish the session now lands
+- G5 CODE DONE (mock-driven): a preset restart that cannot re-establish the session now lands
   `needs-repair` (in memory AND durably) instead of staying `active`; a COMPOSITE PATCH
   (preset + thinkingLevel) runs every field against the fresh process and re-reads the
   confirmed applied identity before the final save. Live: composite switch -> applied
   tracks the effect and thinkingLevel reaches the new process; a resume failure ->
   502 repair_failed + status needs-repair (not active).
-- G4 CLOSED: POST /v1/model-providers/{id}/auth NO LONGER fabricates a pending operation.
+- G4 CODE DONE (mock-driven): POST /v1/model-providers/{id}/auth NO LONGER fabricates a pending operation.
   The interactive-method check runs first and the route refuses 501 with NO side effect;
   an operation is created only by a real flow executor. Live: a refused start leaves no
   operation (status -> 404). The step schema still needs the owning contract before a real
