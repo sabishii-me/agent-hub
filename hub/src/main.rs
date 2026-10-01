@@ -346,10 +346,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => {}
         Err(e) => tracing::error!(error = %e, "session reconciliation failed"),
     }
-    let session_state = SessionsState::new_shared(sessions.clone(), errors.clone());
     // A cancel whose prompt never returned must not hold `busy` forever.
+    let sessions_for_sweep = sessions.clone();
     tokio::spawn(async move {
-        match sessions.reconcile_stalled_cancels().await {
+        match sessions_for_sweep.reconcile_stalled_cancels().await {
             Ok(n) if n > 0 => tracing::info!(stalled = n, "settled stalled cancels as interrupted"),
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "stalled-cancel reconciliation failed"),
@@ -360,7 +360,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tick.tick().await;
-            match sessions.timeout_unconfirmed_cancels(30, 1800).await {
+            match sessions_for_sweep.timeout_unconfirmed_cancels(30, 1800).await {
                 Ok(n) if n > 0 => tracing::info!(timed_out = n, "settled unconfirmed cancels as interrupted"),
                 Ok(_) => {}
                 Err(e) => tracing::error!(error = %e, "cancel-timeout sweep failed"),
@@ -371,7 +371,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Skills: the hub stores the bytes and installs the effective set per harness.
     let skills = Skills::new(&data_dir);
+    // The session-resource resolver: the composition root owns the seam, so the
+    // sessions domain never links the skills crate. Key "resources" -> the
+    // catalogue; "read:<uri>" -> a bounded read of one skills:// resource.
+    let skills_for_resolver = std::sync::Arc::new(Skills::new(&data_dir));
+    let resource_resolver: agent_hub_sessions::routes::ResourceResolver =
+        std::sync::Arc::new(move |key: &str| {
+            let skills = skills_for_resolver.clone();
+            if key == "resources" {
+                skills
+                    .resources()
+                    .map(|r| serde_json::json!({ "resources": r }))
+                    .map_err(|e| e.to_domain_error())
+            } else if let Some(uri) = key.strip_prefix("read:") {
+                skills.read_resource(uri).map_err(|e| e.to_domain_error())
+            } else {
+                Err(agent_hub_transport::DomainError::new("validation_failed", "unknown resource key"))
+            }
+        });
     let skill_state = SkillsState::new(skills, errors.clone());
+    let session_state = SessionsState::new_shared(sessions.clone(), errors.clone()).with_resources(resource_resolver);
 
     // Humans: approvals and questions (the SAME instance the reverse handler uses).
     let human_state = HumansState::new(humans.clone(), errors.clone());

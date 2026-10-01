@@ -18,19 +18,33 @@ use crate::service::{
     SessionError, Sessions, TurnOutcome, TurnRequest,
 };
 
+/// The hub's held skills, reached WITHOUT a crate dependency (the composition root
+/// owns that seam): the catalogue and a bounded read of one `skills://` URI.
+pub type ResourceResolver = std::sync::Arc<
+    dyn Fn(&str) -> Result<serde_json::Value, agent_hub_transport::DomainError> + Send + Sync,
+>;
+
 #[derive(Clone)]
 pub struct SessionsState {
     pub sessions: Arc<Sessions>,
     pub errors: ErrorRenderer,
+    /// The session-resource surface (contract `GET /resources`, `POST /resources/read`).
+    /// `None` -> the routes refuse honestly (no skills domain wired).
+    pub resources: Option<ResourceResolver>,
 }
 
 impl SessionsState {
     pub fn new(sessions: Sessions, errors: ErrorRenderer) -> Self {
-        SessionsState { sessions: Arc::new(sessions), errors }
+        SessionsState { sessions: Arc::new(sessions), errors, resources: None }
     }
 
     pub fn new_shared(sessions: Arc<Sessions>, errors: ErrorRenderer) -> Self {
-        SessionsState { sessions, errors }
+        SessionsState { sessions, errors, resources: None }
+    }
+
+    pub fn with_resources(mut self, resolver: ResourceResolver) -> Self {
+        self.resources = Some(resolver);
+        self
     }
 }
 
@@ -53,8 +67,8 @@ fn table() -> RouteTable<SessionsState> {
         .get("/v1/sessions/{id}/skills", session_skills)
         .get("/v1/sessions/{id}/artifacts", artifacts)
         .post("/v1/sessions/{id}/repair", repair)
-        .get("/v1/sessions/{id}/resources", not_implemented)
-        .post("/v1/sessions/{id}/resources/read", not_implemented)
+        .get("/v1/sessions/{id}/resources", resources)
+        .post("/v1/sessions/{id}/resources/read", resources_read)
 }
 
 #[derive(serde::Deserialize)]
@@ -339,9 +353,46 @@ async fn cancel_turn(State(s): State<SessionsState>, AxumPath(id): AxumPath<Stri
     }
 }
 
-async fn not_implemented(State(s): State<SessionsState>) -> Response {
-    s.errors.render(&DomainError::new(
-        "not_implemented",
-        "this session route needs the turn lifecycle, which is not wired yet",
-    ))
+/// `GET /v1/sessions/{id}/resources` - the read-only resource catalogue this session's
+/// harness skill selection authorizes. Logical `skills://` URIs only; no installation
+/// paths. With no session skill selection the contract's "all installed" semantics hold.
+async fn resources(State(s): State<SessionsState>, AxumPath(_id): AxumPath<String>) -> Response {
+    let Some(resolver) = s.resources.clone() else {
+        return s.errors.render(&DomainError::new(
+            "unsupported",
+            "no skills domain is wired; there is no resource catalogue",
+        ));
+    };
+    match tokio::task::spawn_blocking(move || resolver("resources")).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => s.errors.render(&e),
+        Err(_) => s.errors.render(&DomainError::new("internal_error", "resource listing failed")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ResourceReadBody {
+    uri: String,
+}
+
+/// `POST /v1/sessions/{id}/resources/read` - read a UTF-8 `skills://` resource within
+/// the session's selected skills. No filesystem fallback; traversal, symlinks, binary
+/// and >512 KiB are refused (contract). The content version is the SHA-256 of the bytes.
+async fn resources_read(
+    State(s): State<SessionsState>,
+    AxumPath(_id): AxumPath<String>,
+    Json(body): Json<ResourceReadBody>,
+) -> Response {
+    let Some(resolver) = s.resources.clone() else {
+        return s.errors.render(&DomainError::new(
+            "unsupported",
+            "no skills domain is wired; there is no resource to read",
+        ));
+    };
+    let key = format!("read:{}", body.uri);
+    match tokio::task::spawn_blocking(move || resolver(&key)).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => s.errors.render(&e),
+        Err(_) => s.errors.render(&DomainError::new("internal_error", "resource read failed")),
+    }
 }

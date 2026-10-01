@@ -110,6 +110,83 @@ impl Skills {
         Ok(content.len() as u64)
     }
 
+    /// The READ-ONLY resource catalogue for a session: logical `skills://` URIs only
+    /// (contract `GET /v1/sessions/{id}/resources`). With no session skill selection
+    /// the contract's "all installed" semantics hold: every file the hub holds is a
+    /// resource. A URI is `skills://<skillId>/<path>`; no installation path is exposed.
+    pub fn resources(&self) -> Result<Vec<serde_json::Value>, SkillError> {
+        let mut out = Vec::new();
+        for skill in self.list()? {
+            let dir = self.root.join(&skill.id);
+            let mut stack = vec![dir.clone()];
+            while let Some(d) = stack.pop() {
+                let entries = match std::fs::read_dir(&d) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                for e in entries.flatten() {
+                    let ft = match e.file_type() {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
+                    // A SYMLINK is not a resource: the contract forbids following it.
+                    if ft.is_symlink() {
+                        continue;
+                    }
+                    if ft.is_dir() {
+                        stack.push(e.path());
+                        continue;
+                    }
+                    let rel = e
+                        .path()
+                        .strip_prefix(&dir)
+                        .map(|r| r.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+                        .unwrap_or_default();
+                    out.push(serde_json::json!({ "uri": format!("skills://{}/{}", skill.id, rel) }));
+                }
+            }
+        }
+        out.sort_by(|a, b| a["uri"].as_str().cmp(&b["uri"].as_str()));
+        Ok(out)
+    }
+
+    /// Read a `skills://<id>/<path>` resource. NEVER a filesystem fallback: only a
+    /// `skills://` URI is accepted. Traversal, symlinks/junctions, binary content and
+    /// anything over 512 KiB are REJECTED (contract). The content version is the
+    /// SHA-256 of the bytes (contract).
+    pub fn read_resource(&self, uri: &str) -> Result<serde_json::Value, SkillError> {
+        let rest = uri
+            .strip_prefix("skills://")
+            .ok_or_else(|| SkillError::InvalidPath(format!("not a skills:// uri: {uri}")))?;
+        let (id, path) = rest
+            .split_once('/')
+            .ok_or_else(|| SkillError::InvalidPath(format!("a skills:// uri needs a path: {uri}")))?;
+        let full = self.resolve(id, path)?;
+        // resolve() refuses `..`/absolute segments; refuse a SYMLINK too, even if it
+        // points inside, because the contract forbids following one.
+        let meta = std::fs::symlink_metadata(&full)
+            .map_err(|_| SkillError::NotFound(uri.to_string()))?;
+        if meta.file_type().is_symlink() {
+            return Err(SkillError::InvalidPath(format!("a symlink is not a resource: {uri}")));
+        }
+        const MAX: u64 = 512 * 1024;
+        if meta.len() > MAX {
+            return Err(SkillError::InvalidPath(format!("resource exceeds 512 KiB: {uri}")));
+        }
+        let bytes = std::fs::read(&full).map_err(|_| SkillError::NotFound(uri.to_string()))?;
+        let content = String::from_utf8(bytes.clone())
+            .map_err(|_| SkillError::InvalidPath(format!("resource is not UTF-8 text: {uri}")))?;
+        use sha2::{Digest, Sha256};
+        let version = hex::encode(Sha256::digest(&bytes));
+        let mime = mime_for(path);
+        Ok(serde_json::json!({
+            "uri": uri,
+            "mimeType": mime,
+            "version": version,
+            "content": content,
+        }))
+    }
+
     pub fn delete(&self, id: &str) -> Result<(), SkillError> {
         let dir = self.skill_dir(id)?;
         if !dir.exists() {
@@ -144,6 +221,20 @@ impl Skills {
             copy_tree(&src, &target.join(id))?;
         }
         Ok(target)
+    }
+}
+
+/// A minimal content type from the file extension (the hub is a courier; it does not
+/// sniff bytes). A plain-text default keeps an unknown extension readable.
+fn mime_for(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "js" | "cjs" | "mjs" => "text/javascript",
+        "ts" => "text/typescript",
+        "txt" => "text/plain",
+        "yaml" | "yml" => "application/yaml",
+        _ => "text/plain",
     }
 }
 

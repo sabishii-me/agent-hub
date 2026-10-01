@@ -8,6 +8,8 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 agent-hub-transport = { path = "../transport" }
+sha2 = { workspace = true }
+hex = { workspace = true }
 axum.workspace = true
 tokio = { workspace = true }
 thiserror.workspace = true
