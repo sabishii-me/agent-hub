@@ -255,18 +255,28 @@ async fn start_auth(
             format!("no installed plugin ships the provider type `{kind}`"),
         ));
     };
-    let _method = crate::auth::AuthStore::interactive_method(&desc);
-    // The type has an interactive method, but the flow's STEP schema is not written
-    // down in the contract; the hub refuses rather than fabricate a step. (An
-    // operation is created so STATUS/CANCEL have a real lifecycle to read.)
-    let op = s.auth.create(&id);
-    s.errors.render(&DomainError::new(
-        "unsupported",
-        format!(
-            "the provider type `{kind}` declares an interactive method, but its step flow is not implemented yet (operation {})",
-            op.id
-        ),
-    ))
+    // NO SIDE EFFECT on a refusal: the interactive-method check runs FIRST and,
+    // when there is no executor, the hub refuses WITHOUT creating an operation. A
+    // fabricated pending operation (one no executor can ever resolve) would be a
+    // placeholder disguised as a resource (TASK-048 G4). The operation is created
+    // ONLY when a real execution is about to start.
+    match crate::auth::AuthStore::interactive_method(&desc) {
+        None => s.errors.render(&DomainError::new(
+            "unsupported",
+            format!("the provider type `{kind}` declares no interactive auth method"),
+        )),
+        Some(_method) => {
+            // The step schema of a device-code/browser flow is not defined in the
+            // owning contract yet; refusing here (with no operation created) is the
+            // honest state until the flow is implemented. Do NOT create a pending op.
+            s.errors.render(&DomainError::new(
+                "unsupported",
+                format!(
+                    "the provider type `{kind}` declares an interactive auth method, but its step flow is not implemented yet"
+                ),
+            ))
+        }
+    }
 }
 
 /// `GET /v1/model-providers/{id}/auth/{op}`: the current state of a hub-level auth

@@ -101,11 +101,17 @@ an authorized real call).
   SAME id -> turn ok; reject -> no side effect, turn cancelled.
 - 4aa9b99 G2 CLOSED (live): harness connections/delete sends {id} (not {connectionId});
   validate->draft; auth/start->providerId. Live: a real delete removes the target.
+- G4 CLOSED: POST /v1/model-providers/{id}/auth NO LONGER fabricates a pending operation.
+  The interactive-method check runs first and the route refuses 501 with NO side effect;
+  an operation is created only by a real flow executor. Live: a refused start leaves no
+  operation (status -> 404). The step schema still needs the owning contract before a real
+  flow lands.
 
 ## Open links, by owner (next work)
 
-- G4 (HUB, first): delete the auth placeholder (a pending op with no executor); refuse with
-  no side effect until the real declarative flow + secret->grant closure exists.
+- G4 remainder (HUB+CONTRACT): implement the real declarative auth flow (accept/execute/
+  result/cancel) once the step schema is published; the placeholder is gone, the executor
+  is still owed.
 - G5 (HUB): preset restart failure must land needs-repair (GET must not show active without
   a live confirmed process); a composite PATCH must execute every field.
 - G3 (HUB+CONTRACT+PLUGIN): ONE type authority; publish the descriptor artifact; upgrade the

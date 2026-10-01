@@ -84,6 +84,11 @@ impl AuthStore {
             .find(|m| matches!(*m, "device-code" | "browser"))
     }
 
+    /// Create an operation. Called ONLY by a real flow EXECUTOR at the moment it
+    /// begins work; a route that cannot execute must NOT create one (a pending
+    /// operation with no executor is a placeholder disguised as a resource,
+    /// TASK-048 G4).
+    #[allow(dead_code)] // used by the flow executor once the step contract lands
     pub fn create(&self, provider: &str) -> AuthOperation {
         let n = self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let op = AuthOperation {
@@ -144,17 +149,25 @@ mod tests {
         assert_eq!(AuthStore::interactive_method(&desc(&["browser"])), Some("browser"));
     }
 
+    /// An EMPTY store has no operations: with no executor, none is ever created, so
+    /// the status route reads `not_found` (honest, not a fabricated pending).
     #[test]
-    fn an_operation_is_pending_then_cancelled_idempotently() {
+    fn an_empty_store_has_no_operations() {
+        let store = AuthStore::new();
+        assert!(store.get("anything").is_none());
+        assert!(!store.cancel("anything"));
+    }
+
+    /// The executor path: create -> pending -> cancel is idempotent. This is the API
+    /// the flow executor uses once the step contract lands.
+    #[test]
+    fn an_executor_operation_is_pending_then_cancelled_idempotently() {
         let store = AuthStore::new();
         let op = store.create("p1");
         assert_eq!(store.get(&op.id).unwrap().status, AuthStatus::Pending);
         assert!(store.cancel(&op.id));
         assert_eq!(store.get(&op.id).unwrap().status, AuthStatus::Cancelled);
-        // Idempotent: a second cancel is still a success and stays cancelled.
-        assert!(store.cancel(&op.id));
+        assert!(store.cancel(&op.id)); // idempotent
         assert_eq!(store.get(&op.id).unwrap().status, AuthStatus::Cancelled);
-        // An unknown operation is not found.
-        assert!(!store.cancel("nope"));
     }
 }
