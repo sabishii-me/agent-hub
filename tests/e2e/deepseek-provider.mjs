@@ -16,6 +16,8 @@ const PLUGIN_SRC = process.env.PI_PLUGIN_DIR || 'E:/AI/ideas/prts-harness-pi';
 const HARNESS = process.env.PI_HARNESS_ID || 'pi';
 const PROVIDER_PLUGIN = process.env.PROVIDER_PLUGIN_DIR || 'E:/AI/ideas/prts-providers/deepseek';
 const PROVIDER_TYPE = process.env.PROVIDER_TYPE_ID || 'deepseek';
+const PROVIDER_URL = process.env.PROVIDER_URL || null;   // compatible: caller supplies
+const PROVIDER_API = process.env.PROVIDER_API || null;
 const KEY = process.env.DEEPSEEK_KEY || 'sk-1ea3012ec8d84d91ae038149f94cfe2e';
 const MODEL = process.env.PI_MODEL || 'deepseek-chat';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -64,7 +66,10 @@ try {
   console.log(`[e2e] descriptor endpoint: ${JSON.stringify(desc.configuration.endpoint)}`);
 
   // Create a provider of that TYPE - no url/api (the type owns them), just the key.
-  r = await j('POST', `${base}/v1/model-providers`, token, { id: 'ds', token: KEY, providerType: PROVIDER_TYPE, providerTypeVersion: 1 });
+  const createBody = { id: 'ds', token: KEY, providerType: PROVIDER_TYPE, providerTypeVersion: 1 };
+  if (PROVIDER_URL) createBody.url = PROVIDER_URL;
+  if (PROVIDER_API) createBody.api = PROVIDER_API;
+  r = await j('POST', `${base}/v1/model-providers`, token, createBody);
   console.log(`[e2e] POST /v1/model-providers -> ${r.status} ${r.status < 300 ? JSON.stringify({ url: r.json.provider.url, api: r.json.provider.api, type: r.json.provider.providerType, available: r.json.provider.providerTypeAvailable }) : r.text.slice(0, 300)}`);
   if (r.status >= 300) { process.exit(4); }
 

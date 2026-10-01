@@ -83,6 +83,19 @@ The plugin side: `prts-providers/deepseek/provider.json` is the DESCRIPTOR the R
 reads (the old `provider.mjs` module protocol is NOT what the hub uses - the contract
 says the hub never imports plugin code).
 
+### BOTH provider plugins, same DeepSeek HTTPS endpoint
+
+- **A - `deepseek` plugin**: the TYPE OWNS the endpoint; the person supplies only the
+  key. `POST /v1/model-providers {token, providerType:deepseek}` -> url/api come from
+  the descriptor; an override is refused.
+- **B - `compatible` plugin (`custom-compatible`)**: the CALLER supplies url/api. `POST
+  /v1/model-providers {url:"https://api.deepseek.com", api:"openai-completions", token,
+  providerType:custom-compatible}`. No fixed endpoint in the descriptor.
+
+Both fetched the real catalog (`/models/refresh -> 200`: deepseek-flash, deepseek-v4-pro)
+and a real turn answered `pong`. The descriptor differs only in
+`configuration.endpoint` (present for `deepseek`, absent for `compatible`).
+
 ## What this is and is NOT
 
 - IS: a real end-to-end model turn through the hub, the real adapter, the real runtime and
