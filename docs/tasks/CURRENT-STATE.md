@@ -68,6 +68,17 @@ invent further.
   consistent released version + a complete recorded closure + the HMR/loader fix. Do NOT
   mark dsh as accepted. pi and jouzu are unaffected.
 
+## Surface complete (2026-10-01)
+
+Every `/v1` route the contract declares is now IMPLEMENTED - no `501` stubs remain. The
+hub serves exactly the contract's 74 endpoints (verified via `/v1/surface` at boot).
+This session added the last ones: the provider device-code auth flow (ADR-0012, durable)
+and the four skills + two session-resource routes.
+
+"Implemented" is not "accepted": acceptance is the REAL, per-capability table below. pi and
+jouzu have real acceptance; dsh is blocked (upstream); the security/enumeration surfaces
+remain open verification gates.
+
 ## Per-capability status
 
 `docs/tasks/system-alignment.md` (table + delivery log). Legend for evidence: STATIC vs

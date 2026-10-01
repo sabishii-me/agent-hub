@@ -2,9 +2,9 @@
 //!
 //! Wired: the credential path is real - a provider's `token` is stored in the OS
 //! secret store (`agent-hub-secrets`), never in the record file; `logout` deletes
-//! it; the catalog fetch authenticates with it. The catalog/model listing and the
-//! provider-type/auth surfaces that need the fuller provider data layer stay
-//! `501 not_implemented`.
+//! it; the catalog fetch authenticates with it; the provider-TYPE surface reads each
+//! plugin's `provider.json` as DATA; and the auth surface runs the device-code flow
+//! the type declares (ADR-0012) with a durable operation. No route here is a stub.
 //!
 //! A provider is DATA (`ARCHITECTURE` §5); the hub owns the request, the auth, the
 //! catalog fetch and the field mapping.
