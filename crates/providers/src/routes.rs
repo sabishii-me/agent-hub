@@ -31,12 +31,17 @@ pub struct ProvidersState {
 }
 
 impl ProvidersState {
-    pub fn new(providers: Providers, errors: ErrorRenderer, plugins_root: impl Into<std::path::PathBuf>) -> Self {
+    pub fn new(
+        providers: Providers,
+        errors: ErrorRenderer,
+        plugins_root: impl Into<std::path::PathBuf>,
+        auth: Arc<crate::auth::AuthStore>,
+    ) -> Self {
         ProvidersState {
             providers: Arc::new(providers),
             errors,
             plugins_root: plugins_root.into(),
-            auth: Arc::new(crate::auth::AuthStore::new()),
+            auth,
         }
     }
 
@@ -46,12 +51,13 @@ impl ProvidersState {
         providers: Arc<Providers>,
         errors: ErrorRenderer,
         plugins_root: impl Into<std::path::PathBuf>,
+        auth: Arc<crate::auth::AuthStore>,
     ) -> Self {
         ProvidersState {
             providers,
             errors,
             plugins_root: plugins_root.into(),
-            auth: Arc::new(crate::auth::AuthStore::new()),
+            auth,
         }
     }
 }
@@ -261,28 +267,94 @@ async fn start_auth(
             format!("no installed plugin ships the provider type `{kind}`"),
         ));
     };
-    // NO SIDE EFFECT on a refusal: the interactive-method check runs FIRST and,
-    // when there is no executor, the hub refuses WITHOUT creating an operation. A
-    // fabricated pending operation (one no executor can ever resolve) would be a
-    // placeholder disguised as a resource (TASK-048 G4). The operation is created
-    // ONLY when a real execution is about to start.
-    match crate::auth::AuthStore::interactive_method(&desc) {
-        None => s.errors.render(&DomainError::new(
+    // NO SIDE EFFECT on a refusal: a type with no interactive method is refused
+    // BEFORE any operation is created. The operation exists ONLY when a real flow
+    // executor is about to start (TASK-048 G4).
+    if crate::auth::AuthStore::interactive_method(&desc).is_none() {
+        return s.errors.render(&DomainError::new(
             "unsupported",
             format!("the provider type `{kind}` declares no interactive auth method"),
-        )),
-        Some(_method) => {
-            // The step schema of a device-code/browser flow is not defined in the
-            // owning contract yet; refusing here (with no operation created) is the
-            // honest state until the flow is implemented. Do NOT create a pending op.
-            s.errors.render(&DomainError::new(
+        ));
+    }
+    // The DEVICE-CODE flow the type DECLARES as data. The hub runs it; no plugin
+    // code executes in-process. The steps are the type's; the execution is the hub's.
+    let spec = match crate::auth::DeviceCodeSpec::from_descriptor(&desc) {
+        Ok(Some(sp)) => sp,
+        Ok(None) => {
+            return s.errors.render(&DomainError::new(
                 "unsupported",
-                format!(
-                    "the provider type `{kind}` declares an interactive auth method, but its step flow is not implemented yet"
-                ),
+                format!("the provider type `{kind}` declares an interactive method the hub does not implement"),
             ))
         }
-    }
+        Err(why) => {
+            return s.errors.render(&DomainError::new(
+                "unsupported",
+                format!("the provider type `{kind}` cannot start sign-in: {why}"),
+            ))
+        }
+    };
+    // Ask the platform for a code; only then create the operation (a request that
+    // fails to start leaves NO pending op - no placeholder disguised as a resource).
+    let (step, device_code, expires, interval) = match crate::auth::device_code_start(&spec, &id).await {
+        Ok(v) => v,
+        Err(why) => {
+            return s.errors.render(&DomainError::new("provider_unauthorized", format!("{why}")))
+        }
+    };
+    // The operation is created ONLY now (a real flow is about to run). The `flow`
+    // (the device_code the hub polls with) is hub-private state; `next` is the
+    // contract step the caller shows.
+    let op_id = match s.auth.create(&id, "device-code", &step, &device_code) {
+        Ok(op_id) => op_id,
+        Err(why) => {
+            return s.errors.render(&DomainError::new("internal_error", format!("{why}")))
+        }
+    };
+    // The poller runs in the HUB and OUTLIVES this request. On approval it persists
+    // the credential + endpoint onto the row (the journal-guarded transition); on
+    // expiry/cancel/refusal it records the terminal state. Never a fake success.
+    let providers = s.providers.clone();
+    let auth = s.auth.clone();
+    let provider_id = id.clone();
+    let op_for_task = op_id.clone();
+    tokio::spawn(async move {
+        let cancel_flag = auth.cancel_flag(&op_for_task);
+        let outcome = crate::auth::device_code_poll(&spec, &device_code, expires, interval, || {
+            cancel_flag.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .await;
+        match outcome {
+            Ok(done) => {
+                match providers
+                    .finish_auth(&provider_id, &done.credential, Some((done.url, done.api)))
+                    .await
+                {
+                    Ok(_) => auth.finish(&op_for_task, crate::auth::AuthStatus::Approved, None, done.account),
+                    Err(e) => auth.finish(
+                        &op_for_task,
+                        crate::auth::AuthStatus::Failed,
+                        Some(format!("the credential could not be stored: {e}")),
+                        None,
+                    ),
+                }
+            }
+            Err(why) if why == "cancelled" => {
+                auth.finish(&op_for_task, crate::auth::AuthStatus::Cancelled, None, None)
+            }
+            Err(why) if why.contains("expired") => {
+                auth.finish(&op_for_task, crate::auth::AuthStatus::Expired, Some(why), None)
+            }
+            Err(why) => auth.finish(&op_for_task, crate::auth::AuthStatus::Failed, Some(why), None),
+        }
+    });
+    // 202 + Location: the operation is read at GET .../auth/{op} (RFC 9110).
+    let location = format!("/v1/model-providers/{id}/auth/{op_id}");
+    (
+        axum::http::StatusCode::ACCEPTED,
+        [(axum::http::header::LOCATION, location)],
+        Json(serde_json::json!({ "operationId": op_id, "next": step })),
+    )
+        .into_response()
 }
 
 /// `GET /v1/model-providers/{id}/auth/{op}`: the current state of a hub-level auth
@@ -292,8 +364,8 @@ async fn auth_status(
     AxumPath((id, op)): AxumPath<(String, String)>,
 ) -> Response {
     match s.auth.get(&op) {
-        Some(operation) if operation.provider == id => {
-            Json(operation.to_json()).into_response()
+        Some(body) if s.auth.provider_of(&op).as_deref() == Some(id.as_str()) => {
+            Json(body).into_response()
         }
         _ => s.errors.render(&DomainError::new(
             "not_found",
@@ -309,7 +381,7 @@ async fn auth_cancel(
     AxumPath((id, op)): AxumPath<(String, String)>,
 ) -> Response {
     match s.auth.get(&op) {
-        Some(operation) if operation.provider == id => {
+        Some(_) if s.auth.provider_of(&op).as_deref() == Some(id.as_str()) => {
             let _ = s.auth.cancel(&op);
             Json(serde_json::json!({ "ok": true, "id": op })).into_response()
         }

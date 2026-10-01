@@ -10,6 +10,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+pub mod auth_ops;
 pub mod connections;
 pub mod instance;
 pub mod providers;
@@ -139,6 +140,7 @@ impl Db {
                 conn.execute_batch(SCHEMA_HARNESS_STATUS)?;
                 conn.execute_batch(SCHEMA_HARNESS_EXTENSIONS)?;
                 conn.execute_batch(providers::SCHEMA_PROVIDER_OPS)?;
+                conn.execute_batch(auth_ops::SCHEMA_AUTH_OPS)?;
                 conn.pragma_update(None, "user_version", Self::SCHEMA_VERSION)?;
             }
             (0, true) => {

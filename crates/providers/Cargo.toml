@@ -13,6 +13,8 @@ agent-hub-secrets = { path = "../secrets" }
 agent-hub-transport = { path = "../transport" }
 axum.workspace = true
 tokio = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 reqwest = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true

@@ -749,6 +749,58 @@ pub struct ResolvedGrant {
 }
 
 impl Providers {
+    /// FINISH a hub-owned interactive authorization (device-code/browser): the flow
+    /// gave us a credential and (for a type that learns its endpoint at sign-in) the
+    /// endpoint. Persist BOTH onto the row, using the same journal-guarded credential
+    /// transition as create/patch, so a crash never mispairs a credential. Returns the
+    /// updated record.
+    pub async fn finish_auth(
+        &self,
+        id: &str,
+        credential: &str,
+        endpoint: Option<(Option<String>, Option<String>)>,
+    ) -> Result<ProviderRecord, ProviderError> {
+        if !self.secrets.is_available() {
+            return Err(ProviderError::NoSecretStore);
+        }
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().await;
+        let mut rec = self.store.get(id)?;
+        if self.store.has_pending_op(id)? {
+            return Err(ProviderError::RevisionConflict(format!(
+                "provider `{id}` has an unresolved credential transition; resolve it first"
+            )));
+        }
+        // Endpoint first (non-secret), so the row the journal describes already
+        // carries the intended configuration.
+        if let Some((url, api)) = endpoint {
+            if let Some(u) = url {
+                rec.url = Some(u);
+            }
+            if let Some(a) = api {
+                rec.api = Some(a);
+            }
+        }
+        self.store.save(&rec)?;
+        let op_id = self.store.begin_op(
+            id,
+            "auth",
+            &self.secret_ref(id),
+            &rec.incarnation,
+            rec.revision,
+            &Self::config_digest(&rec),
+        )?;
+        if let Err(e) = self.secrets.set(&self.secret_ref(id), credential) {
+            return Err(ProviderError::SecretUnreadable(e.to_string()));
+        }
+        rec.secret_ref = Some(self.secret_ref(id));
+        rec.token_configured = true;
+        self.store.save(&rec)?;
+        // Clear the journal entry we began, by ITS id: the transition landed.
+        self.store.finish_op(&op_id)?;
+        Ok(self.store.get(id)?)
+    }
+
     /// Resolve a hub-managed provider id into a grant: the row (endpoint,
     /// protocol, declarations) plus the credential READ FROM the secret store.
     /// This is the single boundary a managed provider crosses into a session.
