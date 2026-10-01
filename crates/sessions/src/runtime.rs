@@ -243,6 +243,11 @@ impl Sessions {
                 "connectionId": grant.connection_id,
                 "value": grant.value,
                 "url": grant.url,
+                // The DIALECT the provider speaks. Without it the adapter defaults
+                // to openai-completions and a provider that speaks
+                // anthropic-messages is called on the wrong wire protocol (its
+                // requests fail, pi retries, the turn yields no message).
+                "api": grant.api,
                 "declarations": grant.declarations,
             });
             match tokio::time::timeout(control_request_timeout(), bus.requests.request("credentials/grant", params)).await {
@@ -587,6 +592,7 @@ impl Sessions {
             "connectionId": grant.connection_id,
             "value": grant.value,
             "url": grant.url,
+            "api": grant.api,
             "declarations": grant.declarations,
         });
         self.request(sid, "credentials/grant", params).await.map(|_| ())
