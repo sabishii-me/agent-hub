@@ -264,8 +264,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Box::pin(async move {
                 match method.as_str() {
                     "approval_need" => {
-                        let tool = params.get("tool").and_then(Value::as_str).unwrap_or("tool").to_string();
-                        let args = params.get("args").cloned().unwrap_or(Value::Null);
+                        // The REAL adapters (pi/jouzu/dsh) send `{sid, kind, detail,
+                        // approval_id?, options?}`, and pi/jouzu may instead carry
+                        // `tool`/`args`. Read BOTH shapes: a `detail` is the human
+                        // line; `tool`/`args` are the action when present.
+                        let tool = params
+                            .get("tool")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .or_else(|| params.get("detail").and_then(Value::as_str).map(str::to_string))
+                            .unwrap_or_else(|| "approval".into());
+                        let args = params
+                            .get("args")
+                            .cloned()
+                            .or_else(|| params.get("detail").cloned())
+                            .unwrap_or(Value::Null);
                         let options = params
                             .get("options")
                             .and_then(Value::as_array)
@@ -276,15 +289,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(resolved) => {
                                 let decision = resolved.decision.unwrap_or_else(|| "reject".into());
                                 let approved = !decision.to_lowercase().contains("reject");
+                                // The adapter resolvers read `.approved` and `.reason`
+                                // from a CLOSED vocabulary (`timeout`|`allowed`|
+                                // `denied`); send exactly that (pi:564, jouzu:675,
+                                // dsh:1441). Any extra field is ignored by them.
                                 Some(serde_json::json!({
                                     "approved": approved,
-                                    "decision": decision,
-                                    "reason": resolved.reason,
+                                    "reason": if approved { "allowed" } else { "denied" },
                                 }))
                             }
-                            // The approval was dropped (session ended): answer a
-                            // refusal so the adapter never waits forever.
-                            Err(_) => Some(serde_json::json!({ "approved": false, "reason": "the approval was withdrawn" })),
+                            // The approval was dropped (session ended / hub gone):
+                            // answer a refusal so the adapter never waits forever.
+                            Err(_) => Some(serde_json::json!({ "approved": false, "reason": "denied" })),
                         }
                     }
                     "question_need" => {
