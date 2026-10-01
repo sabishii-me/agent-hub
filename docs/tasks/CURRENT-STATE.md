@@ -60,8 +60,11 @@ Static wire findings vs the REAL adapters: `docs/tasks/real-adapter-wire.md`.
 - G3 remainder (CONTRACT+PLUGIN): publish the `provider.json` descriptor artifact in the
   owning contract; upgrade the provider plugin.
 - HUB: real declarative auth flow (needs the step schema in the contract); new
-  plugin-sourced skills/resources (T2b); shared adapter layer; `prompt` bound to the
-  turn's process generation (old §E remainder).
+  plugin-sourced skills/resources (T2b — verification-gated on a REAL node child);
+  shared adapter layer (§17.4).
+- DONE: `prompt` is now bound to the turn's recorded process generation (the turn
+  dispatches through `send_if_generation(process_gen)`, symmetric with cancel's abort;
+  a stale target is a DEFINITE non-delivery, never an unknown result).
 
 ## Docs map
 

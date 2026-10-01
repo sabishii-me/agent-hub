@@ -1737,7 +1737,17 @@ impl Sessions {
                 "message": text,
                 "clientMessageId": turn_id,
             });
-            match self.runtime.send(&session_id, "session/prompt", params).await {
+            // Bind the prompt to the SAME process generation we recorded with the
+            // claim: if a stop/reopen/repair replaced the process between the
+            // generation read and this send, the prompt would reach a process the
+            // turn was NOT claimed against (and whose abort is bound elsewhere).
+            // `send_if_generation` takes the requests lock, so it cannot interleave
+            // with a process replacement (TASK-048 / the prompt-binding remainder).
+            match self
+                .runtime
+                .send_if_generation(&session_id, process_gen, "session/prompt", params)
+                .await
+            {
                 Ok(rx) => rx,
                 Err(crate::runtime::SendError::NotDelivered(m)) => {
                     // The frame was NOT written (no live process / stale): the turn

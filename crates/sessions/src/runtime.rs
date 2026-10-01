@@ -771,6 +771,28 @@ mod env_tests {
         assert!(!env.iter().any(|(k, _)| k == "MY_CONN_TOKEN"));
     }
 
+    /// A prompt/abort bound to a process generation that no longer matches the
+    /// live one is REFUSED as a definite non-delivery: it can never reach a
+    /// process the turn was not claimed against (the prompt-binding remainder).
+    #[tokio::test]
+    async fn a_stale_generation_is_not_delivered() {
+        let sessions = Sessions::new(agent_hub_events::Bus::new(16, 16));
+        // A process generation exists (say 7), but we hold generation 6.
+        sessions
+            .generations
+            .lock()
+            .expect("generations")
+            .insert("s1".into(), 7);
+        let err = sessions
+            .send_if_generation("s1", 6, "session/prompt", json!({}))
+            .await
+            .expect_err("a stale generation must not be delivered");
+        assert!(
+            matches!(err, SendError::NotDelivered(_)),
+            "a stale target is a DEFINITE non-delivery, not an unknown result"
+        );
+    }
+
     /// Extra roots reach the adapter as AGENT_HUB_ADDITIONAL_DIRS; none means the
     /// variable is absent (not an empty list).
     #[test]
