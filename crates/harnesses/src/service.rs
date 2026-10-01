@@ -67,6 +67,9 @@ impl Harnesses {
             "runtimePackage": m.runtime.as_ref().and_then(|r| r.package.clone()),
             "capabilities": m.capabilities,
             "status": h.status.as_str(),
+            // Why a DISABLED harness is not activated, when known (a plugin that
+            // needs a newer hub, ADR-0008). null when enabled or unknown.
+            "disabledReason": h.refused.clone(),
             "presetId": null,
             "appliedPreset": null,
         }))

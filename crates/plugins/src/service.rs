@@ -357,6 +357,14 @@ impl Plugins {
         if let Some(reason) = manifest.invalid_reason() {
             return Err(PluginError::InvalidManifest(reason));
         }
+        // The minimum-host gate (ADR-0008): a plugin that needs a newer hub is
+        // REFUSED here, before it lands, with a named reason. There is no
+        // activation of a plugin the host cannot support.
+        if let Some(reason) = agent_hub_adapter::version::refusal(manifest.min_hub_version.as_deref())
+        {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(PluginError::InvalidManifest(reason));
+        }
         let id = manifest
             .id
             .clone()

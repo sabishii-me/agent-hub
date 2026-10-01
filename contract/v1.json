@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Agent hub /v1 contract — single source of truth for hub<->consumer surface",
+  "title": "Agent hub /v1 contract \u2014 single source of truth for hub<->consumer surface",
   "protocol": "agent-hub",
   "version": "2026-09-16",
   "note": "Every route requires the bearer token (no anonymous discovery). Long operations answer 202 Accepted + Location and are read through the resource.",
@@ -92,6 +92,13 @@
             "tombstone-only",
             "none"
           ]
+        },
+        "disabledReason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "why this harness is not ACTIVATED (status `disabled`), when the hub knows: e.g. a plugin that needs a newer hub (ADR-0008, \"needs hub >= X, this is Y\"). null when enabled or the reason is unknown. ADR-0002: say what is not known and what to do next."
         }
       }
     },
@@ -118,7 +125,7 @@
             "string",
             "null"
           ],
-          "description": "which managed provider feeds this session; null = do not intervene, the harness uses its own native config. Accepts the catalog spelling `hub-<id>` or the bare `<id>` (the older `prts-<id>` spelling is still accepted, because sessions created before the rename store it); the session reports the bare id. A model named without a provider must belong to the provider that is in effect — a model from elsewhere is refused (400 validation_failed), never accepted and left to fail mid-turn."
+          "description": "which managed provider feeds this session; null = do not intervene, the harness uses its own native config. Accepts the catalog spelling `hub-<id>` or the bare `<id>` (the older `prts-<id>` spelling is still accepted, because sessions created before the rename store it); the session reports the bare id. A model named without a provider must belong to the provider that is in effect \u2014 a model from elsewhere is refused (400 validation_failed), never accepted and left to fail mid-turn."
         },
         "modelId": {
           "type": [
@@ -213,7 +220,7 @@
           "items": {
             "type": "string"
           },
-          "description": "extra roots the harness may activate, in addition to cwd; absolute paths. Passed through to the harness — whether a harness supports them is the harness's business, and the core neither refuses nor silently drops them. [] or null = none."
+          "description": "extra roots the harness may activate, in addition to cwd; absolute paths. Passed through to the harness \u2014 whether a harness supports them is the harness's business, and the core neither refuses nor silently drops them. [] or null = none."
         },
         "appliedAdditionalDirectories": {
           "type": [
@@ -451,7 +458,7 @@
     },
     "contentPart": {
       "type": "object",
-      "description": "one part of a turn's content. text is plain. image carries base64 bytes — the media type is the harness-facing one (image/png, image/jpeg, image/webp, image/gif), data is raw base64 with NO data: prefix.",
+      "description": "one part of a turn's content. text is plain. image carries base64 bytes \u2014 the media type is the harness-facing one (image/png, image/jpeg, image/webp, image/gif), data is raw base64 with NO data: prefix.",
       "required": [
         "type"
       ],
@@ -503,7 +510,7 @@
         },
         "tool": {
           "type": "string",
-          "description": "confirm | select — the kind of dialog the harness raised"
+          "description": "confirm | select \u2014 the kind of dialog the harness raised"
         },
         "args": {
           "type": "object"
@@ -611,7 +618,7 @@
                   "object",
                   "null"
                 ],
-                "description": "presentation hint: what kind of decision this is. `{ kind: 'plan-review', approve: '<label>' }` says detail is a plan and names the approving label. Presentation only — the answer carries the same fields either way",
+                "description": "presentation hint: what kind of decision this is. `{ kind: 'plan-review', approve: '<label>' }` says detail is a plan and names the approving label. Presentation only \u2014 the answer carries the same fields either way",
                 "properties": {
                   "kind": {
                     "type": "string"
@@ -750,7 +757,7 @@
         },
         "enabled": {
           "type": "boolean",
-          "description": "false = disabled; honest grading — adapter must not report a tool disabled unless it actually blocks it"
+          "description": "false = disabled; honest grading \u2014 adapter must not report a tool disabled unless it actually blocks it"
         }
       }
     },
@@ -809,7 +816,7 @@
             },
             "retryable": {
               "type": "boolean",
-              "description": "whether retrying the same request unchanged can succeed — straight from contract/errors.json, the same table that decides the status, so body, status and table cannot disagree. false means something must change first (the session is busy, the state needs repair, the input is invalid)."
+              "description": "whether retrying the same request unchanged can succeed \u2014 straight from contract/errors.json, the same table that decides the status, so body, status and table cannot disagree. false means something must change first (the session is busy, the state needs repair, the input is invalid)."
             }
           }
         },
@@ -819,7 +826,7 @@
         },
         "retryable": {
           "type": "boolean",
-          "description": "whether retrying the same request unchanged can succeed. It comes from contract/errors.json — the same table that decides the status — so the body, the status and the table cannot disagree. false means something must change first (the session is busy, the state needs repair, the input is invalid)."
+          "description": "whether retrying the same request unchanged can succeed. It comes from contract/errors.json \u2014 the same table that decides the status \u2014 so the body, the status and the table cannot disagree. false means something must change first (the session is busy, the state needs repair, the input is invalid)."
         }
       }
     },
@@ -885,18 +892,18 @@
       },
       "runtimeReady": {
         "type": "boolean",
-        "description": "whether the declared runtime command exists on disk — a filesystem fact, not a claim that the harness works"
+        "description": "whether the declared runtime command exists on disk \u2014 a filesystem fact, not a claim that the harness works"
       },
       "state": {
         "type": "string",
-        "description": "the hub's ONE verdict on this plugin — absent (the catalog carries it, nothing is on disk), installing (fetching and landing it), removing, preparing (materialising its runtime), failed (its runtime could not be prepared; retryable), or ready (on disk, nothing being done to it). A client renders this and derives nothing: there is no separate busy flag or prepare-state to combine, because two of them let one plugin be shown as removing AND preparing at the same time."
+        "description": "the hub's ONE verdict on this plugin \u2014 absent (the catalog carries it, nothing is on disk), installing (fetching and landing it), removing, preparing (materialising its runtime), failed (its runtime could not be prepared; retryable), or ready (on disk, nothing being done to it). A client renders this and derives nothing: there is no separate busy flag or prepare-state to combine, because two of them let one plugin be shown as removing AND preparing at the same time."
       },
       "prepare": {
         "type": [
           "object",
           "null"
         ],
-        "description": "{detail, startedAt, finishedAt} of the last runtime/prepare for this plugin, or null when none ran in this process. INFORMATION about how `state` was reached (what is being fetched, why it failed) — never a second state; the state itself is only ever `state`."
+        "description": "{detail, startedAt, finishedAt} of the last runtime/prepare for this plugin, or null when none ran in this process. INFORMATION about how `state` was reached (what is being fetched, why it failed) \u2014 never a second state; the state itself is only ever `state`."
       },
       "invalid": {
         "type": "string",
@@ -908,7 +915,7 @@
           "object",
           "null"
         ],
-        "description": "{id, version, url, sha256, size} exactly as the install named it, when this plugin came from a release artifact; null for a git source or a directory nobody installed. A client compares `version` with a catalog entry to know an update exists — the hub does not compare anything itself."
+        "description": "{id, version, url, sha256, size} exactly as the install named it, when this plugin came from a release artifact; null for a git source or a directory nobody installed. A client compares `version` with a catalog entry to know an update exists \u2014 the hub does not compare anything itself."
       }
     },
     "catalogVersion": {
@@ -955,7 +962,7 @@
         },
         "pluginType": {
           "type": "string",
-          "description": "'harness-adapter' or 'model-provider' — what the plugin IS, as its own manifest declares it. A plugin's type is independent of its id: the id is the plugin's own name and carries no type. The hub composes its storage key from the two (<pluginType>-<id>)."
+          "description": "'harness-adapter' or 'model-provider' \u2014 what the plugin IS, as its own manifest declares it. A plugin's type is independent of its id: the id is the plugin's own name and carries no type. The hub composes its storage key from the two (<pluginType>-<id>)."
         },
         "name": {
           "type": "string",
@@ -1030,7 +1037,7 @@
     {
       "method": "GET",
       "path": "/v1/harnesses/{id}/models",
-      "description": "the models THIS HARNESS CAN RUN — the single authoritative source for model selection, and the only list a caller needs (do not merge it with API 1). One query: the harness's own catalog plus every core-managed provider the harness can reach during a session, so an entry means the same thing whichever harness answered and whichever way a provider got there (native config, like dsh, or injected at session start, like pi). An injected provider is named `hub-<coreProviderId>` in every harness — one spelling, no slash (pi splits a model reference on the first slash) — and `modelProviderId` accepts that spelling or the bare `<coreProviderId>`. capability-gated; known:false = harness declares no models capability (never faked as empty). Each entry keeps its real providerId. `thinkingLevels` is the list the model's configuration states, passed through verbatim: null = nothing was stated, [] = an empty list was stated, a list = exactly those names in that order. The core derives nothing from it (no vocabulary, no source label, no per-model verdict) and neither does a caller have to. A model id is unique only with its providerId; (providerId, id) is the key.",
+      "description": "the models THIS HARNESS CAN RUN \u2014 the single authoritative source for model selection, and the only list a caller needs (do not merge it with API 1). One query: the harness's own catalog plus every core-managed provider the harness can reach during a session, so an entry means the same thing whichever harness answered and whichever way a provider got there (native config, like dsh, or injected at session start, like pi). An injected provider is named `hub-<coreProviderId>` in every harness \u2014 one spelling, no slash (pi splits a model reference on the first slash) \u2014 and `modelProviderId` accepts that spelling or the bare `<coreProviderId>`. capability-gated; known:false = harness declares no models capability (never faked as empty). Each entry keeps its real providerId. `thinkingLevels` is the list the model's configuration states, passed through verbatim: null = nothing was stated, [] = an empty list was stated, a list = exactly those names in that order. The core derives nothing from it (no vocabulary, no source label, no per-model verdict) and neither does a caller have to. A model id is unique only with its providerId; (providerId, id) is the key.",
       "response": {
         "harnessId": {
           "type": "string",
@@ -1165,7 +1172,7 @@
     {
       "method": "GET",
       "path": "/v1/openapi.json",
-      "description": "The OpenAPI 3.1 document for this surface, byte for byte as scripts/emit-openapi.mjs generated it from contract/v1.json + contract/errors.json. It is a PROJECTION for tools (client generators, Swagger UI, validators), never a second source: edit the contract and regenerate. The adapter protocol is not HTTP and is not here — it lives in contract/adapter-v1.json and is checked against every manifest, every request the hub sends, every event an adapter emits and every event the hub handles. GET /v1/hub/surface reports this document's sha256, so a client can prove which one it is reading.",
+      "description": "The OpenAPI 3.1 document for this surface, byte for byte as scripts/emit-openapi.mjs generated it from contract/v1.json + contract/errors.json. It is a PROJECTION for tools (client generators, Swagger UI, validators), never a second source: edit the contract and regenerate. The adapter protocol is not HTTP and is not here \u2014 it lives in contract/adapter-v1.json and is checked against every manifest, every request the hub sends, every event an adapter emits and every event the hub handles. GET /v1/hub/surface reports this document's sha256, so a client can prove which one it is reading.",
       "response": {
         "openapi": {
           "type": "string",
@@ -1212,7 +1219,7 @@
           "$ref": "#/defs/session"
         }
       },
-      "description": "start a session: a LONG command. Accepts with 202 Accepted + Location once the command is durably registered; the adapter is started in the background. The status is read at the Location (GET /v1/sessions/{id}), which is `starting` until the adapter handshake and config both succeed, then `active`, or `starting_failed` with `startError`. The command identity is the `Idempotency-Key` header: the same key returns the ORIGINAL session (a retry never starts a second adapter); the same key with a different request is 409 idempotency_conflict; a new key is a new session even for the same harness.  A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and — worst — let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back.",
+      "description": "start a session: a LONG command. Accepts with 202 Accepted + Location once the command is durably registered; the adapter is started in the background. The status is read at the Location (GET /v1/sessions/{id}), which is `starting` until the adapter handshake and config both succeed, then `active`, or `starting_failed` with `startError`. The command identity is the `Idempotency-Key` header: the same key returns the ORIGINAL session (a retry never starts a second adapter); the same key with a different request is 409 idempotency_conflict; a new key is a new session even for the same harness.  A `title` is pushed to the harness when the session starts (capability `rename`); without that capability the title stays in the hub and the answer says so in `warning`. Every session runs its harness in the hub's OWN data dir; there is no config-scope knob. The `system` scope was removed: it pointed the harness home at the user's real config (`~/.dsh`), attached to a dsh daemon the user happened to be running, and \u2014 worst \u2014 let the USER'S OWN settings decide the permission policy, so a session could run with approvals suppressed while the hub believed it was answering them. The user's configuration is still read once where a harness needs it (pi: its agent dir; dsh: `settings.yaml` minus the permission section), and nothing is written back.",
       "accepted": true
     },
     {
@@ -1260,7 +1267,7 @@
     {
       "method": "PATCH",
       "path": "/v1/sessions/{id}",
-      "description": "Change session configuration. modelProviderId selects another core-managed provider in the same conversation; credentials/grant precedes config/set. Supply modelId or retain the currently selected model. Provider switching requires an idle turn and is serialized against turn admission and lifecycle mutations. Session id and native ref are preserved. Missing credentials/unknown provider fail before injection. Failed application retains saved selection and drops the changed adapter so next use restores saved configuration. Applied provider/model must be confirmed by the adapter. thinkingLevel sets the harness-native thinking level for this session; unconfirmed application is reported as null plus a warning, never as the requested value. A level the model does not offer is 400 validation_failed. `title` renames the session in the HARNESS as well (the hub is not the only place a name is shown): the adapter answers with the title the harness accepted, which may differ from the one asked for (dsh normalizes and sanitises), and the session reports both — `title` what was asked, `appliedTitle` what the harness holds. Requires the harness capability `rename` (501 unsupported otherwise). A title the harness did not accept is an error, never a hub-only rename that looks applied. Refused with 409 session_busy while a turn is running, like every other PATCH knob. Policy-only PATCH containing plan/review may apply during a running or waiting turn when the adapter is ready. Cancellation and model/provider/thinking/preset changes still require idle. Review changes affect future tool calls; already pending approvals/questions remain explicit decisions, never auto-approved. Applied fields must confirm actual state. modelProviderId also accepts an available native provider/model pair from this harness catalogue; native credentials remain harness-private and no hub credential is granted. Model switches return the observed thinking level for the selected model.",
+      "description": "Change session configuration. modelProviderId selects another core-managed provider in the same conversation; credentials/grant precedes config/set. Supply modelId or retain the currently selected model. Provider switching requires an idle turn and is serialized against turn admission and lifecycle mutations. Session id and native ref are preserved. Missing credentials/unknown provider fail before injection. Failed application retains saved selection and drops the changed adapter so next use restores saved configuration. Applied provider/model must be confirmed by the adapter. thinkingLevel sets the harness-native thinking level for this session; unconfirmed application is reported as null plus a warning, never as the requested value. A level the model does not offer is 400 validation_failed. `title` renames the session in the HARNESS as well (the hub is not the only place a name is shown): the adapter answers with the title the harness accepted, which may differ from the one asked for (dsh normalizes and sanitises), and the session reports both \u2014 `title` what was asked, `appliedTitle` what the harness holds. Requires the harness capability `rename` (501 unsupported otherwise). A title the harness did not accept is an error, never a hub-only rename that looks applied. Refused with 409 session_busy while a turn is running, like every other PATCH knob. Policy-only PATCH containing plan/review may apply during a running or waiting turn when the adapter is ready. Cancellation and model/provider/thinking/preset changes still require idle. Review changes affect future tool calls; already pending approvals/questions remain explicit decisions, never auto-approved. Applied fields must confirm actual state. modelProviderId also accepts an available native provider/model pair from this harness catalogue; native credentials remain harness-private and no hub credential is granted. Model switches return the observed thinking level for the selected model.",
       "request": {
         "modelId": "string?",
         "presetId": "string?",
@@ -1418,7 +1425,7 @@
     {
       "method": "GET",
       "path": "/v1/sessions/{id}/questions",
-      "description": "questions the harness has asked this session (a question is an answer-seeking request, not an action permission — see defs/question)",
+      "description": "questions the harness has asked this session (a question is an answer-seeking request, not an action permission \u2014 see defs/question)",
       "response": {
         "questions": {
           "type": "array",
@@ -1485,7 +1492,7 @@
       "response": {
         "pid": {
           "type": "integer",
-          "description": "the hub process id — compare it with the process you spawned"
+          "description": "the hub process id \u2014 compare it with the process you spawned"
         },
         "port": {
           "type": "integer",
@@ -1506,7 +1513,7 @@
         },
         "contract": {
           "type": "object",
-          "description": "{file, protocol, version, sha256} — the contract this hub was built against"
+          "description": "{file, protocol, version, sha256} \u2014 the contract this hub was built against"
         },
         "harnesses": {
           "type": "array",
@@ -1519,14 +1526,14 @@
           "items": {
             "type": "object"
           },
-          "description": "value-free provider rows (tokenConfigured, never the token) — the same shape GET /v1/hub/providers returns"
+          "description": "value-free provider rows (tokenConfigured, never the token) \u2014 the same shape GET /v1/hub/providers returns"
         },
         "connections": {
           "type": "array",
           "items": {
             "type": "object"
           },
-          "description": "value-free connection rows (no credential) — the same shape GET /v1/hub/connections returns"
+          "description": "value-free connection rows (no credential) \u2014 the same shape GET /v1/hub/connections returns"
         },
         "sessionCount": "integer",
         "activeTurns": {
@@ -1534,7 +1541,7 @@
           "description": "sessions with a turn admitted, running, awaiting an answer, or being cancelled"
         }
       },
-      "description": "Core status: identity, what the hub is managing right now, and the contract it was built against. Identity first, because a client that spawned a hub must be able to prove it is talking to ITS child: compare `pid` with the process you spawned, and `buildId`/`startedAt`/`port` with what you launched. `providers` and `connections` are the same value-free shapes the list routes return — a provider shows whether a token is configured, never the token; a connection shows its materialization fields, never the credential."
+      "description": "Core status: identity, what the hub is managing right now, and the contract it was built against. Identity first, because a client that spawned a hub must be able to prove it is talking to ITS child: compare `pid` with the process you spawned, and `buildId`/`startedAt`/`port` with what you launched. `providers` and `connections` are the same value-free shapes the list routes return \u2014 a provider shows whether a token is configured, never the token; a connection shows its materialization fields, never the credential."
     },
     {
       "method": "POST",
@@ -1546,7 +1553,7 @@
     {
       "method": "GET",
       "path": "/v1/sessions/{id}/skills",
-      "description": "The skills THIS session's harness actually has, read from the harness itself (pi/jouzu: their own command list; dsh: its skill catalogue RPC) — not a list of what the hub installed. It is per SESSION, not per harness, because a catalogue depends on the session's own directory: dsh resolves the project root from the session header, and the pi family also reads the project's `.pi/skills`. The difference between installed and seen is the point: the hub writes a skill's bytes into the harness's own skills directory before its process starts, and a harness may still refuse one silently (dsh drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level `<id>/SKILL.md` bundle). Requires the harness capability `skills` (501 unsupported otherwise). A harness that does not answer in time is reported as `known:false` with a `reason` — never as an empty catalogue: an empty list is a claim ('it has no skills') and a timeout is not evidence for it. (jouzu finishes its own startup lazily: its first answer measured 9s once and 70s once, its second 24ms.)",
+      "description": "The skills THIS session's harness actually has, read from the harness itself (pi/jouzu: their own command list; dsh: its skill catalogue RPC) \u2014 not a list of what the hub installed. It is per SESSION, not per harness, because a catalogue depends on the session's own directory: dsh resolves the project root from the session header, and the pi family also reads the project's `.pi/skills`. The difference between installed and seen is the point: the hub writes a skill's bytes into the harness's own skills directory before its process starts, and a harness may still refuse one silently (dsh drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level `<id>/SKILL.md` bundle). Requires the harness capability `skills` (501 unsupported otherwise). A harness that does not answer in time is reported as `known:false` with a `reason` \u2014 never as an empty catalogue: an empty list is a claim ('it has no skills') and a timeout is not evidence for it. (jouzu finishes its own startup lazily: its first answer measured 9s once and 70s once, its second 24ms.)",
       "response": {
         "sessionId": {
           "type": "string"
@@ -1602,7 +1609,7 @@
     {
       "method": "POST",
       "path": "/v1/sessions/{id}/fork",
-      "description": "Start a NEW session whose conversation ends at a completed turn of this one. The source session is not changed: same log, same ref, still usable, and it does not even need a live process. Anchor = a completed turn (the only cut every harness can make exactly; harness-native anchors — pi entry ids, dsh seq numbers — never leave the adapter). Omit afterTurnId to inherit the whole conversation. Requires the harness capability `fork`; a harness that cannot fork answers 501 unsupported rather than substituting an empty conversation. The new session carries the source's harness, provider, model, preset, plan, review, thinking level, directory and scope, and is opened by its own process forking the source — so it is usable immediately and refuses (fork_failed) rather than reporting a fork it did not get.",
+      "description": "Start a NEW session whose conversation ends at a completed turn of this one. The source session is not changed: same log, same ref, still usable, and it does not even need a live process. Anchor = a completed turn (the only cut every harness can make exactly; harness-native anchors \u2014 pi entry ids, dsh seq numbers \u2014 never leave the adapter). Omit afterTurnId to inherit the whole conversation. Requires the harness capability `fork`; a harness that cannot fork answers 501 unsupported rather than substituting an empty conversation. The new session carries the source's harness, provider, model, preset, plan, review, thinking level, directory and scope, and is opened by its own process forking the source \u2014 so it is usable immediately and refuses (fork_failed) rather than reporting a fork it did not get.",
       "request": {
         "afterTurnId": "string?"
       },
@@ -1667,7 +1674,7 @@
     {
       "method": "POST",
       "path": "/v1/model-providers",
-      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id — what that model accepts (thinking levels, window, limits) — because a provider's model list does not carry any of it. A declaration may also carry `input` — the modalities the model takes (\"text\", \"image\") — because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers). Optional immutable providerType/providerTypeVersion select an installed type. Omitted values select the built-in `custom-compatible` type (an endpoint + api-key provider the hub itself speaks). This is the default type, not a compatibility read of an old record. Explicit unknown type/version is rejected before storing credentials. Endpoint requirements and configuration validation belong to the selected type: a type that accepts a caller endpoint requires url; a type that owns its endpoint supplies it and rejects overrides. Fields are the configuration.fields its descriptor declares.",
+      "description": "register a provider: `{id?, label?, url, api?, token?, scope?, declarations?}`. The id is generated when absent; a duplicate id is refused (409). `api` is the wire protocol the provider speaks in the harness vocabulary (openai-completions, anthropic-messages, openai-responses, ...); the adapter that writes the harness's own provider entry is what validates it. `declarations` is keyed by model id \u2014 what that model accepts (thinking levels, window, limits) \u2014 because a provider's model list does not carry any of it. A declaration may also carry `input` \u2014 the modalities the model takes (\"text\", \"image\") \u2014 because a model that does not state them is not advertised as taking images. A declaration may also carry `name` (the display name; the harness shows it instead of the id) and `cost` ({input, output, cacheRead, cacheWrite} per million tokens, optional tiers). Optional immutable providerType/providerTypeVersion select an installed type. Omitted values select the built-in `custom-compatible` type (an endpoint + api-key provider the hub itself speaks). This is the default type, not a compatibility read of an old record. Explicit unknown type/version is rejected before storing credentials. Endpoint requirements and configuration validation belong to the selected type: a type that accepts a caller endpoint requires url; a type that owns its endpoint supplies it and rejects overrides. Fields are the configuration.fields its descriptor declares.",
       "request": {
         "id": "string?",
         "label": "string?",
@@ -1773,7 +1780,7 @@
     {
       "method": "GET",
       "path": "/v1/models",
-      "description": "API 1: the core-managed providers' catalogs — what the core owns and what it can inject, independent of any harness or session. This is NOT the model-selection source: a model can only be run where a harness reaches it, so selection reads API 2 (/v1/harnesses/{id}/models), which already includes these providers. Use API 1 to manage a provider's catalog and its enabled selection, not to pick a model for a session. Core queries its registered provider endpoint with its own credential; no credential is handed to a harness for this operation. Missing/stale catalogs are fetched; cached catalogs are reused. Each model has enabled and available flags. Failures are per provider and never replace a previous catalog with an empty one.",
+      "description": "API 1: the core-managed providers' catalogs \u2014 what the core owns and what it can inject, independent of any harness or session. This is NOT the model-selection source: a model can only be run where a harness reaches it, so selection reads API 2 (/v1/harnesses/{id}/models), which already includes these providers. Use API 1 to manage a provider's catalog and its enabled selection, not to pick a model for a session. Core queries its registered provider endpoint with its own credential; no credential is handed to a harness for this operation. Missing/stale catalogs are fetched; cached catalogs are reused. Each model has enabled and available flags. Failures are per provider and never replace a previous catalog with an empty one.",
       "response": {
         "models": {
           "type": "array",
@@ -1829,7 +1836,7 @@
     {
       "method": "POST",
       "path": "/v1/sessions/{id}/compact",
-      "description": "Ask the harness to compact the session's own conversation. The hub does not compact anything itself and does not compute the numbers: it reports what the harness says (source:'harness'). Fields a harness does not report are ABSENT, never zero — pi counts the replaced span and then estimates the rebuilt context, dsh counts the replaced span only. A harness with nothing worth compacting answers compacted:false with its own words in `detail`; a compaction that failed answers compact_failed. Refused (409 session_busy) while a turn is running, because pi's compact aborts the running turn and a hub must not throw away work to run a maintenance call. Requires the harness capability `compact` (501 unsupported otherwise). The same facts also arrive on the turn stream as `session.compacting` then `session.compacted` — including for a compaction the harness performed on its own (a full context compacts mid-turn), which nobody asked for.",
+      "description": "Ask the harness to compact the session's own conversation. The hub does not compact anything itself and does not compute the numbers: it reports what the harness says (source:'harness'). Fields a harness does not report are ABSENT, never zero \u2014 pi counts the replaced span and then estimates the rebuilt context, dsh counts the replaced span only. A harness with nothing worth compacting answers compacted:false with its own words in `detail`; a compaction that failed answers compact_failed. Refused (409 session_busy) while a turn is running, because pi's compact aborts the running turn and a hub must not throw away work to run a maintenance call. Requires the harness capability `compact` (501 unsupported otherwise). The same facts also arrive on the turn stream as `session.compacting` then `session.compacted` \u2014 including for a compaction the harness performed on its own (a full context compacts mid-turn), which nobody asked for.",
       "request": {
         "instructions": "string?"
       },
@@ -1852,7 +1859,7 @@
     {
       "method": "GET",
       "path": "/v1/plugins/catalog",
-      "description": "the plugin catalog this hub was shipped with: a registry file (AGENT_HUB_REGISTRY_FILE, else registry.json beside the hub) restating where first-party plugins are released. It is DATA and read-only — the hub does not resolve, rank or rewrite it, and an install names the artifact it wants (url + sha256), so a catalog that lies about its own artifact fails exactly like a hand-typed URL. `source` is the file that answered (null when there is none), `plugins` is the list verbatim, and `fault` says why an unreadable file could not be used instead of pretending the catalog is empty.",
+      "description": "the plugin catalog this hub was shipped with: a registry file (AGENT_HUB_REGISTRY_FILE, else registry.json beside the hub) restating where first-party plugins are released. It is DATA and read-only \u2014 the hub does not resolve, rank or rewrite it, and an install names the artifact it wants (url + sha256), so a catalog that lies about its own artifact fails exactly like a hand-typed URL. `source` is the file that answered (null when there is none), `plugins` is the list verbatim, and `fault` says why an unreadable file could not be used instead of pretending the catalog is empty.",
       "response": {
         "schema": {
           "type": "integer"
@@ -1921,7 +1928,7 @@
     {
       "method": "POST",
       "path": "/v1/plugins",
-      "description": "install a plugin. Two sources, one landing rule: what lands is a directory with a manifest, under the id that manifest declares, in the hub's OWN plugins root (<DATA_DIR>/plugins). `{source:{url, ref?}}` clones a git repository (a URL or a local path); `{source:{artifact:{url, sha256, id, pluginType, version, size?}}}` downloads a release zip and verifies it — size first, then sha256 — before anything is unpacked. An id the hub already installed is REPLACED: that is what updating is, and it is the same primitive because the only difference is whether a directory was already there. The old copy is moved aside first and removed only after the new one is in place, so a failure at any step leaves the previous plugin exactly as it was. An id living in a directory this hub does not own (AGENT_HUB_PLUGINS_DIR, a deployment's checkout) is refused with 409: that tree is somebody else's. A harness with open sessions is refused (409 `plugin_in_use`, naming them) rather than replaced under a running process. The response says `updated`, and the plugin's runtime is prepared by the adapter in the background.",
+      "description": "install a plugin. Two sources, one landing rule: what lands is a directory with a manifest, under the id that manifest declares, in the hub's OWN plugins root (<DATA_DIR>/plugins). `{source:{url, ref?}}` clones a git repository (a URL or a local path); `{source:{artifact:{url, sha256, id, pluginType, version, size?}}}` downloads a release zip and verifies it \u2014 size first, then sha256 \u2014 before anything is unpacked. An id the hub already installed is REPLACED: that is what updating is, and it is the same primitive because the only difference is whether a directory was already there. The old copy is moved aside first and removed only after the new one is in place, so a failure at any step leaves the previous plugin exactly as it was. An id living in a directory this hub does not own (AGENT_HUB_PLUGINS_DIR, a deployment's checkout) is refused with 409: that tree is somebody else's. A harness with open sessions is refused (409 `plugin_in_use`, naming them) rather than replaced under a running process. The response says `updated`, and the plugin's runtime is prepared by the adapter in the background.",
       "request": {
         "source": {
           "type": "object",
@@ -2005,7 +2012,7 @@
     {
       "method": "POST",
       "path": "/v1/plugins/{id}/prepare",
-      "description": "ask a plugin's adapter to materialise the runtime its manifest pins (`runtime/prepare`). Idempotent: a runtime already on disk answers `ready:true`. The hub reports the adapter's own words — including on failure (`runtime_prepare_failed`), because only the adapter knows how its harness is fetched. A plugin that does not declare the `runtime` capability answers 501 `unsupported`.",
+      "description": "ask a plugin's adapter to materialise the runtime its manifest pins (`runtime/prepare`). Idempotent: a runtime already on disk answers `ready:true`. The hub reports the adapter's own words \u2014 including on failure (`runtime_prepare_failed`), because only the adapter knows how its harness is fetched. A plugin that does not declare the `runtime` capability answers 501 `unsupported`.",
       "response": {
         "harnessId": "string",
         "runtimeReady": "boolean",
@@ -2224,7 +2231,7 @@
     {
       "method": "POST",
       "path": "/v1/harnesses/{id}/auth",
-      "description": "Start the harness’s own authorization operation for a provider (browser/device code and so on). The harness defines the steps; a harness that has none answers unsupported with its own message — never a fabricated step. -> {operationId,next}.",
+      "description": "Start the harness\u2019s own authorization operation for a provider (browser/device code and so on). The harness defines the steps; a harness that has none answers unsupported with its own message \u2014 never a fabricated step. -> {operationId,next}.",
       "request": {
         "providerId": "string"
       },
@@ -2586,7 +2593,7 @@
           }
         }
       },
-      "description": "plan mode changed — possibly because the HARNESS changed it (a model leaving plan when its plan is approved), which is why the hub reports it instead of assuming its own last request held"
+      "description": "plan mode changed \u2014 possibly because the HARNESS changed it (a model leaving plan when its plan is approved), which is why the hub reports it instead of assuming its own last request held"
     },
     {
       "name": "turn.ended",
@@ -2621,7 +2628,7 @@
             "const": "harness"
           }
         },
-        "description": "plus whatever the harness reports about this session: tokens?, cost?, context?, turns?, messages? — a field it does not report is absent"
+        "description": "plus whatever the harness reports about this session: tokens?, cost?, context?, turns?, messages? \u2014 a field it does not report is absent"
       }
     },
     {

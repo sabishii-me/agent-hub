@@ -101,6 +101,13 @@ an authorized real call).
   SAME id -> turn ok; reject -> no side effect, turn cancelled.
 - 4aa9b99 G2 CLOSED (live): harness connections/delete sends {id} (not {connectionId});
   validate->draft; auth/start->providerId. Live: a real delete removes the target.
+- G6 CLOSED: minHubVersion is declared in the manifest contract (adapter-v1.json) and
+  enforced at the plugin accept (begin_install) and the adapter ACTIVATION scan; a plugin
+  that needs a newer hub is registered disabled with a named reason
+  ("needs hub >= X, this is Y"), never started. The harness view publishes
+  `disabledReason`; the harness def gained an optional `disabledReason` (contract + openapi
+  regenerated). Live: a plugin requiring 9.9.9 -> disabled + reason; a normal plugin ->
+  enabled.
 - G5 CLOSED: a preset restart that cannot re-establish the session now lands
   `needs-repair` (in memory AND durably) instead of staying `active`; a COMPOSITE PATCH
   (preset + thinkingLevel) runs every field against the fresh process and re-reads the
@@ -120,8 +127,6 @@ an authorized real call).
   is still owed.
 - G3 (HUB+CONTRACT+PLUGIN): ONE type authority; publish the descriptor artifact; upgrade the
   provider plugin.
-- G6 (HUB+CONTRACT+PLUGIN): minHubVersion in the manifest contract, enforced at one
-  accept/activate edge; upgrade the adapters to declare it.
 - 17 remainder: the new plugin-sourced skills/resources (T2b) and the shared adapter layer.
 - UNAUTH: a real pi/jouzu/dsh acceptance needs an explicit isolated-side-effect authorization
   (the hub probes the OS keychain at startup) and a credential authorization for a real turn.

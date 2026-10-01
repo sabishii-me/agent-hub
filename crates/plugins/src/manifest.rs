@@ -15,6 +15,10 @@ pub struct Manifest {
     #[serde(rename = "pluginType")]
     pub plugin_type: Option<String>,
     pub runtime: Option<RuntimeSpec>,
+    /// The minimum HUB version this plugin needs (ADR-0008); below it the hub does
+    /// NOT accept/activate the plugin.
+    #[serde(rename = "minHubVersion")]
+    pub min_hub_version: Option<String>,
 }
 
 /// The runtime a manifest pins (`runtime/package` + `.version` + `.target`).

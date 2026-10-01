@@ -21,6 +21,9 @@ pub struct Harness {
     pub directory: std::path::PathBuf,
     pub manifest: AdapterManifest,
     pub status: HarnessStatus,
+    /// Why the hub does NOT activate this plugin (ADR-0008 min hub version), or
+    /// `None` when it is acceptable. A refused harness is reported, never started.
+    pub refused: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,11 +237,19 @@ impl Adapters {
                         if manifest.plugin_type.as_deref() != Some("harness-adapter") {
                             continue;
                         }
+                        // The single ACTIVATION gate: a plugin that needs a newer hub
+                        // is registered as refused (so a caller can report it), never
+                        // activated and never started (ADR-0008).
+                        let refused = crate::version::refusal(manifest.min_hub_version.as_deref());
+                        if let Some(reason) = &refused {
+                            tracing::warn!(plugin = %name, "plugin refused: {reason}");
+                        }
                         let harness = Harness {
                             id: name.clone(),
                             directory: path,
                             manifest,
-                            status: HarnessStatus::Enabled,
+                            status: if refused.is_some() { HarnessStatus::Disabled } else { HarnessStatus::Enabled },
+                            refused,
                         };
                         self.harnesses
                             .lock()
@@ -363,7 +374,13 @@ impl Adapters {
         }
         let harness = self.get(id)?;
         if harness.status == HarnessStatus::Disabled {
-            return Err(AdapterError::Unsupported(format!("harness `{id}` is disabled")));
+            // A plugin refused for a version requirement reports WHY (ADR-0008),
+            // not a bare "disabled".
+            let reason = harness
+                .refused
+                .clone()
+                .unwrap_or_else(|| format!("harness `{id}` is disabled"));
+            return Err(AdapterError::Unsupported(reason));
         }
         let command = harness.manifest.command.clone().unwrap_or_default();
         let env = self.adapter_env(&harness)?;
