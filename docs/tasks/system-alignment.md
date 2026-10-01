@@ -101,6 +101,13 @@ an authorized real call).
   SAME id -> turn ok; reject -> no side effect, turn cancelled.
 - 4aa9b99 G2 CLOSED (live): harness connections/delete sends {id} (not {connectionId});
   validate->draft; auth/start->providerId. Live: a real delete removes the target.
+- G3 CLOSED: ONE provider-type authority (`Providers::with_type_resolver`, wired from the
+  plugins root) serves create validation, `providerTypeAvailable` and grant admission. An
+  explicit unknown type is refused BEFORE any row/secret write; a provider whose type later
+  becomes unavailable is readable but UNUSABLE (grant refused with a reason); the built-in
+  `custom-compatible` type is always available (the hub provides it). Live: unknown type ->
+  400 before write; shipped type -> available; descriptor removed -> available=false and
+  grant refused.
 - G6 CLOSED: minHubVersion is declared in the manifest contract (adapter-v1.json) and
   enforced at the plugin accept (begin_install) and the adapter ACTIVATION scan; a plugin
   that needs a newer hub is registered disabled with a named reason

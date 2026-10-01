@@ -87,25 +87,31 @@ fn err(s: &ProvidersState, e: ProviderError) -> Response {
 }
 
 /// The provider object returned: **no credential, only whether one is stored**.
-fn view(rec: &crate::record::ProviderRecord) -> serde_json::Value {
+/// The provider object returned: **no credential, only whether one is stored**.
+/// `type_available` comes from the ONE type authority, so availability is not
+/// inferred from a field being present (TASK-048 G3).
+fn view(rec: &crate::record::ProviderRecord, type_available: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(rec).unwrap_or(serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
         // The secret REFERENCE is an internal keychain id: never exposed.
         obj.remove("secret_ref");
         obj.remove("incarnation"); // internal: the version guard is not a wire field
         obj.insert("tokenConfigured".into(), serde_json::json!(rec.token_configured));
-        obj.insert(
-            "providerTypeAvailable".into(),
-            serde_json::json!(rec.provider_type.is_some()),
-        );
+        obj.insert("providerTypeAvailable".into(), serde_json::json!(type_available));
     }
     v
+}
+
+/// The availability of a record's named type, from the type authority.
+fn available(s: &ProvidersState, rec: &crate::record::ProviderRecord) -> bool {
+    s.providers
+        .type_available(rec.provider_type.as_deref(), rec.provider_type_version)
 }
 
 async fn list(State(s): State<ProvidersState>) -> Response {
     match s.providers.list() {
         Ok(records) => Json(serde_json::json!({
-            "providers": records.iter().map(view).collect::<Vec<_>>(),
+            "providers": records.iter().map(|r| view(r, available(&s, r))).collect::<Vec<_>>(),
             "broken": [],
         }))
         .into_response(),
@@ -115,14 +121,14 @@ async fn list(State(s): State<ProvidersState>) -> Response {
 
 async fn create(State(s): State<ProvidersState>, Json(req): Json<CreateProvider>) -> Response {
     match s.providers.create(req).await {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
+        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec, available(&s, &rec)) })).into_response(),
         Err(e) => err(&s, e),
     }
 }
 
 async fn get_one(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.get(&id) {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
+        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec, available(&s, &rec)) })).into_response(),
         Err(e) => err(&s, e),
     }
 }
@@ -133,7 +139,7 @@ async fn patch_one(
     Json(req): Json<PatchProvider>,
 ) -> Response {
     match s.providers.patch(&id, req).await {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
+        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec, available(&s, &rec)) })).into_response(),
         Err(e) => err(&s, e),
     }
 }
@@ -147,7 +153,7 @@ async fn remove(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>)
 
 async fn logout(State(s): State<ProvidersState>, AxumPath(id): AxumPath<String>) -> Response {
     match s.providers.logout(&id).await {
-        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec) })).into_response(),
+        Ok(rec) => Json(serde_json::json!({ "provider": view(&rec, available(&s, &rec)) })).into_response(),
         Err(e) => err(&s, e),
     }
 }

@@ -96,6 +96,12 @@ pub struct Providers {
     /// and leave an orphan credential (TASK-048 P1). The DB mutex only protects a
     /// single SQL call; this covers the whole two-store operation.
     locks: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The ONE provider-TYPE authority: given `(type id, version)`, resolve the
+    /// descriptor an installed plugin ships, or `None` when no plugin ships it. Used
+    /// by create validation, availability and grant admission, so the list, the
+    /// store and execution never disagree (TASK-048 G3). None = no plugins root
+    /// wired (types cannot be validated).
+    type_resolver: Option<Arc<dyn Fn(&str, Option<u32>) -> Option<crate::types::TypeDescriptor> + Send + Sync>>,
 }
 
 impl Providers {
@@ -105,6 +111,40 @@ impl Providers {
             secrets,
             namespace: namespace.into(),
             locks: std::sync::Mutex::new(std::collections::HashMap::new()),
+            type_resolver: None,
+        }
+    }
+
+    /// Wire the provider-TYPE authority (the composition root points it at the
+    /// installed plugins). Without it, an explicit type cannot be validated.
+    pub fn with_type_resolver(
+        mut self,
+        resolver: Arc<dyn Fn(&str, Option<u32>) -> Option<crate::types::TypeDescriptor> + Send + Sync>,
+    ) -> Self {
+        self.type_resolver = Some(resolver);
+        self
+    }
+
+    /// The BUILT-IN type the hub itself provides (the contract: "Omitted values
+    /// select the built-in `custom-compatible` type"). It is NOT shipped by a plugin
+    /// and is always available - an endpoint plus a dialect is all it needs.
+    pub const BUILTIN_TYPE: &'static str = "custom-compatible";
+
+    /// Resolve a provider type to its descriptor, or `None` when no installed
+    /// plugin ships it (or no resolver is wired). A `None` version accepts the
+    /// single shipped version of that id (the common case).
+    pub fn resolve_type(&self, type_id: &str, version: Option<u32>) -> Option<crate::types::TypeDescriptor> {
+        self.type_resolver.as_ref().and_then(|f| f(type_id, version))
+    }
+
+    /// Whether a named type is USABLE. The built-in `custom-compatible` type is
+    /// always usable (the hub provides it); any other named type must be shipped by
+    /// an installed plugin. A provider naming no type is the built-in default.
+    pub fn type_available(&self, type_id: Option<&str>, version: Option<u32>) -> bool {
+        match type_id {
+            None => true,
+            Some(Self::BUILTIN_TYPE) => true,
+            Some(t) => self.resolve_type(t, version).is_some(),
         }
     }
 
@@ -189,6 +229,16 @@ impl Providers {
     pub async fn create(&self, req: CreateProvider) -> Result<ProviderRecord, ProviderError> {
         if req.token.is_some() && !self.secrets.is_available() {
             return Err(ProviderError::NoSecretStore);
+        }
+        // The TYPE authority: an explicit type/version the hub cannot resolve is
+        // refused BEFORE any row or secret write (TASK-048 G3). A provider naming no
+        // type uses the built-in default and is accepted.
+        if let Some(t) = req.provider_type.as_deref() {
+            if !self.type_available(Some(t), req.provider_type_version) {
+                return Err(ProviderError::Validation(format!(
+                    "provider type `{t}` is not installed; no plugin ships it"
+                )));
+            }
         }
         let id = req.id.clone().unwrap_or_else(|| new_id("prov"));
         let lock = self.lock_for(&id);
@@ -688,6 +738,15 @@ impl Providers {
             )));
         }
         let rec = self.store.get(id)?;
+        // The TYPE authority at GRANT admission: a provider naming a type no
+        // installed plugin ships is readable but UNUSABLE - it cannot grant (the
+        // contract: "a record naming one stays readable but unusable", TASK-048 G3).
+        if !self.type_available(rec.provider_type.as_deref(), rec.provider_type_version) {
+            return Err(ProviderError::Validation(format!(
+                "provider `{id}` names type `{}`, which no installed plugin ships; it is unusable",
+                rec.provider_type.as_deref().unwrap_or("")
+            )));
+        }
         let url = rec
             .url
             .clone()

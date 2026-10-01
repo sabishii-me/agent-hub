@@ -134,7 +134,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let providers_db = Db::open(data_dir.join("hub.sqlite"))?;
     let instance = providers_db.instance_id()?;
     let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::for_instance(&instance));
-    let providers = Providers::new(ProviderStore::new(providers_db), secrets.clone(), instance);
+    // The provider-TYPE authority: resolve a (type, version) to the descriptor an
+    // installed plugin ships. ONE source for create validation, availability and
+    // grant admission (TASK-048 G3).
+    let type_root = plugins_root.clone();
+    let type_providers = Providers::new(ProviderStore::new(providers_db), secrets.clone(), instance)
+        .with_type_resolver(std::sync::Arc::new(move |type_id: &str, version: Option<u32>| {
+            agent_hub_providers::types::TypeCatalog::scan(&type_root)
+                .types
+                .into_iter()
+                .find(|t| t.id == type_id && version.map(|v| t.version == v as u64).unwrap_or(true))
+        }));
+    let providers = type_providers;
     // Resolve any credential transition that was in flight when the process last
     // stopped (a crash between the row store and the keychain).
     providers.recover_pending();
