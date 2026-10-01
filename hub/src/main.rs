@@ -37,6 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // A process-wide rustls crypto provider, installed ONCE. reqwest is built with
+    // `rustls-no-provider` so it does not drag in a second crypto backend; without
+    // this an https:// request fails at handshake ("no process-level CryptoProvider").
+    // A second install (e.g. in a test binary that already installed one) is ignored.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let data_dir: PathBuf = std::env::var("AGENT_HUB_DATA_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir().join("agent-hub"));

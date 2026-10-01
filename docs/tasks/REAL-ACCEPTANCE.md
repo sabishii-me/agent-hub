@@ -54,6 +54,35 @@ turn to reach a terminal state (harness-independent) and REPAIRS the session bef
 racing admissions - instead of assuming pi's fast-fail. This is the hub's real cancel
 and repair path, exercised on a real harness.
 
+## DeepSeek via a MODEL-PROVIDER PLUGIN (2026-10-01)
+
+`tests/e2e/deepseek-provider.mjs`: the hub reads a model-provider plugin's
+`provider.json` DESCRIPTOR (data), owns the HTTP/catalog, and the person supplies only
+the key. Chain: hub -> real pi adapter -> real pi runtime -> the type's OWN endpoint.
+
+```
+GET /v1/model-providers/types -> 200 [deepseek@1(hub)] broken=[]
+descriptor endpoint: {"url":"https://api.deepseek.com","api":"openai-completions"}
+POST /v1/model-providers {token, providerType:deepseek} -> 200  (url/api from the type)
+POST /v1/model-providers/ds/models/refresh -> 200  (real HTTPS catalog:
+     deepseek-flash "DeepSeek-V4.1-Flash", deepseek-v4-pro)
+POST /v1/sessions {modelProviderId:ds, modelId:deepseek-flash} -> 202 -> active
+POST /turns -> 202 -> real answer "pong"
+```
+
+Two REAL bugs this exposed (only a real HTTPS provider shows them):
+1. **The hub could not speak HTTPS at all**: `reqwest` had `default-features=false`
+   and NO TLS feature, so `https://api.deepseek.com/models` failed with "error sending
+   request" while curl worked. Fixed: `rustls-no-provider` + install the `ring` provider
+   once at hub startup (keeps ONE crypto backend).
+2. **A type's OWN endpoint was ignored**: the descriptor's fixed endpoint is now applied
+   on create, and a caller override is refused (`deepseek` owns
+   `https://api.deepseek.com`; `custom-compatible` still takes the caller's url/api).
+
+The plugin side: `prts-providers/deepseek/provider.json` is the DESCRIPTOR the Rust hub
+reads (the old `provider.mjs` module protocol is NOT what the hub uses - the contract
+says the hub never imports plugin code).
+
 ## What this is and is NOT
 
 - IS: a real end-to-end model turn through the hub, the real adapter, the real runtime and

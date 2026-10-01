@@ -81,6 +81,39 @@ impl TypeCatalog {
     }
 }
 
+impl TypeDescriptor {
+    /// The ENDPOINT this type OWNS, when its descriptor declares one
+    /// (`configuration.endpoint = {url, api}`). A type that owns its endpoint
+    /// supplies it and REJECTS caller overrides (the DeepSeek case: the plugin
+    /// knows `https://api.deepseek.com`, the person supplies only the key).
+    /// Returns `None` for a type that accepts a caller endpoint
+    /// (`custom-compatible`).
+    pub fn owned_endpoint(&self) -> Option<(Option<String>, Option<String>)> {
+        let ep = self.configuration.get("endpoint")?;
+        let url = ep.get("url").and_then(|v| v.as_str()).map(str::to_string);
+        let api = ep.get("api").and_then(|v| v.as_str()).map(str::to_string);
+        if url.is_none() && api.is_none() {
+            return None;
+        }
+        Some((url, api))
+    }
+
+    /// Whether the caller MUST supply a credential for this type (a `secret` field
+    /// in `configuration.fields`). A type with such a field needs a token.
+    pub fn requires_token(&self) -> bool {
+        self.configuration
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .map(|a| {
+                a.iter().any(|f| {
+                    f.get("type").and_then(|t| t.as_str()) == Some("secret")
+                        && f.get("required").and_then(|r| r.as_bool()).unwrap_or(true)
+                })
+            })
+            .unwrap_or(false)
+    }
+}
+
 /// Load and VALIDATE one descriptor (`provider.json`). Every required field must be
 /// present and well-typed; `owner` must be `hub` (the hub owns the HTTP/auth/catalog,
 /// not the plugin).

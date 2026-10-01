@@ -240,6 +240,38 @@ impl Providers {
                 )));
             }
         }
+        // The TYPE OWNS its endpoint when its descriptor declares one: the endpoint
+        // is the plugin's fact, the person supplies only the key. A caller override
+        // is REFUSED (the contract: "a type that owns its endpoint supplies it and
+        // rejects overrides"). The built-in has no fixed endpoint and keeps taking
+        // the caller's url/api.
+        let mut req = req;
+        if let Some(t) = req.provider_type.as_deref() {
+            if let Some(desc) = self.resolve_type(t, req.provider_type_version) {
+                if let Some((url, api)) = desc.owned_endpoint() {
+                    if let (Some(want), Some(got)) = (url.as_deref(), req.url.as_deref()) {
+                        if want != got {
+                            return Err(ProviderError::Validation(format!(
+                                "provider type `{t}` owns its endpoint ({want}); it does not allow overriding `url`"
+                            )));
+                        }
+                    }
+                    if let (Some(want), Some(got)) = (api.as_deref(), req.api.as_deref()) {
+                        if want != got {
+                            return Err(ProviderError::Validation(format!(
+                                "provider type `{t}` owns its protocol ({want}); it does not allow overriding `api`"
+                            )));
+                        }
+                    }
+                    if url.is_some() {
+                        req.url = url;
+                    }
+                    if api.is_some() {
+                        req.api = api;
+                    }
+                }
+            }
+        }
         let id = req.id.clone().unwrap_or_else(|| new_id("prov"));
         let lock = self.lock_for(&id);
         let _guard = lock.lock().await;
