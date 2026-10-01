@@ -91,7 +91,7 @@ async fn real_hub_session_202_start_close() {
 
     // GET reads starting -> active with a real native ref.
     let mut status = String::new();
-    for _ in 0..400 {
+    for _ in 0..2400 {
         let got: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}"))
             .header("authorization", format!("Bearer {token}"))
@@ -190,8 +190,29 @@ async fn real_hub_session_202_start_close() {
     assert_eq!(turn_conflict.status(), 409);
 
     // The turn is listed and reaches a terminal state.
+    // Reach a terminal state WITHOUT depending on the harness's model behaviour: a
+    // turn on a session with no provider is harness-dependent (pi fails fast; jouzu
+    // may wait for the harness's own deadline - adapter-v1 has "no default
+    // deadline"). So CANCEL the turn: this exercises the REAL abort path and is
+    // harness-independent. The hub's occupancy must be released by a confirmed
+    // stop, not by a hope.
+    let mut cancelled = false;
+    for _ in 0..240 {
+        let cancels = client
+            .post(format!("{base}/v1/sessions/{id}/cancel"))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap();
+        if cancels.status().is_success() || cancels.status().as_u16() == 409 {
+            cancelled = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(cancelled, "cancel is accepted");
     let mut turn_ended = String::new();
-    for _ in 0..200 {
+    for _ in 0..2400 {
         let turns: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}/turns"))
             .header("authorization", format!("Bearer {token}"))
@@ -210,12 +231,11 @@ async fn real_hub_session_202_start_close() {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(!turn_ended.is_empty(), "the turn reaches a terminal state");
+    assert!(!turn_ended.is_empty(), "a cancelled turn reaches a terminal state");
 
-    // The first turn ended failed (no credential): the session is idle again, so
-    // a NEW key is admitted. And a refused admission must leave NO row: we prove
-    // the atomicity by racing two new keys and requiring at most one running turn
-    // and no orphaned admitted rows.
+    // The session is idle again after the cancel, so a NEW key is admitted. A
+    // refused admission must leave NO row: we prove the atomicity by racing two
+    // new keys and requiring at most one running turn and no orphaned rows.
     let before: serde_json::Value = client
         .get(format!("{base}/v1/sessions/{id}/turns"))
         .header("authorization", format!("Bearer {token}"))
@@ -226,6 +246,31 @@ async fn real_hub_session_202_start_close() {
         .await
         .unwrap();
     let before_count = before["turns"].as_array().map(|a| a.len()).unwrap_or(0);
+
+    // A cancel stops the adapter (a confirmed stop), so the session may need a
+    // REPAIR before it accepts a new turn - that is correct, not a failure. If so,
+    // repair it on the REAL path so admission is exercised on a live session.
+    let sess: serde_json::Value = client
+        .get(format!("{base}/v1/sessions/{id}"))
+        .header("authorization", format!("Bearer {token}"))
+        .send().await.unwrap().json().await.unwrap();
+    if sess["session"]["status"] == "needs-repair" {
+        let rep = client
+            .post(format!("{base}/v1/sessions/{id}/repair"))
+            .header("authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({}))
+            .send().await.unwrap();
+        assert!(rep.status().is_success(), "repair after cancel is accepted: {}", rep.status());
+        for _ in 0..2400 {
+            let s: serde_json::Value = client
+                .get(format!("{base}/v1/sessions/{id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .send().await.unwrap().json().await.unwrap();
+            let st = s["session"]["status"].as_str().unwrap_or("");
+            if st == "active" || st == "starting_failed" { break; }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 
     let (a, b) = tokio::join!(
         client
@@ -244,7 +289,7 @@ async fn real_hub_session_202_start_close() {
     let a_accepted = a.status().as_u16() == 202;
     let b_accepted = b.status().as_u16() == 202;
     let accepted = [a_accepted, b_accepted].iter().filter(|x| **x).count();
-    assert!(accepted >= 1, "at least one concurrent turn is admitted");
+    assert!(accepted >= 1, "at least one concurrent turn is admitted (a={a_accepted} b={b_accepted})");
 
     // The INVARIANT (not a timing guess): the number of NEW rows equals the number
     // of ACCEPTED requests - an accepted request always has its row, a refused one
@@ -428,7 +473,7 @@ async fn a_session_with_a_managed_provider_is_accepted_and_granted() {
     let mut status = String::new();
     let mut applied_provider: Option<String> = None;
     let mut applied_route: Option<String> = None;
-    for _ in 0..400 {
+    for _ in 0..2400 {
         let s: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}"))
             .header("authorization", format!("Bearer {token}"))
@@ -517,7 +562,7 @@ async fn a_session_patch_renames_and_sets_policy() {
         .await
         .unwrap();
     let id = created["session"]["id"].as_str().unwrap().to_string();
-    for _ in 0..400 {
+    for _ in 0..2400 {
         let s: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}"))
             .header("authorization", format!("Bearer {token}"))
@@ -626,7 +671,7 @@ async fn read_through_routes_start_the_process_and_answer_from_the_harness() {
         .await
         .unwrap();
     let id = created["session"]["id"].as_str().unwrap().to_string();
-    for _ in 0..400 {
+    for _ in 0..2400 {
         let s: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}"))
             .header("authorization", &auth)
@@ -714,7 +759,7 @@ async fn compact_and_fork_are_real() {
         .json(&serde_json::json!({ "harnessId": harness, "commandKey": "cf-1" }))
         .send().await.unwrap().json().await.unwrap();
     let id = created["session"]["id"].as_str().unwrap().to_string();
-    for _ in 0..400 {
+    for _ in 0..2400 {
         let s: serde_json::Value = client
             .get(format!("{base}/v1/sessions/{id}"))
             .header("authorization", &auth)

@@ -36,6 +36,24 @@ answered the prompt "Reply with exactly the word: pong" with exactly `pong`.
    `openai-completions` and called the anthropic provider on the wrong wire protocol (pi
    retried, the turn yielded no message). Fixed: the grant carries the provider's `api`.
 
+## pi AND jouzu both pass (2026-10-01)
+
+With `PI_PLUGIN_DIR=prts-harness-jouzu PI_HARNESS_ID=jouzu PI_MODEL=deepseek-flash`,
+the SAME chain answers `pong` (jouzu 0.1.13 runtime). jouzu's adapter needed the same two
+of the three fixes as pi (dialect-aware model probe; report the injected provider at
+`session/start`). Its injected provider: `hub-jp -> http://192.168.31.29:8990
+anthropic-messages models=137`.
+
+Full workspace suite against EACH real plugin, NO SKIPs:
+- `AGENT_HUB_TEST_PLUGIN_DIR=prts-harness-pi   AGENT_HUB_TEST_HARNESS=pi   cargo test --workspace` -> 39 ok
+- `AGENT_HUB_TEST_PLUGIN_DIR=prts-harness-jouzu AGENT_HUB_TEST_HARNESS=jouzu cargo test --workspace` -> 39 ok
+
+A real harness is SLOW to start (jouzu measured 9s-70s) and, with no provider, a turn
+has NO default deadline (adapter-v1:259). The lifecycle test therefore CANCELS the
+turn to reach a terminal state (harness-independent) and REPAIRS the session before
+racing admissions - instead of assuming pi's fast-fail. This is the hub's real cancel
+and repair path, exercised on a real harness.
+
 ## What this is and is NOT
 
 - IS: a real end-to-end model turn through the hub, the real adapter, the real runtime and
