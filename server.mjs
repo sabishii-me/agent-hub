@@ -3041,8 +3041,8 @@ function connectionFailure(res, e) {
 // rewrites them to imply a block that did not happen.
 // --- model catalog (API 2: the harness's own models) ------------------------
 // Mirrors listTools: capability-gated; no `models` capability -> known:false,
-// never a fake empty list. Per PROTOCOL §6 (R-019): each entry keeps its real
-// providerId identity, one harness's failure must not pollute another's.
+// never a fake empty list. Each entry keeps its real providerId identity, and one
+// harness's failure must not pollute another's.
 async function listPresets(harnessId) {
   const m = manifestOf(harnessId);
   const caps = m.capabilities || [];

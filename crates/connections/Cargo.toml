@@ -1,0 +1,16 @@
+[package]
+name = "agent-hub-connections"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+agent-hub-db = { path = "../db" }
+agent-hub-secrets = { path = "../secrets" }
+agent-hub-transport = { path = "../transport" }
+axum.workspace = true
+tokio = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true

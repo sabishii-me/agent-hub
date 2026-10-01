@@ -1,0 +1,27 @@
+[package]
+name = "agent-hub-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+agent-hub-events = { path = "../events" }
+agent-hub-db = { path = "../db" }
+agent-hub-secrets = { path = "../secrets" }
+agent-hub-transport = { path = "../transport" }
+axum.workspace = true
+tokio = { workspace = true }
+reqwest = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+agent-hub-contract = { path = "../contract" }
+agent-hub-db = { path = "../db" }
+agent-hub-secrets = { path = "../secrets" }
+agent-hub-transport = { path = "../transport" }
+futures.workspace = true
+bytes = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
