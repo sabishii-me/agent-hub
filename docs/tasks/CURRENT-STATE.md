@@ -1,6 +1,6 @@
 # CURRENT STATE — read this first (durable handoff)
 
-Updated at hub SHA `85db400512a761fde47e10c496385e90573531d5` (branch
+Updated at hub SHA `c9063f7b1cbe9db226c43bfe489b46a1a2baffa4` (branch
 `feat/hub-modular-redesign`, pushed). Working tree clean.
 
 ## The task (unchanged)
