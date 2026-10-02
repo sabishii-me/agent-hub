@@ -32,11 +32,15 @@ an authorized real call).
 ### Provider type / secret / catalog / grant / model
 - Target: provider is DATA; the hub owns HTTP/auth/catalog/field-map.
 - Hub: /v1/model-providers*; keychain ref; grant -> config/set. Plugin: ships a TYPE descriptor.
-- Current: secret+grant+refresh+selection+pending barrier REAL; `types` loader REAL (reads
-  provider.json); create accepts ANY type; availability = "field present"; grant ignores type.
-- Owner: HUB + CONTRACT + PLUGIN. Upgrade: publish the descriptor location/version/semantics
-  in the owning contract; ONE type authority for enumerate/create/availability/execution;
-  upgrade the provider plugin's artifact.
+- Current (updated bb23f7d): secret+grant+refresh+selection+pending barrier REAL; `types`
+  loader REAL (reads provider.json); create REFUSES an explicit unknown type before any write;
+  availability comes from the resolver; grant refuses a provider whose type no plugin ships;
+  type-owned endpoint applied and overrides refused (eb2bc64). The device-code auth executor
+  is now REAL (ADR-0012, durable auth_ops) — but it has open defects A3/A4/A5 and the
+  min-host/provider-type admission hole A6 (docs/tasks/review-bb23f7d-findings.md).
+- Owner: HUB + CONTRACT + PLUGIN. Upgrade: (A6) ONE admission result consumed by every
+  activation edge incl. provider types; (A5) a named hub dialect for a vendor device-code
+  flow.
 - Real acceptance: unknown type refused BEFORE the secret store; a record naming a missing
   type is readable+unusable; grant refused for an unusable type.
 
@@ -72,12 +76,17 @@ an authorized real call).
 
 ### skills / extensions / resources
 - Target: plugin-sourced layered skills + skills:// hook; extensions placed per harness.
-- Hub: extensions REAL (complete snapshot per start); skills/resources 501. Plugin: ships
-  extensions; implements the hook.
-- Current: extensions snapshot REAL; skills/resources NOT built (T2b pending); snapshot
-  retention = fixed 8 with no reader-usage basis.
-- Owner: HUB. Upgrade: build the new skills model (T2b) + resources; retention by real
-  usage/reference.
+- Hub: extensions REAL (complete snapshot per start); skills/resources now have HANDLERS.
+  Plugin: ships extensions; implements the hook.
+- Current (updated bb23f7d): extensions snapshot REAL; the skills + session-resource routes
+  are MOUNTED and read/write the directory model — but that is the EXCLUDED hub-authored
+  model (review A1), the contract still describes it (not corrected), resources ignore the
+  session, and symlink refusal is incomplete (A2). Snapshot retention = fixed 8, no
+  reader-usage basis.
+- Owner: HUB + CONTRACT. Upgrade: FIRST correct the owning contract to the plugin-sourced,
+  workspace+session-layered model; then wire the plugin source + effective set + real
+  loader/reload; make resources session-scoped; fix A2. Do NOT fill routes with the old
+  mutators.
 - Real acceptance: a real harness loads a skill via skills:// end to end; a snapshot is not
   deleted while a running session reads it.
 
