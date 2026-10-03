@@ -127,6 +127,9 @@ class Hub:
     def patch(self, p, body=None, **k):
         return self.req("PATCH", p, body, **k)
 
+    def put(self, p, body=None, **k):
+        return self.req("PUT", p, body, **k)
+
     def delete(self, p, **k):
         return self.req("DELETE", p, **k)
 
