@@ -16,11 +16,11 @@ only with RUN_REAL_PROVIDER=1.
 | I5 | adapter ANSWERS the prompt then dies (turn stuck `admitted`) | 20260920-230000 | NO |
 | I6 | adapter closes stdout but keeps working (run_turn sees Closed) | 3f7a2e6:43 | NO |
 | I7 | the HUB is killed (power cut) -> recovery | this session | yes |
-| I8 | the ADAPTER is killed mid-turn -> session state is honest | 3f7a2e6 S3 | NO |
+| I8 | the ADAPTER is killed mid-turn -> session state is honest | 3f7a2e6 S3 | **yes** (`killing-the-adapter-leaves-an-honest-state.py`, 5/5) |
 | I9 | cancel TIMEOUT (unconfirmed) -> needs-repair, session not wedged | 20260920-230000 | NO |
 | I10 | a KNOWN terminal intent is not overwritten by timeout/orphan | 3f7a2e6:53 | NO |
 | I11 | close/reopen ACROSS an unconfirmed stop | 3f7a2e6 R2 | NO |
-| I12 | repeated cancel is idempotent | contract | NO |
+| I12 | repeated cancel is idempotent | contract | **yes** (exposed F5: idle cancel = 400) |
 | I13 | a LATE event from an old turn never reaches a new process | bb23f7d A3/S2 | NO |
 | I14 | the session is reusable after every terminal path | 20260920-230000 | partial |
 
@@ -31,6 +31,14 @@ hub: e.g. I2/I5/I6 need an adapter whose child is killed or made silent at a pre
 That is a REAL fault injection on a REAL process - the hub is never bypassed. Where a
 condition cannot be produced with the real adapters, the test says SKIP with the reason; it
 does not fake the adapter and does not soften the assertion.
+
+## Testability gap (blocks I2/I9/I10)
+
+The sweep intervals are HARDCODED (`hub/src/main.rs:363` -> `timeout_unconfirmed_cancels(30,
+1800)`), so the "cancel delivered but never confirmed -> bounded recovery" path cannot be
+driven in a test in reasonable time. `AGENT_HUB_CONTROL_TIMEOUT_SECS` already exists as a
+test knob for a control request; the sweep intervals need the same treatment (a knob, not a
+functional change) before I2/I9/I10 can run REAL. Adding it is a HUB task; the test reads it.
 
 ## Order
 

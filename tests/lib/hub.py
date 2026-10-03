@@ -207,3 +207,39 @@ def real_provider(env_var="HOME_JP_PROD_JSON"):
     if not p or not p.get("baseUrl") or not p.get("apiKey"):
         return None
     return {"url": p["baseUrl"], "api": p.get("api"), "token": p["apiKey"]}
+
+
+def child_processes(parent_pid):
+    """The PIDs of the hub's direct children (its adapter processes), by parent pid.
+
+    Real fault injection without faking the adapter: kill the REAL adapter child and watch
+    the hub. Uses PowerShell CIM (wmic is deprecated)."""
+    out = []
+    try:
+        ps = ("Get-CimInstance Win32_Process | "
+              "Where-Object { $_.ParentProcessId -eq %d } | "
+              "Select-Object -Property ProcessId,Name | "
+              "ForEach-Object { \"$($_.ProcessId) $($_.Name)\" }") % parent_pid
+        txt = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=30)
+        for line in txt.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            pid_s, _, name = line.partition(" ")
+            if pid_s.isdigit():
+                out.append((int(pid_s), name))
+    except Exception:
+        pass
+    return out
+
+
+def kill_pid(pid):
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
