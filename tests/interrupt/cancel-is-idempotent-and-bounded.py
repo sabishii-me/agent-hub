@@ -14,10 +14,9 @@ PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
 HARNESS = os.environ.get("PI_HARNESS_ID", "pi")
 t = Tally("interrupt/cancel-idempotent")
 combo(hub_sha(), kind_of(PI))
-if not os.path.isdir(PI):
-    t.skip("cancel idempotency", f"no real plugin at {PI}")
+if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 hub = Hub(plugins_src=PI)
 try:

@@ -12,19 +12,16 @@ from tally import Tally, combo, kind_of          # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
 HARNESS = os.environ.get("PI_HARNESS_ID", "pi")
-AUTH = os.environ.get("RUN_REAL_PROVIDER") == "1"
 
 t = Tally("interrupt/cancel")
 combo(hub_sha(), kind_of(PI))
-prov = real_provider() if AUTH else None
-if not os.path.isdir(PI):
-    t.skip("cancel a running turn", f"no real plugin at {PI}")
+prov = real_provider()
+if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
     t.done()
-    sys.exit(0)
-if not prov:
-    t.skip("cancel a running turn", "no RUN_REAL_PROVIDER=1 authorization (a turn needs a real provider)")
+    sys.exit(1)
+if not t.require(prov is not None, "a real provider is present", "no real provider in ~/.pi/agent/models.json"):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 hub = Hub(plugins_src=PI)
 try:

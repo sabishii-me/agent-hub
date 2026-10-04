@@ -13,10 +13,9 @@ from tally import Tally, combo        # noqa: E402
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
 t = Tally("harnesses/routes")
 combo(hub_sha())
-if not os.path.isdir(PI):
-    t.skip("harness routes", f"no real plugin at {PI}")
+if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 hub = Hub(plugins_src=PI)
 try:
@@ -25,9 +24,13 @@ try:
     rows = (l["json"] or {}).get("harnesses", [])
     t.check(l["status"] == 200 and any(h.get("id") == "pi" for h in rows), "GET /v1/harnesses lists pi", f"rows={[h.get('id') for h in rows]}")
 
-    # models: pi declares `models`; the route forwards to the adapter.
+    # models: pi declares `models`, so the route forwards to the adapter and answers
+    # a REAL catalogue (200, known:true) - not a 501, not a fabricated empty without
+    # `known`.
     m = hub.get("/v1/harnesses/pi/models")
-    t.check(m["status"] in (200, 501), "GET /v1/harnesses/{id}/models answers", f"status={m['status']}")
+    t.check(m["status"] == 200, "GET /v1/harnesses/{id}/models is 200 (pi declares models)", f"status={m['status']} {m['text'][:120]}")
+    mb = m["json"] or {}
+    t.check(mb.get("known") is True and "models" in mb, "the models answer is a real catalogue (known:true)", f"body={m['text'][:120]}")
 
     # tools: the contract says a harness without the `tools` capability answers
     # known:false - an UNKNOWN catalog, never faked as an empty one (200, not 501).
@@ -45,9 +48,9 @@ try:
     body = ex["json"] or {}
     t.check("available" in body or "selected" in body or "extensions" in body, "the extensions body names available/selected", f"keys={list(body.keys())}")
 
-    # an unknown harness is a real 404, not a 500.
+    # an unknown harness is a real 404 (never 500, never a fabricated 200).
     u = hub.get("/v1/harnesses/nope")
-    t.check(u["status"] in (404, 501), "an unknown harness answers 404 (or unsupported), not 500", f"status={u['status']}")
+    t.check(u["status"] == 404, "an unknown harness answers 404", f"status={u['status']} {u['text'][:120]}")
 finally:
     ok = t.done()
     hub.cleanup()

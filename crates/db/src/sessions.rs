@@ -463,30 +463,18 @@ impl crate::Db {
         Ok(n > 0)
     }
 
-    /// `(id, session_id, state)` of turns whose execution has been unconfirmed for
-    /// longer than `seconds`: a `cancelling` turn (cancel not confirmed) or a
-    /// `running` turn (its prompt never returned and the adapter may still be alive).
-    /// The core settles them on a real action (TASK-048 F4).
-    pub fn unconfirmed_turns_older_than(
-        &self,
-        cancel_secs: i64,
-        running_secs: i64,
-    ) -> Result<Vec<(String, String, String)>, DbError> {
+    /// `(id, session_id, state)` of `cancelling` turns whose cancel was delivered
+    /// but never confirmed by the harness. There is NO execution deadline for a
+    /// `running` turn (a turn runs until the harness ends it); the core settles a
+    /// `cancelling` turn on a real action (adapter-v1:387).
+    pub fn unconfirmed_cancels(&self) -> Result<Vec<(String, String, String)>, DbError> {
         let conn = self.lock();
-        let now = chrono::Utc::now();
-        let cancel_cutoff = (now - chrono::Duration::seconds(cancel_secs)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let running_cutoff = (now - chrono::Duration::seconds(running_secs)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let mut stmt = conn.prepare(
             "SELECT id, session_id, state FROM turns
-             WHERE ended IS NULL AND (
-               (state = 'cancelling' AND cancel_requested_at IS NOT NULL AND cancel_requested_at < ?1)
-               OR (state = 'running' AND running_at IS NOT NULL AND running_at < ?2)
-             )",
+             WHERE ended IS NULL AND state = 'cancelling'",
         )?;
         let rows = stmt
-            .query_map(params![cancel_cutoff, running_cutoff], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }

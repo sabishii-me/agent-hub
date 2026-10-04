@@ -163,6 +163,12 @@ pub struct Sessions {
     /// the generation under the delivery lock and refuses to act if the process
     /// was replaced (stop/reopen) since (TASK-048 F4).
     generations: Mutex<std::collections::HashMap<String, u64>>,
+    /// The terminal state the ADAPTER reported for a session's last turn, taken from
+    /// the `turn_end` EVENT (`state`), NOT from the `session/prompt` RPC result. The
+    /// prompt result only means "the call returned"; the contract puts the turn's
+    /// terminal on the event (adapter-v1 `events`: `turn_end` field
+    /// `state: ok|aborted|failed`). Keyed by session id.
+    terminals: std::sync::Arc<Mutex<std::collections::HashMap<String, String>>>,
     /// The REVERSE-REQUEST handler (the adapter asks the hub): given
     /// `(sid, method, params)`, it returns the JSON-RPC `result` to send back (or
     /// `None` to leave a plain notification alone). The composition root wires this
@@ -184,6 +190,7 @@ impl Sessions {
             requests: Mutex::new(std::collections::HashMap::new()),
             events,
             generations: Mutex::new(std::collections::HashMap::new()),
+            terminals: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             reverse: std::sync::Mutex::new(None),
         }
     }
@@ -250,44 +257,28 @@ impl Sessions {
                 "api": grant.api,
                 "declarations": grant.declarations,
             });
-            match tokio::time::timeout(control_request_timeout(), bus.requests.request("credentials/grant", params)).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
+            // The bus errors this the moment the adapter exits or closes stdout
+            // (all pending requests are drained with `Closed`); no invented deadline.
+            match bus.requests.request("credentials/grant", params).await {
+                Ok(_) => {}
+                Err(e) => {
                     let _ = bus.shutdown().await;
                     return Err(bus_error(e, "credentials/grant"));
-                }
-                Err(_) => {
-                    let _ = bus.shutdown().await;
-                    return Err(StartError::Refused {
-                        code: "credentials/grant:timeout".into(),
-                        message: "the adapter did not answer credentials/grant in time".into(),
-                        data: serde_json::Value::Null,
-                    });
                 }
             }
         }
 
-        // config/set (the hub's materialization must be applied before a turn). A
-        // bounded wait: an adapter that never answers must not hang the start.
-        let applied = match tokio::time::timeout(
-            control_request_timeout(),
-            bus.requests
-                .request("config/set", json!({ "sid": spec.sid, "config": spec.config })),
-        )
-        .await
+        // config/set (the hub's materialization must be applied before a turn). The
+        // bus errors this if the adapter exits or closes stdout; no invented deadline.
+        let applied = match bus
+            .requests
+            .request("config/set", json!({ "sid": spec.sid, "config": spec.config }))
+            .await
         {
-            Ok(Ok(v)) => v.get("applied").cloned().unwrap_or(Value::Null),
-            Ok(Err(e)) => {
+            Ok(v) => v.get("applied").cloned().unwrap_or(Value::Null),
+            Err(e) => {
                 let _ = bus.shutdown().await;
                 return Err(bus_error(e, "config/set"));
-            }
-            Err(_) => {
-                let _ = bus.shutdown().await;
-                return Err(StartError::Refused {
-                    code: "config/set:timeout".into(),
-                    message: "the adapter did not answer config/set in time".into(),
-                    data: serde_json::Value::Null,
-                });
             }
         };
 
@@ -384,6 +375,7 @@ impl Sessions {
         let pump_sid = sid.clone();
         let pump_events = events.clone();
         let pump_reply = bus.requests.clone();
+        let pump_terminals = self.terminals.clone();
         let pump_reverse = self.reverse.lock().expect("reverse").clone();
         let mut notifications = std::mem::replace(
             &mut bus.notifications,
@@ -410,6 +402,27 @@ impl Sessions {
                     obj.insert("sessionId".into(), json!(pump_sid));
                 } else {
                     payload = json!({ "sessionId": pump_sid, "data": payload });
+                }
+                // The adapter wraps EVERY event as method `event` with the real
+                // kind in `params.data.type`. Record the turn's TERMINAL from the
+                // `turn_end` event's `state` (the contract puts the terminal here,
+                // not on the prompt RPC result). Keep the raw name too.
+                let data_type = payload
+                    .get("data")
+                    .and_then(|d| d.get("type"))
+                    .and_then(|t| t.as_str())
+                    .map(str::to_string);
+                if data_type.as_deref() == Some("turn_end") {
+                    if let Some(state) = payload
+                        .get("data")
+                        .and_then(|d| d.get("state").or_else(|| d.get("status")))
+                        .and_then(|v| v.as_str())
+                    {
+                        pump_terminals
+                            .lock()
+                            .expect("terminals")
+                            .insert(pump_sid.clone(), state.to_string());
+                    }
                 }
                 pump_events.publish(n.method, payload);
             }
@@ -519,6 +532,12 @@ impl Sessions {
             .get(sid)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// The terminal state the adapter reported for `sid`'s last turn (from the
+    /// `turn_end` event, `state`). `None` when no terminal event was seen yet.
+    pub fn take_terminal(&self, sid: &str) -> Option<String> {
+        self.terminals.lock().expect("terminals").remove(sid)
     }
 
     /// Bump the generation for `sid` (a new process starts, or a process stops).
@@ -811,21 +830,6 @@ mod env_tests {
         let empty = build_env(&spec(vec![]));
         assert!(!empty.iter().any(|(k, _)| k == "AGENT_HUB_ADDITIONAL_DIRS"));
     }
-}
-
-/// How long a control request (`credentials/grant`, `config/set`) may wait for an
-/// adapter answer before the hub treats the outcome as UNKNOWN and fails closed. A
-/// control request has no business holding a handler (or a start) indefinitely: an
-/// adapter that never answers must not block the hub (ADR-0009), and a config that
-/// may have applied must not be assumed to have failed.
-pub fn control_request_timeout() -> std::time::Duration {
-    // Overridable for tests/rehearsal; the default is generous because a real
-    // adapter may do work before it answers.
-    let secs = std::env::var("AGENT_HUB_CONTROL_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(60);
-    std::time::Duration::from_secs(secs)
 }
 
 /// The outcome of WRITING a request frame. The distinction matters: a caller must

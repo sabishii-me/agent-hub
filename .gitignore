@@ -16,3 +16,8 @@ dist/
 
 # Rust build output.
 /target/
+
+# Python test caches
+tests/**/__pycache__/
+__pycache__/
+*.pyc

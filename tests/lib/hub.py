@@ -193,6 +193,39 @@ class Hub:
         return {"status": last}
 
 
+def turn_state(hub, sid, tid):
+    """The state string of one turn, read through the REAL surface, or None."""
+    g = hub.get(f"/v1/sessions/{sid}/turns")
+    rows = (g["json"] or {}).get("turns", [])
+    row = next((x for x in rows if x.get("id") == tid), None)
+    return row.get("state") if row else None
+
+
+def wait_turn(hub, sid, tid, states, tries=240, interval=0.25):
+    """Poll ONE turn until its state is in `states`. Bounded; returns the turn row
+    (or the last seen row) so a caller asserts on the OBSERVED state, never a wait."""
+    last = None
+    for _ in range(tries):
+        g = hub.get(f"/v1/sessions/{sid}/turns")
+        rows = (g["json"] or {}).get("turns", [])
+        last = next((x for x in rows if x.get("id") == tid), None)
+        if last and last.get("state") in states:
+            return last
+        time.sleep(interval)
+    return last or {}
+
+
+def register_provider(hub, pid="p"):
+    """Register the REAL provider from ~/.pi/agent/models.json. Returns its identity
+    dict, or None when the host has none (a missing real dependency FAILS, never
+    skips)."""
+    prov = real_provider()
+    if not prov:
+        return None
+    hub.post("/v1/model-providers", {"id": pid, "url": prov["url"], "api": prov["api"], "token": prov["token"]})
+    return {"id": pid, **prov}
+
+
 def real_provider(env_var="HOME_JP_PROD_JSON"):
     """The REAL provider from ~/.pi/agent/models.json (HOME-JP-prod). None when absent."""
     import pathlib

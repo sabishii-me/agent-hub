@@ -10,10 +10,9 @@ from tally import Tally, combo         # noqa: E402
 COMPAT = os.environ.get("COMPAT_PLUGIN_DIR", r"E:/AI/ideas/prts-providers/compatible")
 t = Tally("provider/crud")
 combo(hub_sha())
-if not os.path.isdir(COMPAT):
-    t.skip("provider crud", f"no provider plugin at {COMPAT}")
+if not t.require(os.path.isdir(COMPAT), "a real provider plugin is present", f"no provider plugin at {COMPAT}"):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 hub = Hub(plugins_src=COMPAT)
 try:

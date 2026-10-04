@@ -13,10 +13,9 @@ HARNESS = os.environ.get("PI_HARNESS_ID", "pi")
 
 t = Tally("lifecycle/session")
 combo(hub_sha(), kind_of(PI))
-if not os.path.isdir(PI):
-    t.skip("session lifecycle", f"no real plugin at {PI}")
+if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 hub = Hub(plugins_src=PI)
 try:

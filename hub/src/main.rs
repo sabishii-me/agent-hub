@@ -354,13 +354,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "stalled-cancel reconciliation failed"),
         }
-        // The core cancel timeout: an abort delivered but never confirmed is
-        // settled `interrupted` (and the adapter stopped) after the timeout, so the
-        // execution occupancy is released on a real action (adapter-v1:385).
+        // The core cancel timeout (adapter-v1:387): an abort delivered but never
+        // confirmed is settled `interrupted` (and the adapter stopped), so the
+        // execution occupancy is released on a real action. There is NO execution
+        // deadline for a running turn.
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tick.tick().await;
-            match sessions_for_sweep.timeout_unconfirmed_cancels(30, 1800).await {
+            match sessions_for_sweep.settle_unconfirmed_cancels().await {
                 Ok(n) if n > 0 => tracing::info!(timed_out = n, "settled unconfirmed cancels as interrupted"),
                 Ok(_) => {}
                 Err(e) => tracing::error!(error = %e, "cancel-timeout sweep failed"),

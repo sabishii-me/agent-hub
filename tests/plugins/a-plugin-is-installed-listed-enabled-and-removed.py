@@ -12,10 +12,9 @@ from tally import Tally, combo        # noqa: E402
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
 t = Tally("plugins/lifecycle")
 combo(hub_sha())
-if not os.path.isdir(PI):
-    t.skip("plugin lifecycle", f"no real plugin at {PI}")
+if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 # A DEPLOYMENT dir: put the plugin under the hub's plugins root, not installed by the hub.
 hub = Hub()

@@ -23,9 +23,15 @@ class Tally:
             print(f"  FAIL {what}" + (f" - {detail}" if detail else ""))
         return bool(ok)
 
-    def skip(self, what, why):
-        self.skipped += 1
-        print(f"  skip {what} - {why}")
+    def require(self, condition, what, missing):
+        """A PRECONDITION of the test. A missing real dependency is a FAILURE, not a
+        skip: the test exists to prove a capability against the real thing, and a
+        capability that could not be exercised is not proven. Never a fake green."""
+        if condition:
+            return True
+        self.failed += 1
+        print(f"  FAIL {what} - {missing}")
+        return False
 
     def done(self):
         total = self.passed + self.failed

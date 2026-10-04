@@ -19,10 +19,27 @@ state without error". Cancelling an idle session is a no-op that returns the cur
 cancels defensively (a stop button pressed when nothing runs) gets an error for a valid
 request.
 
+## Root cause (exact)
+
+`crates/sessions/src/service.rs` `cancel_turn`, the no-active-turn branch:
+
+```rust
+None => {
+    let turns = self.db.list_turns(session_id)?;
+    return turns
+        .last()
+        .map(turn_view)
+        .ok_or_else(|| SessionError::Validation("the session has no turns".into()));
+}
+```
+
+With no turns at all it returns `Validation("the session has no turns")` -> 400. The
+contract makes cancel idempotent and "without error" for a terminal (or non-running) state.
+
 ## Fix direction
 
-When there is no active turn (or no turns at all), respond 200 with the current turn state
-(idle), like any other idempotent terminal case. Only a genuinely malformed request is 400.
+When there is no active turn (or no turns at all), respond 200 with the current state (idle),
+like any other idempotent terminal case. Only a genuinely malformed request is 400.
 
 ## Verify
 

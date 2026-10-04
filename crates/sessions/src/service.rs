@@ -656,8 +656,8 @@ impl Sessions {
         let call = self
             .runtime
             .request(id, "config/set", serde_json::json!({ "sid": id, "config": { key: value } }));
-        match tokio::time::timeout(crate::runtime::control_request_timeout(), call).await {
-            Ok(Ok(r)) => {
+        match call.await {
+            Ok(r) => {
                 let ok = r
                     .get("applied")
                     .and_then(|a| a.get(key))
@@ -679,14 +679,8 @@ impl Sessions {
                         .await)
                 }
             }
-            Ok(Err(e)) => Err(self
+            Err(e) => Err(self
                 .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
-                .await),
-            Err(_) => Err(self
-                .quarantine_session(
-                    id,
-                    "config/set outcome unknown: the adapter did not answer in time",
-                )
                 .await),
         }
     }
@@ -948,40 +942,28 @@ impl Sessions {
                 )
                 .await?;
             if let Some(g) = &grant {
-                // A bounded wait: a grant may have reached the adapter, so a
-                // non-answer is an UNKNOWN outcome and must fail closed, not hang
-                // the handler (ADR-0009).
-                match tokio::time::timeout(
-                    crate::runtime::control_request_timeout(),
-                    self.runtime.grant(id, g),
-                )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
+                // A grant may have reached the adapter, so a non-answer is an
+                // UNKNOWN outcome and fails closed; the bus errors this if the
+                // adapter exits. No invented deadline.
+                match self.runtime.grant(id, g).await {
+                    Ok(()) => {}
+                    Err(e) => {
                         let typed = SessionError::from_start(e);
                         self.quarantine_session(id, &typed.to_string()).await;
                         return Err(typed);
                     }
-                    Err(_) => {
-                        let msg = "credentials/grant outcome unknown: the adapter did not answer in time".to_string();
-                        return Err(self.quarantine_session(id, &msg).await);
-                    }
                 }
             }
-            // A bounded wait: config/set may have APPLIED in the adapter before the
-            // response failed or timed out, so an unknown outcome fails CLOSED rather
-            // than keep serving prompts on the old identity - and never hangs the
-            // handler (ADR-0009).
-            let r = match tokio::time::timeout(
-                crate::runtime::control_request_timeout(),
-                self.runtime
-                    .request(id, "config/set", serde_json::json!({ "sid": id, "config": config })),
-            )
-            .await
+            // config/set may have APPLIED in the adapter before a response was lost,
+            // so an unknown outcome fails CLOSED rather than keep serving prompts on
+            // the old identity. The bus errors this if the adapter exits.
+            let r = match self
+                .runtime
+                .request(id, "config/set", serde_json::json!({ "sid": id, "config": config }))
+                .await
             {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
+                Ok(v) => v,
+                Err(e) => {
                     let typed = SessionError::from_start(e);
                     let code = typed.code();
                     // A PRESET the harness cannot change in place is the documented
@@ -1016,14 +998,6 @@ impl Sessions {
                     // contract code (TASK-048 F5).
                     self.quarantine_session(id, &typed.to_string()).await;
                     return Err(typed);
-                }
-                Err(_) => {
-                    return Err(self
-                        .quarantine_session(
-                            id,
-                            "config/set outcome unknown: the adapter did not answer in time",
-                        )
-                        .await);
                 }
             };
             let applied = r.get("applied").cloned().unwrap_or(serde_json::Value::Null);
@@ -1099,8 +1073,8 @@ impl Sessions {
                 "config/set",
                 serde_json::json!({ "sid": id, "config": { "thinkingLevel": level } }),
             );
-            match tokio::time::timeout(crate::runtime::control_request_timeout(), call).await {
-                Ok(Ok(r)) => {
+            match call.await {
+                Ok(r) => {
                     let applied = r
                         .get("applied")
                         .and_then(|a| a.get("thinkingLevel"))
@@ -1111,17 +1085,9 @@ impl Sessions {
                         ));
                     }
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     return Err(self
                         .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
-                        .await);
-                }
-                Err(_) => {
-                    return Err(self
-                        .quarantine_session(
-                            id,
-                            "config/set outcome unknown: the adapter did not answer in time",
-                        )
                         .await);
                 }
             }
@@ -1671,9 +1637,10 @@ impl Sessions {
                 return Err(SessionError::Conflict(req.idempotency_key));
             }
             agent_hub_db::TurnAdmission::Busy(_) => {
-                return Err(SessionError::Validation(
-                    "the session has a running turn; a new turn is refused, not queued".into(),
-                ));
+                // The contract: a deliberate second turn while one runs is 409
+                // `session_busy` (the same code every busy knob returns), never a
+                // 400 validation_failed (docs/issues/20261003-160000).
+                return Err(SessionError::Busy);
             }
         }
 
@@ -1779,12 +1746,29 @@ impl Sessions {
                 "the adapter closed before answering the prompt".into(),
             )),
         };
-        // The prompt's OWN result is the authoritative terminal (adapter-v1:96-103
-        // returns `turn-ended`; `turn_end.state: ok|aborted|failed` is the proof).
-        // No pre-prompt snapshot, and never "any RPC success = completed".
+        // The turn's TERMINAL is the adapter's `turn_end` EVENT (`state:
+        // ok|aborted|failed`), NOT the prompt RPC result - the contract puts the
+        // state on the event; the prompt result only means "the call returned"
+        // (adapter-v1 `events`). An empty `{}` prompt result is a normal return,
+        // never a `failed` turn (F1, docs/issues/20261003-120000).
         match result {
-            Ok(result) => {
-                let (ended, cause) = run_end_of(&result);
+            Ok(_result) => {
+                let raw = self.runtime.take_terminal(&session_id);
+                let (ended, cause) = match raw.as_deref() {
+                    Some(state) => terminal_of_event_state(state),
+                    None => {
+                        // No terminal event seen (yet). The prompt returned, so the
+                        // run is over; report the honest "unknown" as `interrupted`
+                        // only if this turn was cancelled, else `failed`, and never
+                        // claim a clean `completed` we did not observe.
+                        let cancelled = self.cancelled.lock().await.contains(&turn_id);
+                        if cancelled {
+                            ("interrupted", Some("the adapter did not report a terminal state".into()))
+                        } else {
+                            ("failed", Some("the adapter did not report a turn state".into()))
+                        }
+                    }
+                };
                 self.settle_turn(&turn_id, ended, cause.as_deref()).await;
             }
             Err(e) => {
@@ -1873,20 +1857,14 @@ impl Sessions {
         Ok(n)
     }
 
-    /// The core-side CANCEL TIMEOUT (adapter-v1:385): an abort that was delivered
-    /// but never confirmed must not hold the execution occupancy forever. After
-    /// `timeout_secs`, the hub STOPS the adapter (a deliberate, performed stop, not
-    /// a send failure) and settles the turn `interrupted`. This releases occupancy
-    /// on a real action rather than a hope.
-    pub async fn timeout_unconfirmed_cancels(
-        &self,
-        cancel_secs: i64,
-        running_secs: i64,
-    ) -> Result<usize, SessionError> {
+    /// The core-side CANCEL TIMEOUT (adapter-v1:387): an abort that was delivered
+    /// but never confirmed must not hold the execution occupancy. The hub STOPS the
+    /// adapter (a deliberate, performed stop, not a send failure) and settles the
+    /// turn `interrupted`. There is NO execution deadline for a `running` turn: a
+    /// turn runs until the harness ends it.
+    pub async fn settle_unconfirmed_cancels(&self) -> Result<usize, SessionError> {
         let mut n = 0;
-        for (turn_id, session_id, state) in
-            self.db.unconfirmed_turns_older_than(cancel_secs, running_secs)?
-        {
+        for (turn_id, session_id, state) in self.db.unconfirmed_cancels()? {
             // Serialize against admission/dispatch and RE-CHECK the target: the sweep
             // saw a row in an earlier query, and the turn may have finished and a NEW
             // turn may have started. Stopping by a stale snapshot could kill the new
@@ -1933,12 +1911,13 @@ impl Sessions {
                 Ok(None) => {}
                 Err(e) => tracing::error!(session = %session_id, error = %e, "could not read the session row"),
             }
-            let cause = if state == "cancelling" {
-                "the cancel was not confirmed within the timeout"
-            } else {
-                "the turn did not reach a terminal state within the execution timeout"
-            };
-            self.settle_turn(&turn_id, "interrupted", Some(cause)).await;
+            let _ = state;
+            self.settle_turn(
+                &turn_id,
+                "interrupted",
+                Some("the cancel was not confirmed by the harness"),
+            )
+            .await;
             n += 1;
         }
         Ok(n)
@@ -2033,17 +2012,13 @@ impl Sessions {
         if row.status != "needs-repair" && !quarantined {
             return Err(SessionError::NotNeedsRepair);
         }
-        // 1. Re-abort BEST-EFFORT with a BOUNDED wait - never an unbounded wait
-        //    under the session lock. An adapter that ignores `session/abort` must
-        //    not stall the stop, close/reopen, or the timeout sweep that need this
-        //    lock (TASK-048 P1). The abort is a courtesy; the STOP below is what
-        //    actually replaces the process.
-        let _ = tokio::time::timeout(
-            crate::runtime::control_request_timeout(),
-            self.runtime
-                .send(id, "session/abort", serde_json::json!({ "sid": id })),
-        )
-        .await;
+        // 1. Re-abort BEST-EFFORT. `send` only writes to the adapter's stdin - it
+        //    does not await an answer - so a silent adapter cannot stall the lock.
+        //    The abort is a courtesy; the STOP below is what replaces the process.
+        let _ = self
+            .runtime
+            .send(id, "session/abort", serde_json::json!({ "sid": id }))
+            .await;
         if let Err(e) = self.runtime.stop(id).await {
             return Err(SessionError::RepairFailed(format!(
                 "the old adapter process could not be stopped: {e}"
@@ -2086,11 +2061,22 @@ impl Sessions {
             let active = match self.db.active_turn(session_id)? {
                 Some(t) => t,
                 None => {
-                    let turns = self.db.list_turns(session_id)?;
-                    return turns
-                        .last()
-                        .map(turn_view)
-                        .ok_or_else(|| SessionError::Validation("the session has no turns".into()));
+                    // No turn is running: cancel is a NO-OP that returns the current
+                    // state. The contract makes cancel idempotent and "without error"
+                    // for a terminal (or non-running) state, so an idle session is a
+                    // 200 with the turn state `idle` - never a 400 (F5,
+                    // docs/issues/20261003-140000). The session must exist.
+                    if self.db.session(session_id)?.is_none() {
+                        return Err(SessionError::NotFound(session_id.into()));
+                    }
+                    return Ok(TurnView {
+                        id: String::new(),
+                        state: "idle".into(),
+                        ended: None,
+                        cause: None,
+                        partial_persisted: false,
+                        partial_items: 0,
+                    });
                 }
             };
             self.cancelled.lock().await.insert(active.id.clone());
@@ -2107,11 +2093,10 @@ impl Sessions {
         // Deliver the abort under the DISPATCH lock, so the abort is serialized with
         // a turn's prompt: either the prompt frame is already written (and this
         // abort applies to THAT turn's process), or the claim had not run and the
-        // prompt will not send. The frame is written (not awaited) under the lock;
-        // the long wait for the answer is outside it, so a cancel never waits for a
-        // turn to finish (TASK-048 F4).
+        // prompt will not send. The frame is written under the lock; the cancel then
+        // returns at once (the answer is not the stop proof).
         let dispatch = self.dispatch_lock_for(session_id).await;
-        let abort_rx = {
+        {
             let _delivering = dispatch.lock().await;
             // Bound the abort to the turn we cancelled: if the process/generation
             // changed (the turn ended and a NEW one started), do NOT abort the new
@@ -2153,8 +2138,10 @@ impl Sessions {
                 )
                 .await
             {
-                Ok(rx) => rx,
+                Ok(_rx) => {}
                 Err(e) => {
+                    // The abort could NOT be delivered: that is the contract's
+                    // `abort-failed` (adapter-v1:387), and the turn stays held.
                     let t = self
                         .db
                         .turn(&active_id)?
@@ -2166,47 +2153,12 @@ impl Sessions {
                 }
             }
         };
-        // The abort is IN FLIGHT; wait for its answer WITHOUT holding any lock. The
-        // wait is BOUNDED: an adapter that ignores the abort must not hold the
-        // handler forever. On timeout the abort was DELIVERED but unconfirmed, so
-        // the turn STAYS held and the timeout sweep resolves it (never an unbounded
-        // wait, never a fabricated terminal). A send/close failure does not settle
-        // the turn either: the prompt may still run.
-        let waited = tokio::time::timeout(crate::runtime::control_request_timeout(), abort_rx).await;
-        match waited {
-            Err(_) => {
-                // Delivered-but-unconfirmed: return the held turn; the sweep will
-                // confirm or settle it.
-                let t = self
-                    .db
-                    .turn(&active_id)?
-                    .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
-                return Ok(turn_view(&t));
-            }
-            Ok(abort_res) => match abort_res {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => {
-                let t = self
-                    .db
-                    .turn(&active_id)?
-                    .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
-                return Err(SessionError::AbortFailed(format!(
-                    "{e}; the turn is still held (state {}), retry cancel",
-                    t.state
-                )));
-            }
-            Err(_) => {
-                let t = self
-                    .db
-                    .turn(&active_id)?
-                    .ok_or_else(|| SessionError::NotFound(active_id.clone()))?;
-                return Err(SessionError::AbortFailed(format!(
-                    "the adapter closed; the turn is still held (state {}), retry cancel",
-                    t.state
-                )));
-            }
-            },
-        }
+        // The abort is DELIVERED. Whether the harness stopped is proven by its own
+        // `turn_end`, NOT by awaiting this reply - "session/abort acknowledges only
+        // that the harness was ASKED to stop" (adapter-v1:387). Cancel returns the
+        // current turn state at once and is idempotent; an abort delivered but never
+        // confirmed is settled by the core's cancel timeout (the sweep), not hidden
+        // here.
         let t = self
             .db
             .turn(&active_id)?
@@ -2216,24 +2168,15 @@ impl Sessions {
 
 }
 
-/// Map the adapter's returned `turn-ended` to the contract's terminal. `ok` ->
-/// `completed`, `aborted` -> `cancelled`, `failed` -> `failed`; anything
-/// unreadable is `failed` (never silently `completed`).
-fn run_end_of(result: &serde_json::Value) -> (&'static str, Option<String>) {
-    let state = result
-        .get("state")
-        .or_else(|| result.get("turn").and_then(|t| t.get("state")))
-        .and_then(|s| s.as_str());
+/// Map the adapter's `turn_end` EVENT `state` to the contract's terminal:
+/// `ok`/`completed` -> `completed`, `aborted` -> `cancelled`, `failed` ->
+/// `failed`. The terminal is the EVENT (adapter-v1 `events`), never the prompt
+/// RPC result.
+fn terminal_of_event_state(state: &str) -> (&'static str, Option<String>) {
     match state {
-        Some("ok") => ("completed", None),
-        Some("aborted") => ("cancelled", None),
-        Some("failed") => (
-            "failed",
-            result
-                .get("error")
-                .map(|e| e.to_string())
-                .or_else(|| Some("the adapter reported a failed turn".into())),
-        ),
+        "ok" | "completed" => ("completed", None),
+        "aborted" => ("cancelled", None),
+        "failed" => ("failed", Some("the adapter reported a failed turn".into())),
         _ => ("failed", Some("the adapter did not report a turn state".into())),
     }
 }
@@ -2272,22 +2215,20 @@ fn text_of(content: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod run_end_tests {
-    use super::run_end_of;
-    use serde_json::json;
+    use super::terminal_of_event_state;
 
     #[test]
-    fn the_adapter_state_is_the_terminal() {
-        assert_eq!(run_end_of(&json!({"state":"ok"})).0, "completed");
-        assert_eq!(run_end_of(&json!({"state":"aborted"})).0, "cancelled");
-        assert_eq!(run_end_of(&json!({"state":"failed"})).0, "failed");
+    fn the_turn_end_event_state_is_the_terminal() {
+        assert_eq!(terminal_of_event_state("ok").0, "completed");
+        assert_eq!(terminal_of_event_state("completed").0, "completed");
+        assert_eq!(terminal_of_event_state("aborted").0, "cancelled");
+        assert_eq!(terminal_of_event_state("failed").0, "failed");
     }
 
-    /// A success WITHOUT a state is NOT completed: it is failed (never silently
-    /// "the model finished").
+    /// An unreadable event state is failed, never silently "the model finished".
     #[test]
     fn an_unreadable_state_is_failed_not_completed() {
-        assert_eq!(run_end_of(&json!({})).0, "failed");
-        assert_eq!(run_end_of(&json!({"unexpected":true})).0, "failed");
+        assert_eq!(terminal_of_event_state("weird").0, "failed");
     }
 }
 

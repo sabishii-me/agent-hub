@@ -11,16 +11,14 @@ from tally import Tally, combo, kind_of          # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
 HARNESS = os.environ.get("PI_HARNESS_ID", "pi")
-AUTH = os.environ.get("RUN_REAL_PROVIDER") == "1"
 MODEL = os.environ.get("PI_MODEL", "deepseek-flash")
 
 t = Tally("model/identity")
 combo(hub_sha(), kind_of(PI))
-prov = real_provider() if AUTH else None
-if not os.path.isdir(PI) or not prov:
-    t.skip("a real model turn", "no RUN_REAL_PROVIDER=1 authorization" if not prov else f"no plugin at {PI}")
+prov = real_provider()
+if not t.require(os.path.isdir(PI) and prov is not None, "a real plugin and a real provider are present", ("no real provider in ~/.pi/agent/models.json" if not prov else f"no plugin at {PI}")):
     t.done()
-    sys.exit(0)
+    sys.exit(1)
 
 def assistant_messages(hub, sid):
     g = hub.get(f"/v1/sessions/{sid}/messages")
