@@ -90,3 +90,25 @@ FILE and the extension are present on disk. The difference between the working d
 the failing hub drive has NOT yet been pinned; it is a runtime fact (which env the respawned pi
 actually received), not a contract or code difference. The next step is a direct observation of
 the pi child's environment/extension load in a full hub run - NOT a code change.
+
+## Status: FIXED (2026-10-04)
+
+- **Adapter** (`prts-harness-pi` 7a23419, mirrored `prts-harness-jouzu` 235d5a0): the
+  `agent-presets` extension records `hub-review/state` only when this run has a real review
+  state to record (a preset is in force, an explicit `/review on|off`, or a restored record),
+  so the pre-preset spawn leaves no trace that can override the preset. The restore rule is
+  unchanged, so `/review on|off` and resume-in-last-mode still work.
+- **Hub** (`prts-hub` 7427344), two defects the now-gating tests exposed:
+  - `list_approvals`/`list_questions` returned answered rows too; they are the PENDING set
+    (`decision`/`answers` `None`).
+  - the reverse handler treated a decision as a denial only if it contained `reject`; the
+    contract's binary vocabulary is `allow|deny|always`, so a plain `deny` was delivered as
+    `approved:true` and the denied tool ran.
+
+### Evidence (real runs, hub 7427344 + pi 7a23419 + pi 1.0.0)
+
+- `tests/approvals/an-approval-preset-asks-before-every-tool.py` **8/8 ok** — a real approval
+  is raised before the tool; deny settles the turn; the answered approval is no longer pending.
+- `tests/approvals/denying-an-approval-blocks-the-side-effect.py` **2/2 ok** — an approval is
+  raised for the write; the DENIED write did NOT happen.
+- `tests/presets/*` green (preset applied & enforced; plan mode). Full suite **27/27 files**.
