@@ -193,7 +193,7 @@ A provider is **data**, not a module. The hub owns the function: HTTP, authentic
 needs more than the parameters allow gets a **named hub dialect**, never its own code.
 
 This removes in-process foreign code (a provider cannot run inside the hub) and is why Rust is
-possible at all. (Full table of what moves from the provider to the hub: ROUTES-REVIEW,
+possible at all. (Full table of what moves from the provider to the hub,
 "Model providers are DATA".)
 
 ## 6. The adapter boundary: the adapter TRANSLATES and IMPLEMENTS the baseline
@@ -253,7 +253,7 @@ the harness needs are **not** hub control state and must not be removed by that 
 
 These are resources with a placement rule, not code the hub imports.
 
-- **Extensions** are two kinds (see ROUTES-REVIEW): **adapter-shipped** (part of the adapter - an
+- **Extensions** are two kinds: **adapter-shipped** (part of the adapter - an
   approval mode, the preset mechanism) and **user-authored** (plugin-ized later). The adapter
   places them for its harness.
 - **Skills** are a top-level hub mechanism; the content comes from a plugin, and the hub hands it
@@ -264,7 +264,7 @@ These are resources with a placement rule, not code the hub imports.
   shown able to intercept `readFileSync("skills://…")` in an ESM Node child; that is a mechanism
   probe, **not** the delivery acceptance - see below.) The mechanism is a **verification-gated
   delivery**, not an approved implementation: it must cover the directory loader, relative
-  resources, the effective set and reload, on real artifacts (ROUTES-REVIEW o6). Requires the
+  resources, the effective set and reload, on real artifacts. Requires the
   harness to run under Node; a compiled-binary harness would need a different insertion point.
 
 ### Security: what placement does and does NOT guarantee (G1)
@@ -288,13 +288,13 @@ the design must state, and the parts it cannot guarantee:
 - **The hook is not a sandbox.** It intercepts the `fs` calls a skill loader uses; it does **not**
   confine `child_process`/shell/native code. So with a same-principal, shell-capable agent, path
   hiding alone is insufficient - `write` accepting absolute paths is on the record
-  (ROUTES-REVIEW). Which tools each harness actually enables is read from
+  Which tools each harness actually enables is read from
   `GET /v1/harnesses/{id}/tools`, never assumed.
 - **Management trust boundary**: the management surface answers approvals and mutates plugins and
   skills. `endpoint.json` carries the bearer on loopback; loopback is **not** inter-principal
   isolation, and the design does not yet define that an agent cannot read the token. A bearer only
   proves possession, not that the holder is the trusted human. **Every route requiring the token
-  (ROUTES-REVIEW o5) is part of the trust boundary, not a substitute for one.**
+  is part of the trust boundary, not a substitute for one.**
 - **Not guaranteed**: that a same-principal, unconstrained agent cannot alter a resource between
   reboots. The valid options are to (a) **narrow the claim** - say plainly this reduces accidental
   loading and exposure, and rely on the tool/adapter gate, or (b) **define a real execution
@@ -303,7 +303,7 @@ the design must state, and the parts it cannot guarantee:
   integrity from directory placement alone. **Unknown/missing permission must fail closed.**
 
 **The runtime verification of the security claim is an implementation task, not a claim here**
-(`docs/review/VERIFICATION-TASKS.md`, T2): absolute-path write, shell/child, links, the reboot load
+(feasibility unknown T2): absolute-path write, shell/child, links, the reboot load
 chain, and management-API/approval access by an agent identity, against pi/jouzu/dsh on real
 artifacts. Two of its parts can still change the design and are listed as feasibility unknowns with
 exit conditions (T2a - is an OS execution boundary reachable; T2b - does the skills hook deliver on
@@ -546,7 +546,7 @@ suite that drives `/v1` is the hub's own; it is not resurrected by this docs PR.
 
 **Stage and gates.** This is the **architecture stage**: it states decisions and boundaries. The
 runtime verification of the decisions and the feasibility unknowns is **turned into implementation
-tasks with exit conditions** in `docs/review/VERIFICATION-TASKS.md` (T1-T6), not claimed here. No
+tasks with exit conditions** (T1-T6), not claimed here. No
 task is a merge condition for this stage; two of them (T2a execution boundary, T2b skills hook per
 harness) can still change a route and are called out as such.
 
@@ -700,7 +700,7 @@ follows distinguishes a real, narrow component fact from a product capability.
 
 ### Order of work now
 
-1. Correct `contract/v1.json` to the **decided** surface (`ROUTES-REVIEW.md` decided sections),
+1. Correct `contract/v1.json` to the **decided** surface,
    because the contract is the interface (ADR-0011) and it currently encodes the "before" surface.
 2. Make every unconnected capability **honestly unavailable** (no `active`/`running`/`fork`
    success without an adapter; no plaintext secret accepted; no unauthenticated mutators served
@@ -709,7 +709,7 @@ follows distinguishes a real, narrow component fact from a product capability.
 4. Only then continue, one **real** product capability at a time, end to end.
 
 The T2a / T2b feasibility unknowns (an OS execution boundary; the skills hook per harness) are
-still unresolved and tracked in `docs/review/VERIFICATION-TASKS.md`.
+still unresolved and tracked as feasibility unknowns.
 
 ## 19. The provider→session grant chain (TASK-048 REVIEW-495ce94)
 
@@ -833,26 +833,6 @@ we never record a knob the harness did not apply. `null` means "do not intervene
 Verified live: `{plan:true, review:true, presetId:standard}` -> active with
 `appliedPlan=true`, `appliedReview=true`, `appliedPreset=standard`.
 
-
-## 25. Review follow-up: PROVIDER-TURN-REVIEW-3b6730b3
-
-- **F1**: a second `begin_provider_op` is REFUSED while one is pending (no overwrite);
-  `finish_provider_op_id` clears the exact op; a no-token create begins/finishes
-  nothing; `patch` reads the row's reference and aborts on a read error.
-- **F2**: `resolve_grant` is async, holds the provider lock, and refuses while a
-  transition is pending — config+credential are one snapshot.
-- **F3**: the native route (`applied.connectionId`) must be present; `accept_turn` takes
-  the session lock a PATCH holds; a post-`config/set` failure quarantines the session
-  (stop + `needs-repair`).
-- **F4**: cancel takes the session lock; `run_turn` re-checks the durable cancel state
-  right before dispatch; a core cancel timeout stops the adapter and settles
-  `interrupted`.
-- **F5**: `internal_error` passes through; the bus keeps the adapter's typed `data`.
-- **F4 refinement**: `StartError::Refused` distinguishes an adapter answer from a
-  transport error; the execution timeout covers both an unconfirmed cancel and a stuck
-  `running` turn.
-- **N4**: `harness_env` holds a per-harness placement lock across the shared-tree
-  rebuild, so concurrent starts cannot half-swap it.
 
 ## 24. The remaining surface (single source of truth)
 
