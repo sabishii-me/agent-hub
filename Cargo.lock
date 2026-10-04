@@ -203,6 +203,7 @@ version = "0.1.0"
 dependencies = [
  "keyring",
  "rand",
+ "sha2",
  "thiserror",
  "tracing",
 ]
