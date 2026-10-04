@@ -15,12 +15,30 @@ routes, mock-driven proof. A capability is DONE only when driven through `/v1` a
 adapter. A reviewer report is correction input, NOT the task. Do NOT treat a review result as
 a target/precondition.
 
-## THE OPEN PROBLEM (this is what to continue)
+## RESOLVED THIS RUN: 20261004-050000 (a preset reported APPLIED but not enforced)
 
-**A selected preset is reported APPLIED but is not ENFORCED.** Concretely: a session created
-with `presetId: "heavy-review"` (`approve:true`, "every tool call asks before it runs") shows
-`appliedPreset: heavy-review` and runs the model's `read` tool with **NO approval** - the
-harness never sends `extension_ui_request`. Full record: `docs/issues/20261004-050000-*`.
+**ROOT CAUSE (proven by observation inside pi):** the adapter starts pi once WITHOUT the
+preset (`session/start`, before `config/set` names it). That spawn's `agent-presets` extension
+loaded with `review.on=false` and, on `session_start`, wrote `hub-review/state {asking:false}`
+into the SESSION LOG. `config/set` then restarted pi WITH the preset (`review.on=true`), but
+that spawn RESUMES THE SAME LOG, and the extension's `session_start` restored the newest
+`hub-review/state` - the stale `{asking:false}` - OVER its own preset's `approve:true`. Same
+process: load `review.on=true`, `tool_call` `review.on=false`. Gate off; tool ran unapproved.
+
+**FIX (all committed):**
+- Adapter `prts-harness-pi` `7a23419` (mirrored `prts-harness-jouzu` `235d5a0`): the extension
+  records `hub-review/state` only when the run has a real review state (a preset in force, an
+  explicit `/review on|off`, or a restored record). A pre-preset spawn leaves no trace. The
+  restore rule is unchanged, so `/review on|off` and resume-in-last-mode still work.
+- Hub `prts-hub` `7427344`: `list_approvals`/`list_questions` returned answered rows too (they
+  are the PENDING set); and the reverse handler only treated a decision as a denial if it
+  contained `reject` - the contract's vocabulary is `allow|deny|always`, so a bare `deny` was
+  delivered as `approved:true` and the denied tool ran.
+- Test `prts-hub` `c8f739d`: `tests/approvals/review-remains-switchable-after-a-preset.py`
+  (on -> off -> on); goes RED before the adapter fix, GREEN after.
+
+**RESULTS (real runs, hub `c8f739d` + pi `7a23419` + pi 1.0.0, real provider):**
+`tests/approvals/*` 8/8 + 2/2 + 9/9; `tests/presets/*` green; **full suite 28/28 files**.
 
 ### What is PROVEN (do not re-litigate)
 
@@ -110,6 +128,6 @@ Candidate sub-hypotheses to check with that dump (none confirmed):
 
 ## NEXT ACTION
 
-Instrument the adapter's `startPi` spawn (dump the child env; capture pi's extension-load
-diagnostics) for one real hub run, diff against the working isolate, and fix the responsible
-side. That is the ONE thing that will close `20261004-050000`.
+The preset/approval capability is now real and enforced end-to-end (20261004-050000 closed).
+Continue §17: the next capability that is OPEN/unproven in `docs/tasks/alignment-code-vs-goal.md`
+(see ALSO OPEN above). Keep the rule: when a document is silent, stop and ask - do not invent.
