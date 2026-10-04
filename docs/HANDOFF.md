@@ -134,6 +134,18 @@ Candidate sub-hypotheses to check with that dump (none confirmed):
   command's own append ("applied" from the log, not the live gate — same class as 050000).
   Exposed by `tests/approvals/review-remains-switchable-after-a-preset.py`. Owner: the adapter.
 
+## BLOCKED RIGHT NOW: the OS secret store (20261004-080000)
+
+`POST /v1/model-providers` is 501 (`no secret store`) and `cargo test -p agent-hub-secrets --
+--nocapture` prints `SKIP: OS secret store unavailable on this host`. Every REAL-provider test
+is therefore blocked (they FAIL, correctly). VaultSvc is Running and `cmdkey` works, so it is
+the keyring backend in a freshly-spawned shell, not the code; 7 stray agent-hub.exe were killed
+and the 501 persists. Resume when that probe stops printing SKIP.
+
+Also in flight (uncommitted): `prts-harness-pi` `stash@{0}` = a partial fix for 20261004-070000
+(reviewCommand waits for the observed review state; 4/20 -> 2/20, residual unexplained). Do not
+commit until the residual is fixed and verified.
+
 ## THE RULE THIS RUN MUST HOLD
 
 - When a document is silent, DO NOT invent; stop and ask for a design decision.
