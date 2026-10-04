@@ -153,7 +153,9 @@ impl Humans {
         let all = self.approvals.lock().expect("approvals");
         let mut out: Vec<Approval> = all
             .values()
-            .filter(|a| a.session_id == session_id)
+            // A resolved approval is no longer a pending decision: the list is
+            // the pending set (the `decision` field is `Some` once answered).
+            .filter(|a| a.session_id == session_id && a.decision.is_none())
             .cloned()
             .collect();
         out.sort_by(|a, b| a.requested_at.cmp(&b.requested_at));
@@ -224,7 +226,8 @@ impl Humans {
         let all = self.questions.lock().expect("questions");
         let mut out: Vec<Question> = all
             .values()
-            .filter(|q| q.session_id == session_id)
+            // Answered questions are no longer pending.
+            .filter(|q| q.session_id == session_id && q.answers.is_none())
             .cloned()
             .collect();
         out.sort_by(|a, b| a.requested_at.cmp(&b.requested_at));

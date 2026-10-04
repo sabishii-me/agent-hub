@@ -310,8 +310,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let rx = humans.await_approval(&approval.id);
                         match rx.await {
                             Ok(resolved) => {
-                                let decision = resolved.decision.unwrap_or_else(|| "reject".into());
-                                let approved = !decision.to_lowercase().contains("reject");
+                                let decision = resolved.decision.unwrap_or_else(|| "deny".into());
+                                // The contract fixes the binary vocabulary as
+                                // `allow`|`deny`|`always`; a select dialog echoes
+                                // one of its own options (e.g. "Allow Once",
+                                // "Reject"). Classify into allowed/denied by that
+                                // vocabulary - a bare `deny` is a DENIAL, not the
+                                // absence of the word "reject".
+                                let d = decision.trim().to_lowercase();
+                                // Deny words win first (so "Don't Allow" is a
+                                // denial); then the allow vocabulary.
+                                let denied = d == "deny" || d == "reject" || d.contains("reject") || d.contains("deny") || d.starts_with("no");
+                                let approved = !denied
+                                    && (d == "allow" || d == "always" || d.contains("allow") || d.contains("approve"));
                                 // The adapter resolvers read `.approved` and `.reason`
                                 // from a CLOSED vocabulary (`timeout`|`allowed`|
                                 // `denied`); send exactly that (pi:564, jouzu:675,
