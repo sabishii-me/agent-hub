@@ -51,3 +51,29 @@ workaround. A test-only switch is forbidden.
 a session on `heavy-review` that calls a tool raises a real approval:
 `GET /v1/sessions/{id}/approvals` lists it; `POST .../approvals/{aid}` with the SAME id allows
 (resumes the tool) or denies (blocks it, no side effect). And with `review off` it does not ask.
+
+## Verified root cause (2026-10-04, code + isolation)
+
+Proven facts:
+1. The extension DOES gate when loaded correctly. In isolation (a temp project with the
+   agent-presets extension + config {"approve":true}, pi spawned `--mode rpc --approve`), the
+   `/review status` command reports **"review is on"** - i.e. `review.on === true` - and pi
+   emits `extension_ui_request` on stdout. So the mechanism is fine.
+2. In the REAL session the extension is present (`<cwd>/.pi/extensions/agent-presets/index.ts`),
+   the config is present (`<cwd>/.pi/agent-presets.json` = {"...":"approve":true}), and
+   `appliedPreset` = heavy-review. Yet NO `extension_ui_request` reaches the adapter during a
+   tool call.
+
+So the running pi was started WITHOUT the preset env, while the session reports the preset as
+applied. The adapter starts pi twice on create: pi#1 in `session/start` (no preset), then - in
+`config/set`'s preset branch - it kills pi#1 and calls `startPi` again with
+`AGENT_PRESETS_CONFIG` set. That restart is guarded by `if (!(pi && currentRef && !turnActive))`
+-> "cannot apply preset: no live harness to carry it". If pi#1 is not yet live when config/set
+arrives, the restart is SKIPPED, the preset is still recorded (`applied.preset`), and the
+session reports it - but the pi that runs the turn never got the env. "Applied" is reported,
+"enforced" is false.
+
+This is the same family as F1/F5: a fact computed and reported, while the real behaviour
+differs. Owner to confirm: the adapter's preset restart is skipped when the child is not yet
+live; the fix is to make the preset take effect on the process that RUNS (spawn the first pi
+with the preset, or make the restart unconditional/awaited), not to relax the check.
