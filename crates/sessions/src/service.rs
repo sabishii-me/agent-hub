@@ -1668,6 +1668,9 @@ impl Sessions {
         // for the prompt's answer happens OUTSIDE it, so a cancel never waits for a
         // turn to finish.
         let dispatch = self.dispatch_lock_for(&session_id).await;
+        // Registered INSIDE the delivery lock (before the prompt frame is written) so
+        // the terminal event is never missed, and returned alongside the prompt rx.
+        let terminal_rx_opt;
         let prompt_rx = {
             let _delivering = dispatch.lock().await;
             // Re-check under the delivery lock: a cancel that already won left the
@@ -1704,6 +1707,11 @@ impl Sessions {
                 "message": text,
                 "clientMessageId": turn_id,
             });
+            // Register interest in THIS turn's terminal BEFORE sending the prompt,
+            // so the adapter's `turn_end` (which travels the same stdout pipe) is
+            // never missed. The pump task delivers it; we await it below - no
+            // cross-task poll, no ordering guess (docs/issues/20261004-040000).
+            terminal_rx_opt = Some(self.runtime.watch_terminal(&turn_id));
             // Bind the prompt to the SAME process generation we recorded with the
             // claim: if a stop/reopen/repair replaced the process between the
             // generation read and this send, the prompt would reach a process the
@@ -1739,6 +1747,7 @@ impl Sessions {
             }
         };
         // The prompt is IN FLIGHT; the delivery lock is released.
+        let terminal_rx = terminal_rx_opt.expect("a terminal waiter was registered with the prompt");
         let result = match prompt_rx.await {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(crate::runtime::map_bus_err(e)),
@@ -1753,7 +1762,24 @@ impl Sessions {
         // never a `failed` turn (F1, docs/issues/20261003-120000).
         match result {
             Ok(_result) => {
-                let raw = self.runtime.take_terminal(&session_id);
+                // Wait for THIS turn's terminal event. The prompt RPC returned,
+                // which only means the call finished; the terminal is the `turn_end`
+                // event, delivered by the pump. Bound the wait: if the adapter is
+                // gone it will never come, and if it is alive but late we still wait
+                // (a turn ends when the harness says so, and a normal turn delivered
+                // its event on the same pipe). The prompt RPC result is NOT the
+                // terminal (F1, docs/issues/20261003-120000).
+                let raw = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    terminal_rx,
+                )
+                .await
+                {
+                    Ok(Ok(state)) => Some(state),
+                    // The sender was dropped (process replaced) or the wait elapsed:
+                    // no terminal seen. Fall through to the honest fallback.
+                    _ => None,
+                };
                 let (ended, cause) = match raw.as_deref() {
                     Some(state) => terminal_of_event_state(state),
                     None => {
@@ -1864,7 +1890,16 @@ impl Sessions {
     /// turn runs until the harness ends it.
     pub async fn settle_unconfirmed_cancels(&self) -> Result<usize, SessionError> {
         let mut n = 0;
-        for (turn_id, session_id, state) in self.db.unconfirmed_cancels()? {
+        for (turn_id, session_id, state) in self.db.cancelling_turns()? {
+            // Whether a cancel can still be confirmed is PROCESS LIVENESS, never a
+            // clock: while the adapter process is alive, its `turn_end` may still
+            // arrive (a normal cancel confirms in tens of ms), so we KEEP WAITING
+            // and touch nothing. Only when the process is GONE is the cancel
+            // genuinely unconfirmable, and the session must be repairable before
+            // reuse (docs/issues/20261004-030000).
+            if self.runtime.is_running(&session_id) {
+                continue;
+            }
             // Serialize against admission/dispatch and RE-CHECK the target: the sweep
             // saw a row in an earlier query, and the turn may have finished and a NEW
             // turn may have started. Stopping by a stale snapshot could kill the new

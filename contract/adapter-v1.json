@@ -218,7 +218,9 @@
       },
       {
         "type": "turn_end",
-        "field": "state: ok|aborted|failed"
+        "requires": ["clientMessageId"],
+        "field": "state: ok|aborted|failed",
+        "note": "clientMessageId echoes the session/prompt this event ends, so a terminal is bound to the EXACT turn, never to the session. The prompt already names its turn (session/prompt params), and the protocol's ID rule already makes clientMessageId that identity; this event must carry it back."
       },
       {
         "type": "adapter_dialog_auto_cancelled",

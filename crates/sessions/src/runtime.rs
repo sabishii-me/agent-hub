@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tokio::sync::oneshot;
 
 use agent_hub_adapter::AgentBus;
 use serde_json::{json, Value};
@@ -163,12 +164,11 @@ pub struct Sessions {
     /// the generation under the delivery lock and refuses to act if the process
     /// was replaced (stop/reopen) since (TASK-048 F4).
     generations: Mutex<std::collections::HashMap<String, u64>>,
-    /// The terminal state the ADAPTER reported for a session's last turn, taken from
-    /// the `turn_end` EVENT (`state`), NOT from the `session/prompt` RPC result. The
-    /// prompt result only means "the call returned"; the contract puts the turn's
-    /// terminal on the event (adapter-v1 `events`: `turn_end` field
-    /// `state: ok|aborted|failed`). Keyed by session id.
-    terminals: std::sync::Arc<Mutex<std::collections::HashMap<String, String>>>,
+    /// A per-TURN terminal waiter keyed by the turn's identity (`clientMessageId`).
+    /// The pump task DELIVERS the `turn_end` state to the awaiting turn, so the turn
+    /// never polls a shared cell across tasks (that read raced the write and settled
+    /// `failed`; docs/issues/20261004-040000). Keyed by turn, NEVER by session.
+    terminals: std::sync::Arc<Mutex<std::collections::HashMap<String, oneshot::Sender<String>>>>,
     /// The REVERSE-REQUEST handler (the adapter asks the hub): given
     /// `(sid, method, params)`, it returns the JSON-RPC `result` to send back (or
     /// `None` to leave a plain notification alone). The composition root wires this
@@ -413,15 +413,22 @@ impl Sessions {
                     .and_then(|t| t.as_str())
                     .map(str::to_string);
                 if data_type.as_deref() == Some("turn_end") {
-                    if let Some(state) = payload
-                        .get("data")
-                        .and_then(|d| d.get("state").or_else(|| d.get("status")))
-                        .and_then(|v| v.as_str())
-                    {
-                        pump_terminals
+                    let data = payload.get("data");
+                    let cmid = data
+                        .and_then(|d| d.get("clientMessageId"))
+                        .and_then(|v| v.as_str());
+                    if let (Some(cmid), Some(state)) = (
+                        cmid,
+                        data.and_then(|d| d.get("state").or_else(|| d.get("status")))
+                            .and_then(|v| v.as_str()),
+                    ) {
+                        if let Some(tx) = pump_terminals
                             .lock()
                             .expect("terminals")
-                            .insert(pump_sid.clone(), state.to_string());
+                            .remove(cmid)
+                        {
+                            let _ = tx.send(state.to_string());
+                        }
                     }
                 }
                 pump_events.publish(n.method, payload);
@@ -534,10 +541,17 @@ impl Sessions {
             .unwrap_or(0)
     }
 
-    /// The terminal state the adapter reported for `sid`'s last turn (from the
-    /// `turn_end` event, `state`). `None` when no terminal event was seen yet.
-    pub fn take_terminal(&self, sid: &str) -> Option<String> {
-        self.terminals.lock().expect("terminals").remove(sid)
+    /// Register interest in the terminal of the turn identified by `clientMessageId`.
+    /// The pump task fires the returned receiver when the adapter's `turn_end` for
+    /// THAT turn arrives. Register BEFORE sending the prompt so the event is never
+    /// missed, then `.await` it - no polling, no cross-task race.
+    pub fn watch_terminal(&self, client_message_id: &str) -> oneshot::Receiver<String> {
+        let (tx, rx) = oneshot::channel();
+        self.terminals
+            .lock()
+            .expect("terminals")
+            .insert(client_message_id.to_string(), tx);
+        rx
     }
 
     /// Bump the generation for `sid` (a new process starts, or a process stops).

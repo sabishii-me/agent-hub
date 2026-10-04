@@ -267,6 +267,37 @@ def child_processes(parent_pid):
     return out
 
 
+def all_descendants(root_pid):
+    """Every descendant (pid, name) under root_pid, by walking the process tree. Real
+    fault injection: reach the pi runtime node under the adapter, not just the hub's
+    direct child."""
+    ps = ("Get-CimInstance Win32_Process | "
+          "Select-Object -Property ProcessId,ParentProcessId,Name | "
+          "ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }")
+    try:
+        txt = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        return []
+    rows = []
+    for line in txt.splitlines():
+        parts = line.strip().split()
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    # walk from root
+    want = {root_pid}
+    out = []
+    changed = True
+    while changed:
+        changed = False
+        for pid, ppid, name in rows:
+            if ppid in want and pid not in want:
+                want.add(pid)
+                out.append((pid, name))
+                changed = True
+    return out
+
+
 def kill_pid(pid):
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],

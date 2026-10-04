@@ -467,7 +467,12 @@ impl crate::Db {
     /// but never confirmed by the harness. There is NO execution deadline for a
     /// `running` turn (a turn runs until the harness ends it); the core settles a
     /// `cancelling` turn on a real action (adapter-v1:387).
-    pub fn unconfirmed_cancels(&self) -> Result<Vec<(String, String, String)>, DbError> {
+    /// `(id, session_id, state)` of `cancelling` turns. NO time filter: whether a
+    /// cancel can still be confirmed is decided by PROCESS LIVENESS in the caller
+    /// (docs/issues/20261004-030000) - a normal cancel confirms in tens of ms and
+    /// must never be raced by a clock. There is no execution deadline for a
+    /// `running` turn (a turn runs until the harness ends it).
+    pub fn cancelling_turns(&self) -> Result<Vec<(String, String, String)>, DbError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT id, session_id, state FROM turns
