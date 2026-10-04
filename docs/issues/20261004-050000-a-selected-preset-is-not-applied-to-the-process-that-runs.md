@@ -63,3 +63,30 @@ extension's gating are all correct; they never run because the preset never reac
   approval; `GET /v1/sessions/{id}/approvals` lists it; allow resumes, deny blocks.
 - `tests/approvals/denying-an-approval-blocks-the-side-effect.py` -> deny prevents the write.
 - `tests/presets/a-preset-is-listed-and-applied.py` stays green (enforced, not only applied).
+
+## What is NOT the cause (verified 2026-10-04)
+
+- **The adapter is NOT stale / not a missing upgrade.** Its preset path (`writeActivePreset`,
+  `installAgentPresetsExt`, the config/set restart) is UNCHANGED since `72e5a0e` (the earliest
+  adapter commit, v0.1.3) - the same code the TS hub drove when preset worked.
+- **Driven DIRECTLY (no hub) the adapter is correct**: `session/start` -> `config/set
+  {presetId:heavy-review}` returns `applied.preset: "heavy-review"`, writes
+  `<cwd>/.pi/agent-presets.json` = `{approve:true}`, and places
+  `<cwd>/.pi/extensions/agent-presets/index.ts`.
+- **The hub's contract use matches the TS hub**: both send `session/start` -> `credentials/grant`
+  -> `config/set {config.presetId}` (TS `initAdapter` server.mjs:3589-3646; Rust
+  crates/sessions/src/runtime.rs:215-283). The hub CONFIRMS `applied.preset` == requested
+  (runtime.rs ~312) and fails the start otherwise - and here it PASSED, so the adapter reported
+  `applied.preset` honestly; the hub did its job.
+- **Isolation**: a temp project with the extension + `{"approve":true}` + pi `--mode rpc
+  --approve` reports `/review status` = "review is on" and pi emits `extension_ui_request`. So
+  the mechanism is sound when the config/env reach pi.
+
+## The single remaining unknown
+
+Everything is done by both sides, yet in the full hub run the pi that runs the turn does not
+gate - i.e. it was started WITHOUT `AGENT_PRESETS_CONFIG` in its environment, while the config
+FILE and the extension are present on disk. The difference between the working direct drive and
+the failing hub drive has NOT yet been pinned; it is a runtime fact (which env the respawned pi
+actually received), not a contract or code difference. The next step is a direct observation of
+the pi child's environment/extension load in a full hub run - NOT a code change.
