@@ -8,8 +8,8 @@ any review result as a target or precondition.
 
 | # | observed reality | test | owner |
 |---|---|---|---|
-| G-1 | a session on the `heavy-review` preset (`approve:true`, "every tool call asks") calls a tool and the tool runs with NO approval raised; the harness never sends `extension_ui_request` | tests/approvals/an-approval-preset-asks-before-every-tool.py (RED) | adapter / agent-presets extension |
-| G-2 | a denied approval cannot be exercised: no approval is raised to deny (blocked by G-1) | tests/approvals/denying-an-approval-blocks-the-side-effect.py (RED) | adapter / agent-presets extension |
+| G-1 | **a selected preset is reported APPLIED but never reaches the process that runs the turn** (`heavy-review`, `approve:true`): the tool runs with no approval; the harness never sends `extension_ui_request`. Root cause: the adapter restarts pi to carry the preset only if a live child exists at `config/set`; if the first pi is not up, the restart is skipped and `applied.preset` is still recorded. | tests/approvals/an-approval-preset-asks-before-every-tool.py (RED); docs/issues/20261004-050000 | the preset apply path (adapter owns preset; the hub start order is the inducement) |
+| G-2 | a denied approval cannot be exercised: no approval is raised to deny (blocked by G-1) | tests/approvals/denying-an-approval-blocks-the-side-effect.py (RED) | same |
 
 ## Not covered yet (no test)
 
