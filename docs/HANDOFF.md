@@ -114,6 +114,26 @@ Candidate sub-hypotheses to check with that dump (none confirmed):
   plugins. Last full run: **25/27 files pass; the 2 RED are the approval tests
   (`tests/approvals/*`) - the open problem above.**
 
+## ALSO DONE THIS RUN: jouzu upgraded 0.1.13 -> 0.1.18
+
+- `prts-harness-jouzu` `89e17d4`: manifest plugin 0.1.9 -> 0.1.10, runtime pin 0.1.13 -> 0.1.18;
+  `runtime.sources.json` re-recorded with `scripts/record-runtime.mjs --resolve --write` (131
+  sources, every non-bundled one with registry integrity). `runtime/` is gitignored; installed
+  from the record via the hub's `runtime.mjs installRuntime`. Verified: `jouzu 0.1.18`,
+  bundles pi `0.87.1`. Real `/v1`: session active, turn ended; approvals 8/8 + 2/2 + 9/9 pass
+  on the newer pi. The remaining jouzu suite failures are pre-existing (also fail at 0.1.13).
+
+## NEW OPEN ISSUES (recorded, NOT fixed)
+
+- `docs/issues/20261004-060000` — jouzu adapter gaps (fork-after-reopen crashes the adapter;
+  post-cancel turn settles failed; concurrent cancel+start). Pre-existing, NOT upgrade
+  regressions. Owner: the jouzu adapter.
+- `docs/issues/20261004-070000` — PATCH `review:true` is reported applied but the next turn can
+  run ungated (~4/20). A race: the adapter treats pi's prompt ACCEPTANCE of `/review on` as the
+  switch taking effect and reads `applied.review` from a log entry that can predate the
+  command's own append ("applied" from the log, not the live gate — same class as 050000).
+  Exposed by `tests/approvals/review-remains-switchable-after-a-preset.py`. Owner: the adapter.
+
 ## THE RULE THIS RUN MUST HOLD
 
 - When a document is silent, DO NOT invent; stop and ask for a design decision.
