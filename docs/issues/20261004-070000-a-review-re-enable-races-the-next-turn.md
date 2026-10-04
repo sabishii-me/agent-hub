@@ -58,3 +58,20 @@ the exact class of bug as 20261004-050000 (a log record mistaken for the live st
 `python tests/approvals/review-remains-switchable-after-a-preset.py` run 20x -> 0 failures
 (step 3: after `PATCH review:true`, the tool MUST raise an approval, every time). And
 `tests/approvals/*` green on pi and jouzu.
+
+## WIP fix (NOT committed — unverified)
+
+`prts-harness-pi` `stash@{0}` ("WIP 20261004-070000 reviewCommand waits for the observed
+review state (unverified: keychain down)"): `reviewCommand` now waits (bounded, 5s) until the
+newest `hub-review/state` entry actually records the requested value before reporting it, so
+`applied.review` is read from the observed state rather than the acceptance of pi's prompt.
+
+Measured effect (before the keychain became unreachable, so partial): the failure rate in a
+20x loop dropped from ~4/20 to ~2/20. It is an improvement but NOT a complete fix — the residual
+is not yet explained, which is why it is stashed, not committed. Resume: apply
+`stash@{0}`, reproduce the residual with the extension's own trace (the extension has an
+`fs` import; a probe must not break its load), then decide the real fix. Do NOT commit a fix
+whose residual is unexplained.
+
+Blocked on `docs/issues/20261004-080000` (the OS secret store is unreachable now), so the
+20x verification cannot be re-run until the store is back.
