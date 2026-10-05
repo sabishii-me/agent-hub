@@ -75,3 +75,39 @@ whose residual is unexplained.
 
 Blocked on `docs/issues/20261004-080000` (the OS secret store is unreachable now), so the
 20x verification cannot be re-run until the store is back.
+
+## UPDATE (2026-10-05): the stale-log half is FIXED; a SECOND, jouzu(pi 0.87.1)-specific defect remains
+
+Fix committed (pi `096759f`, mirrored jouzu `63d57d7`):
+
+1. `reviewCommand` counts the `hub-review/state` entries BEFORE sending `/review on` and
+   resolves only when a **NEWER** entry records the requested value (was: read the newest
+   entry right after pi accepted the prompt, which could be an earlier stale `true`).
+2. `config/set`'s `settle()` no longer overwrites `applied.review` from the log's newest entry
+   when **this** request carried `review` (that clobber re-read the log as if it were the live
+   gate). `settle()` still snapshots review when the request did not change it.
+
+Result:
+- **pi 1.0.0: fixed.** `tests/approvals/review-remains-switchable-after-a-preset.py` 9/9;
+  a 20x loop -> **0/20**; idempotent `PATCH review:true` stays `appliedReview:true`; full suite
+  32/32.
+- **jouzu (pi 0.87.1): improved, NOT fixed.** The toggle test still fails ~3/12.
+
+### The remaining jouzu defect (evidence)
+
+On a failing run the extension's own `hub-review/decision` entry records
+`{source:"user", approved:true}` - i.e. the extension DID gate, called `ctx.ui.input`, and got
+an **approval** - yet the test's `GET /v1/sessions/{id}/approvals` poll (every 50ms) saw NO
+approval to answer. So the approval was **raised and allowed without a visible /v1 decision**.
+Adapter-side trace of the failing turn: `tool_execution_start` -> `extension_ui_request:input`
+(title `tool-review/v2`) -> `entry_appended` -> `tool_execution_end`; the adapter reached its
+`APPROVAL-BRANCH structured=true` and sent `approval_need`. pi 0.87.1's `emitToolCall` DOES
+honour `{block:true}` (checked in the bundle), so the block was lost because the gate was
+handed an approved decision, not because the block was ignored.
+
+Hypothesis to test next (NOT yet proven): on pi 0.87.1 the `extension_ui_response` the
+extension receives is not the hub's `/v1` decision but something that resolves the dialog as
+approved (a turn-settle abort that yields `undefined` would DENY, so it is not that). Trace the
+exact `extension_ui_response` value the adapter writes for the failing turn, and whether the
+hub raised an approval at all for it. Do NOT claim this fixed until the toggle test is 0/20 on
+jouzu too.
