@@ -1,7 +1,7 @@
 # 20261004-030000 — an unconfirmed cancel is swept with ZERO grace, marking a healthy session `needs-repair`
 
 Recorded: 2026-10-04. Found by: the adversarial probe (tests/adversarial) - cancel a running
-turn, then IMMEDIATELY send a new turn. Owner: **HUB**. Status: recorded, NOT fixed.
+turn, then IMMEDIATELY send a new turn. Owner: **HUB**. Status: **FIXED** - the sweep is bounded by PROCESS LIVENESS, not a clock.
 
 ## Repro (real, reproducible)
 
@@ -46,3 +46,16 @@ design value, not zero; the earlier hardcoded 30s was the wrong value, not the w
 
 `tests/adversarial/...` -> cancel + immediate resend never yields `needs-repair`; the session
 is `active` and a later turn is accepted, repeatedly.
+
+## UPDATE (2026-10-05): FIXED
+
+`settle_unconfirmed_cancels` (crates/sessions/src/service.rs) now SKIPS any session whose
+adapter process is still alive (`if self.runtime.is_running(&session_id) { continue; }`): a
+live adapter's in-flight cancel may still confirm, so the sweep touches nothing. It settles
+an unconfirmed cancel ONLY when the process is GONE - then the session is genuinely
+unconfirmable and is marked needs-repair for repair-before-reuse. The zero-grace clock race
+(the sweep firing inside a normal cancel's tens-of-ms window) can no longer happen.
+
+NOTE: no CURRENT test drives this exact race (tests/adversarial is empty - it was the old Node
+probe). The fix is in the code; a dedicated test should be added (cancel then immediately a new
+turn, in a loop, asserting the session never becomes needs-repair while the process is alive).
