@@ -283,6 +283,17 @@ impl Adapters {
                 }
             }
         }
+        // PRUNE: a harness whose directory no longer exists (its plugin was removed)
+        // must not stay in the registry - a removed plugin is not usable until a
+        // restart (docs/issues/20261005-050000). Keep only what is on disk now.
+        {
+            let found_ids: std::collections::HashSet<&str> =
+                found.iter().map(|h| h.id.as_str()).collect();
+            self.harnesses
+                .lock()
+                .expect("harnesses")
+                .retain(|id, _| found_ids.contains(id.as_str()));
+        }
         found
     }
 

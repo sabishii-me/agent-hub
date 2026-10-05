@@ -54,4 +54,6 @@ the in-process update; do NOT paper over it with a hidden restart.
 
 ## Status
 
-recorded, NOT fixed. The end-to-end test is the record.
+**FIXED**. The install/remove routes now re-scan the adapters registry (and scan prunes a
+removed harness), so an installed plugin is usable immediately. The end-to-end test
+`tests/lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py` is 13/13.

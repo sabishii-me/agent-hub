@@ -256,6 +256,7 @@ async fn install(
         }
         Ok(Ok(crate::service::InstallIntent::Proceed { id, artifact_json })) => {
             let plugins = s.plugins.clone();
+            let adapters = s.adapters.clone();
             let location = format!("/v1/plugins/{id}");
             // The landing does synchronous fs + SQLite work; it MUST run on the
             // blocking pool, not on the async runtime (TASK-048 F06).
@@ -269,9 +270,16 @@ async fn install(
                     })
                     .await;
                     match outcome {
+                        Ok(Ok(())) => {
+                            // The plugin LANDED: make it USABLE now. The harness
+                            // registry is otherwise built once at boot, so a plugin
+                            // installed at runtime was invisible until a restart
+                            // (docs/issues/20261005-050000). Re-scan so the harness
+                            // (and its adapter) are registered immediately.
+                            adapters.scan();
+                        }
                         Ok(Err(e)) => tracing::error!(error = %e, "detached install failed"),
                         Err(e) => tracing::error!(error = %e, "install task panicked"),
-                        Ok(Ok(())) => {}
                     }
                 },
             )
@@ -303,6 +311,7 @@ async fn remove(
         }
         Ok(crate::service::RemoveIntent::Proceed) => {
             let plugins = s.plugins.clone();
+            let adapters = s.adapters.clone();
             let location = format!("/v1/plugins/{id}");
             let id2 = id.clone();
             Accepted::detached(
@@ -311,9 +320,14 @@ async fn remove(
                 async move {
                     let outcome = tokio::task::spawn_blocking(move || plugins.finish_remove(&id2)).await;
                     match outcome {
+                        Ok(Ok(())) => {
+                            // The plugin is GONE: drop it from the live registry
+                            // immediately (a removed harness must not stay usable
+                            // until a restart).
+                            adapters.scan();
+                        }
                         Ok(Err(e)) => tracing::error!(error = %e, "detached remove failed"),
                         Err(e) => tracing::error!(error = %e, "remove task panicked"),
-                        Ok(Ok(())) => {}
                     }
                 },
             )
