@@ -36,3 +36,15 @@ Trace WHICH file races (adapter write vs harness read) before choosing.
 ## Status
 
 recorded, NOT fixed. The test is the record; do not lower N to hide it.
+
+## UPDATE (2026-10-05): measured further, NOT root-caused
+
+- The dominant pi error at N=32 is `cannot inject provider <url>: EPE...` (an `EPERM`/`EEXIST`
+  class OS error on the injected-provider write), plus `the adapter closed its stdout`.
+- It is INTERMITTENT: a later N=32 run passed entirely; N=4 passes 3x.
+- An ATOMIC write attempt (temp + `renameSync` over `models.json`) made it WORSE on Windows
+  (rename over a file another process holds -> `EPERM`), so it was REVERTED. Recorded so the
+  next attempt does not repeat it.
+- NOT root-caused. Do NOT guess a fix; trace the exact syscall + which process holds the file
+  (the adapter's provider write vs the pi process's own config read/write) with a controlled
+  run before changing anything.
