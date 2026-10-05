@@ -151,3 +151,20 @@ concurrency-tolerant - either (a) the session-start apply waits-and-retries on a
 (bounded), or (b) apply-once is guarded so a second concurrent start does not re-enter, or
 (c) `acquireStateLock` gains a bounded wait mode for the profile case. The exact choice is an
 owner decision (it changes a shared lock's semantics). Do NOT special-case it in the hub.
+
+## UPDATE 2 (2026-10-05): half of this was MY isolation; the rest is a real jouzu behaviour
+
+After fixing the home shape (one stable home per harness; no per-session/per-injection home -
+the isolation the owner called out) and the profile-once fix (20261005-030000):
+
+- **concurrency/cross-talk: 9/9** (was 1/3). The failure was the wrong home isolation, NOT a
+  jouzu defect. RE-TRACT the cross-talk part of this issue.
+- **lifecycle fork: still 502**, now with the REAL reason (adapter log):
+  `Jouzu failed: This session branch is already owned by another attachment.`
+  jouzu allows ONE attachment per session branch; the fork starts a second process against a
+  branch the source session's process still holds, and jouzu refuses. pi does not have this
+  rule. Owner: PLUGIN (the adapter must detach/stop the source's attachment, or fork by a
+  mechanism jouzu allows, before starting the fork).
+- send-after-cancel / model-identity: fixed earlier by Cause A (turn_end clientMessageId).
+
+So the issue is now ONE located behaviour (fork vs single-attachment), not 'three gaps'.
