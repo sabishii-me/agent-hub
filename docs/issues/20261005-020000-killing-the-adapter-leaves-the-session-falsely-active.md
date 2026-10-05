@@ -69,3 +69,14 @@ updates the session's status, so the session row keeps `active` though no proces
 Reconciliation: the fix must, on pump end (child gone), settle the session honestly - the
 design's `needs-repair` (an orphaned tail; ARCHITECTURE §21 N2) or an explicit failed state -
 and it must be provable by the two asserted properties (never `active`; a turn does not hang).
+
+## DESIGN GAP (must be decided, not invented)
+
+ARCHITECTURE §21 N2 covers ONLY the restart case (at boot no process runs -> `active` becomes
+`needs-repair`). §13 (invariants) does not state that a LIVE hub must notice its adapter child
+dying and flip the session. So the required status on adapter death is NOT pinned by the design.
+Per the rule (docs first; when silent, say so - do not invent), the fix is BLOCKED on a design
+decision: when a live hub's adapter child dies, does the session go `needs-repair` immediately
+(and a turn is refused until `reopen`), or stay readable-but-refusing, or something else?
+The test asserts the two properties the file itself claims (`!= active`, no hang); the exact
+status is left to the owner.
