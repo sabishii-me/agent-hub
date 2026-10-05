@@ -1,7 +1,7 @@
 # 20261003-140000 — cancel on a session with no turns returns 400, contract says idempotent 200
 
 Recorded: 2026-10-03. Found by: `tests/interrupt/cancel-is-idempotent-and-bounded.py`.
-Owner: **HUB**. Status: recorded, NOT fixed.
+Owner: **HUB**. Status: FIXED (verified: POST cancel on an idle active session -> 200, idempotent).
 
 ## Repro (real)
 

@@ -2,7 +2,7 @@
 
 Recorded: 2026-10-03. Found by:
 `tests/lifecycle/a-session-closes-reopens-and-forks-without-touching-its-source.py`.
-Owner: **HUB**. Status: recorded, NOT fixed.
+Owner: **HUB**. Status: FIXED (routes.rs fork accepts an absent body via Option<Json<ForkRequest>> + unwrap_or_default()).
 
 ## Repro (real)
 

@@ -2,7 +2,7 @@
 
 Recorded: 2026-10-04. Found by `tests/approvals/review-remains-switchable-after-a-preset.py`
 (~4/20 standalone). Owner: **PLUGIN** (`prts-harness-pi`; the same code is in
-`prts-harness-jouzu`). Status: recorded, NOT fixed.
+`prts-harness-jouzu`). Status: FIXED on pi (verified 3x: review-toggle 9/9, was ~20% fail). The jouzu residual is open (see 20261004-060000).
 
 ## Symptom
 

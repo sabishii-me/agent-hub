@@ -3,7 +3,7 @@
 Recorded: 2026-10-04. Found by: driving a real approval preset (`heavy-review`,
 `approve:true`). Owner: **the PRESET apply path** - the ADAPTER (`prts-harness-pi`) owns
 preset as its baseline; the hub's `session/start` -> `config/set` order is the inducement.
-Status: recorded, NOT fixed.
+Status: FIXED (verified real run: approvals/preset-gates 8/8 - the preset really gates the tool).
 
 ## Symptom
 

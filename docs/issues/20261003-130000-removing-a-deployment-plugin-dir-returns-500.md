@@ -1,7 +1,7 @@
 # 20261003-130000 — removing a deployment plugin dir returns 500, contract says 409
 
 Recorded: 2026-10-03. Found by:
-`tests/plugins/a-plugin-is-installed-listed-enabled-and-removed.py`. Owner: **HUB**. Status:
+`tests/plugins/a-plugin-is-installed-listed-enabled-and-removed.py`. Owner: **HUB**. Status: FIXED (crates/plugins maps the deployment-dir refusal to 409 conflict, not 500).
 recorded, NOT fixed.
 
 ## Repro (real)

@@ -1,7 +1,7 @@
 # 20261003-160000 — a turn refused while one runs is 400 `validation_failed`, contract says 409 `session_busy`
 
 Recorded: 2026-10-03. Found by: `tests/concurrency/a-second-turn-while-one-runs-is-refused.py`
-(C3). Owner: **HUB**. Status: recorded, NOT fixed.
+(C3). Owner: **HUB**. Status: FIXED (SessionError::Busy -> 409 session_busy).
 
 ## Repro (real)
 
