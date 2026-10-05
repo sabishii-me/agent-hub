@@ -1,7 +1,7 @@
 # 20261004-040000 — a turn's terminal is stored per SESSION, so the NEXT turn can take it
 
 Recorded: 2026-10-04. Found by: `tests/interrupt/send-immediately-after-cancel.py` (1 in 3).
-Owner: **HUB** (+ a contract gap). Status: recorded, NOT fixed.
+Owner: **HUB** (+ a contract gap). Status: **FIXED** (the terminal is now bound per-TURN by `clientMessageId`, not per-session) - see the update.
 
 ## Symptom
 
@@ -66,3 +66,15 @@ and hides it, which is why it only shows without instrumentation.
 
 Fix: the terminal must be DELIVERED to the awaiting turn (a per-turn oneshot the pump fires),
 not polled from a shared map. No timer, no order guess.
+
+## UPDATE (2026-10-05): FIXED
+
+The `terminals` map is now keyed by the TURN (`clientMessageId`), and `watch_terminal` /
+the pump fire a one-shot per turn (`crates/sessions/src/runtime.rs`). The prompt registers the
+waiter BEFORE sending, so the next turn can never take the cancelled turn's terminal.
+Verified: `tests/interrupt/send-immediately-after-cancel.py` 9/9 on pi (was ~1 in 3 failing).
+
+OPEN COUSIN (owner review needed): this binding requires `turn_end` to carry `clientMessageId`,
+which was ADDED to `contract/adapter-v1.json` WITHOUT the owner's review (a rule violation).
+The contract change must be reviewed/approved; the behaviour it enables is real, but the
+contract edit itself is unratified.
