@@ -35,16 +35,17 @@ class Hub:
         self.dir = data_dir or tempfile.mkdtemp(prefix="hub-test-")
         self.plugins = os.path.join(self.dir, "plugins")
         os.makedirs(self.plugins, exist_ok=True)
-        if plugins_src:
-            # Copy the REAL plugin directory in (never a stub). The hub scans for a
-            # manifest.json, and the harness id is the manifest's id, so name the dir
-            # by that id (a dir named otherwise would not be found).
-            for name in (plugins_src if isinstance(plugins_src, (list, tuple)) else [plugins_src]):
-                pid = self._plugin_id(name)
-                dst = os.path.join(self.plugins, pid)
-                if os.path.exists(dst):
-                    shutil.rmtree(dst)
-                shutil.copytree(name, dst)
+        # NO backdoor: a plugin source is NOT copied into the plugins root. It is
+        # INSTALLED through the real /v1 surface after start() (see install_plugins),
+        # so every test that uses a plugin proves the INSTALL path. Copying the dir in
+        # would make the hub's own plugins root pre-populated and test nothing.
+        if plugins_src is None:
+            self._plugin_sources = []
+        elif isinstance(plugins_src, (list, tuple)):
+            self._plugin_sources = list(plugins_src)
+        else:
+            self._plugin_sources = [plugins_src]
+        self._installed = set()
         self.extra_env = env or {}
         self.child = None
         self.ep = None
@@ -77,7 +78,35 @@ class Hub:
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
+        self.install_plugins()
         return self
+
+    def install_plugins(self):
+        """Install every plugin source THROUGH /v1 (POST /v1/plugins), then wait for
+        `ready`. This is the ONLY way a plugin lands in this hub's plugins root - there
+        is no copy-the-dir shortcut. A source is a git url/path + ref."""
+        for src in self._plugin_sources:
+            ref = os.environ.get("PI_PLUGIN_REF", "fix/runtime-placement")
+            pid = self._plugin_id(src)
+            if pid in self._installed:
+                continue
+            r = self.post("/v1/plugins", {"source": {"url": src, "ref": ref}}, key="install-" + pid)
+            if r["text"] is None or (isinstance(r.get("json"), dict) and r["json"].get("error")):
+                raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
+            # The install is a LONG command: the plugin resource may 404 for a moment
+            # after the 202 (the detached install has not landed yet). 404 means "not
+            # yet", NOT failure - keep waiting for `ready`; only `failed` aborts.
+            for _ in range(960):
+                g = self.get(f"/v1/plugins/{pid}")
+                st = None if g["status"] == 404 else (g["json"] or {}).get("plugin", {}).get("state")
+                if st == "ready":
+                    self._installed.add(pid)
+                    break
+                if st == "failed":
+                    raise RuntimeError(f"install {pid} FAILED: {g['text'][:200]}")
+                time.sleep(0.25)
+            else:
+                raise RuntimeError(f"install {pid} timed out waiting for ready: {self.get(f'/v1/plugins/{pid}')['text'][:200]}")
 
     def _await_endpoint(self, timeout=30.0):
         epfile = os.path.join(self.dir, "endpoint.json")

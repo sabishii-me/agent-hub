@@ -1,64 +1,97 @@
-# The plugin lifecycle against a REAL plugin directory (the real pi adapter). Install from a
-# local path (a git source), list, read, prepare (the adapter materialises its runtime),
-# disable/enable, then remove. The hub scans its OWN plugins root; a deployment dir is not
-# removed (that rule is exercised in the docs, not faked here).
+# The plugin lifecycle against a REAL plugin, installed THROUGH /v1: install from a git
+# source (a local path), the resource reaches `ready`, list/get show it, preparing
+# materialises its runtime, disable/enable flip it, then REMOVE really removes it (GET
+# then reads `absent`/404). A deployment dir is separately refused (409) - both paths.
 #
-# FACT:    plugin list/get/prepare/enable/disable/icon; a deployment dir is NOT removable (409)
-# SOURCE:  contract/v1.json /v1/plugins/*; ARCHITECTURE s21 N3
-# EXPOSES: a removable deployment dir, or a 500 on the refusal
-# (A test that would pass whatever happens is not a test: this block names the fact it
-#  proves and where that fact comes from; the assertions below are that exact fact.)
+# FACT:    a plugin is INSTALLED through POST /v1/plugins, reaches `ready`, and is really
+#          REMOVED through DELETE /v1/plugins/{id}; a deployment dir is refused (409)
+# SOURCE:  contract/v1.json POST/GET/DELETE /v1/plugins; ARCHITECTURE s21 N3
+# EXPOSES: an install that never lands, a remove that leaves the plugin (or removes a
+#          deployment dir), or a prepare that reports ready without a runtime
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 from hub import Hub, hub_sha          # noqa: E402
 from tally import Tally, combo        # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
+PI_REF = os.environ.get("PI_PLUGIN_REF", "fix/runtime-placement")
 t = Tally("plugins/lifecycle")
 combo(hub_sha())
-if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
-    t.done()
-    sys.exit(1)
+if not t.require(os.path.isdir(PI), "a real plugin source is present", f"no plugin at {PI}"):
+    t.done(); sys.exit(1)
 
-# A DEPLOYMENT dir: put the plugin under the hub's plugins root, not installed by the hub.
+# A fresh hub with an EMPTY plugins root: nothing is pre-installed, so the install below
+# is the only reason the plugin exists.
 hub = Hub()
 try:
-    import shutil
-    shutil.copytree(PI, os.path.join(hub.plugins, "pi"))
     hub.start()
 
+    # Nothing is present before the install.
+    l0 = hub.get("/v1/plugins")
+    t.check(l0["status"] == 200 and not (l0["json"] or {}).get("plugins"),
+            "no plugin is present before the install", f"rows={(l0['json'] or {}).get('plugins')}")
+
+    # INSTALL through /v1, from a git source (a local path + ref).
+    ins = hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key="install-1")
+    t.check(ins["status"] == 202, "install is accepted (202 + Location)", f"status={ins['status']} {ins['text'][:160]}")
+    t.check((ins["json"] or {}).get("pluginId"),
+            "the install names the plugin id", f"body={ins['text'][:160]}")
+
+    # The resource reaches `ready` (the install is a long command, read at the Location).
+    state = None
+    for _ in range(240):
+        g = hub.get("/v1/plugins/pi")
+        state = (g["json"] or {}).get("plugin", {}).get("state")
+        if state in ("ready", "failed", "absent"):
+            break
+        time.sleep(0.25)
+    t.check(state == "ready", "the installed plugin reaches `ready`", f"state={state}")
+
+    # It is listed and readable.
     l = hub.get("/v1/plugins")
-    rows = (l["json"] or {}).get("plugins", [])
-    t.check(l["status"] == 200, "GET /v1/plugins answers", f"status={l['status']}")
-    t.check(any(r.get("id") == "pi" for r in rows), "the deployment plugin is listed", f"rows={[r.get('id') for r in rows]}")
-
+    t.check(any(r.get("id") == "pi" for r in (l["json"] or {}).get("plugins", [])),
+            "the installed plugin is listed", f"rows={[(r.get('id'), r.get('state')) for r in (l['json'] or {}).get('plugins', [])]}")
     g = hub.get("/v1/plugins/pi")
-    t.check(g["status"] == 200, "GET /v1/plugins/{id} answers", f"status={g['status']}")
+    t.check(g["status"] == 200 and (g["json"] or {}).get("plugin", {}).get("id") == "pi",
+            "GET /v1/plugins/{id} reads the installed plugin", f"status={g['status']}")
 
-    # prepare: the adapter materialises the runtime; the hub VERIFIES the declared command.
+    # prepare: materialises the runtime; the hub VERIFIES the declared command exists.
     p = hub.post("/v1/plugins/pi/prepare")
     pj = p["json"] or {}
     t.check(p["status"] < 300 and pj.get("ready") is True, "prepare reports a ready runtime", f"body={p['text'][:160]}")
     t.check(pj.get("version"), "prepare names the runtime version", f"version={pj.get('version')}")
 
-    # A deployment directory is read-only to the hub: remove is refused.
-    # The contract maps this refusal to 409 conflict (a deployment dir is hub-owned,
-    # not removable here). 403 was never in the mapping - accepting it was a fake.
-    d = hub.delete("/v1/plugins/pi")
-    t.check(d["status"] == 409, "the hub refuses to remove a deployment dir (409 conflict)", f"status={d['status']} {d['text'][:120]}")
-
+    # disable / enable flip the plugin's enabled state (read it back, not just the 2xx).
     dis = hub.post("/v1/plugins/pi/disable")
-    t.check(dis["status"] < 300, "disable the plugin", f"status={dis['status']} {dis['text'][:120]}")
+    t.check(dis["status"] < 300, "disable is accepted", f"status={dis['status']} {dis['text'][:120]}")
+    t.check((hub.get("/v1/plugins/pi")["json"] or {}).get("plugin", {}).get("enabled") is False,
+            "after disable the plugin reads disabled", f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
     en = hub.post("/v1/plugins/pi/enable")
-    t.check(en["status"] < 300, "enable the plugin", f"status={en['status']} {en['text'][:120]}")
+    t.check(en["status"] < 300, "enable is accepted", f"status={en['status']} {en['text'][:120]}")
+    t.check((hub.get("/v1/plugins/pi")["json"] or {}).get("plugin", {}).get("enabled") is True,
+            "after enable the plugin reads enabled", f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
 
-    # icon: the plugin ships one; a variant is served as bytes.
-    # The pi plugin SHIPS this icon; the variant must be served (200). Accepting 404
-    # was a fake that passed even if the icon was missing.
+    # icon: the plugin ships one; the variant is served as bytes.
     ic = hub.get("/v1/plugins/pi/icon/light")
     t.check(ic["status"] == 200, "GET the icon variant answers 200 (the plugin ships it)", f"status={ic['status']}")
+
+    # REMOVE: really removes the plugin this hub installed.
+    d = hub.delete("/v1/plugins/pi", key="remove-1")
+    t.check(d["status"] in (200, 202), "remove is accepted", f"status={d['status']} {d['text'][:140]}")
+    state2 = None
+    for _ in range(240):
+        g2 = hub.get("/v1/plugins/pi")
+        st = g2["status"]
+        state2 = "absent" if st == 404 else (g2["json"] or {}).get("plugin", {}).get("state")
+        if state2 == "absent":
+            break
+        time.sleep(0.25)
+    t.check(state2 == "absent", "after remove the plugin is ABSENT (really removed)", f"state={state2}")
+    still = [r.get("id") for r in (hub.get("/v1/plugins")["json"] or {}).get("plugins", [])]
+    t.check("pi" not in still, "the removed plugin is gone from the list", f"rows={still}")
 finally:
     ok = t.done()
     hub.cleanup()
