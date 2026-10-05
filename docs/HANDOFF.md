@@ -157,30 +157,23 @@ raised. So the failing approval_need is answered on a path that does not run the
 handler (stale waiter / wrong session runtime) - same family as 20261004-040000. See the
 issue's UPDATE 2. NOT root-caused; the pi-1.0 path is unaffected.
 
-## NEXT SESSION STARTS HERE: the extension delivery is the WRONG SHAPE (20261005-010000)
+## EXTENSION DELIVERY: pi FIXED; jouzu OWED (20261005-010000)
 
-The owner: the EXTENSION was REDESIGNED and must NOT go into the workspace. CONFIRMED by the design:
-- `crates/extensions/src/lib.rs`: the hub writes a harness's selected extensions into its DATA DIR
-  and the adapter places them with DISCOVERY OFF.
-- `docs/ARCHITECTURE.md:136`/`:273`: placement = hub-owned path, discovery off.
-- `contract/adapter-v1.json` (skills, "exactly like extensions"): the hub installs into
-  `<DATA_DIR>/agents/<harness>/...`, hands the path over as `AGENT_HUB_INSTALLED_*_DIR`, and the
-  adapter only POINTS the harness at it - pi/jouzu with `--no-skills --skill <dir>` so the user's
-  own dirs stay out.
+The owner: the EXTENSION was REDESIGNED and must NOT go into the workspace. The design
+(`crates/extensions`; ARCHITECTURE 136/273; contract/adapter-v1 "exactly like extensions" for
+skills): hub-owned path + DISCOVERY OFF. The adapter points the harness at the hub dir.
 
-WHAT PI DOES NOW (wrong): `pi-adapter.cjs` copies the snapshot into the USER WORKSPACE
-(`<cwd>/.pi/extensions`) and spawns pi with `--approve` (workspace discovery). The SAME adapter
-already does SKILLS correctly (`--no-skills --skill <AGENT_HUB_INSTALLED_SKILLS_DIR>`).
+pi DONE (adapter `7b84cb0`, 0.1.10): spawns `pi --no-extensions --extension
+<AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>`; the agent-presets config is written into the
+hub-owned harness dir; `--approve` + the workspace copy are gone. Real: presets 2/2, approvals
+8/8+2/2+9/9, full suite 32/32; a real run writes `agents/pi/agent-presets.json` and creates NO
+workspace `.pi`. The gate never needed the workspace shape.
 
-FIX (adapter-owned, confirm scope first): spawn pi with `--no-extensions --extension
-<AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>` for each selected extension (the snapshot is
-complete/immutable); stop writing extensions + `agent-presets.json` + the plan extension into the
-workspace; read from `AGENT_HUB_INSTALLED_EXTENSIONS_DIR` / `AGENT_HUB_PRESETS_DIR`. Then re-run
-`tests/approvals/*` and `tests/presets/*` on pi and jouzu - the preset/review gate rides this
-delivery, so 050000/070000 may change once the delivery is right.
+jouzu OWED: `jouzu-adapter.cjs` has the same wrong shape BUT jouzu is a FORK (its own file, its
+own spawn `... 'pi', '--mode', ...`). Do NOT mirror the pi diff - change it on its own code and
+verify on jouzu's own suite (`PI_PLUGIN_DIR=.../prts-harness-jouzu PI_HARNESS_ID=jouzu`).
 
-Issue: `docs/issues/20261005-010000-*`. The pi-1.0 half of 070000 is fixed; the jouzu residual is
-the approval answered allowed-without-a-raise (see the issue).
+Reassess (pi half) 050000/070000 now that the `--approve` discovery path is gone.
 
 ## THE RULE THIS RUN MUST HOLD
 
@@ -203,14 +196,15 @@ the approval answered allowed-without-a-raise (see the issue).
 
 ## NEXT ACTION
 
-1. Confirm scope with the owner, then FIX THE EXTENSION DELIVERY (20261005-010000): pi
-   `--no-extensions --extension <AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>`, no workspace copy,
-   no `--approve` reliance. Mirror to jouzu. Then re-run approvals/presets on pi and jouzu and
-   re-assess 050000/070000 - the gate rides this delivery.
-2. Re-trace 20261004-060000 (unlocated jouzu failures - do not leave them worded as a plugin
-   defect until located).
-3. Then resume §17 via `docs/tasks/alignment-code-vs-goal.md` (the next OPEN/unproven
+1. jouzu extension delivery (20261005-010000): change `jouzu-adapter.cjs` ON ITS OWN CODE
+   (it is a fork; do NOT mirror the pi diff), then verify on jouzu's own suite. Reassess the
+   jouzu half of 070000 in the new shape.
+2. Reassess the pi half of 050000/070000 now that `--approve` discovery is gone (pi 32/32 is
+   green, but confirm the gate still holds under the explicit-`-e` delivery across repeats).
+3. Re-trace 20261004-060000 (unlocated jouzu failures - not worded as a plugin defect until
+   located).
+4. Then resume section 17 via `docs/tasks/alignment-code-vs-goal.md` (the next OPEN/unproven
    capability). Suite is 32/32 and no longer pollutes the host.
 
 Keep the rules above (control before cause; no SKIP; never experiment on the owner's system;
-unlocated is unlocated).
+unlocated is unlocated; do NOT mirror pi<->jouzu).

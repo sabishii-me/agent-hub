@@ -2,8 +2,8 @@
 
 Recorded: 2026-10-05. Found by: reading the design after the owner's correction ("the extension
 is not meant to go into the workspace; it was redesigned"). Owner: **PLUGIN**
-(`prts-harness-pi`; the same shape is in `prts-harness-jouzu`). Status: recorded, NOT fixed
-(an adapter change; scope confirmed with the owner first).
+(`prts-harness-pi`; the same shape is in `prts-harness-jouzu`). Status: **RESOLVED on pi** (adapter `7b84cb0`, 0.1.9 -> 0.1.10). jouzu is a separate,
+independent change (NOT a mirror - jouzu is a fork with its own `jouzu-adapter.cjs`).
 
 ## The design (what the shape must be)
 
@@ -61,3 +61,25 @@ The preset/review gate has been driven entirely through this workspace+`--approv
 delivery is wrong, the gate's fragility (the stale `hub-review/state`, the review race, the
 jouzu approval binding) may be symptoms of the wrong delivery shape, not only of the log/state
 handling. Fix the delivery shape FIRST, then re-assess the gate defects.
+
+## RESOLUTION (pi, 2026-10-05)
+
+`pi-adapter.cjs` now spawns pi with **`--no-extensions --extension <AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>`**
+for each selected extension (the same shape the skills path already used), and writes
+`agent-presets.json` into the **hub-owned harness dir** (`AGENT_HUB_HARNESS_DIR`) instead of
+`<cwd>/.pi`. `--approve` is gone; the copy-into-workspace (`copyTree`/`placeExtension`) is gone;
+the mid-session install*() calls are gone (the extension is loaded at spawn, so a preset restart
+re-adds `-e` and plan/review drive the loaded extension).
+
+Evidence (real, pi runtime 1.0.0):
+- presets 2/2, approvals 8/8 + 2/2 + 9/9, full suite **32/32** - the SAME real gate now passes
+  with discovery OFF and no workspace placement.
+- a real run writes `agent-presets.json` under `<DATA_DIR>/agents/pi/agent-presets.json` and
+  creates NO `.pi` in any workspace (walked the whole hub data dir).
+
+So the gate never needed the workspace+`--approve` shape; the correct delivery carries it too.
+Consequence to reassess: this removes the `--approve` discovery path 050000/070000 rode on -
+re-check those (pi half) in this shape.
+JOUZU: the same WRONG shape exists in `jouzu-adapter.cjs`, but jouzu is a FORK (its own file, its
+own spawn: `... 'pi', '--mode', ...`), so its fix is a separate change to verify on jouzu's own
+suite - NOT a mirror of this diff.

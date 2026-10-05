@@ -5,7 +5,7 @@ REAL, usable `/v1` capabilities against the REAL adapters. §17 is the order of 
 states, capability by capability, what the CURRENT CODE does, with the REAL test result as the
 context (no document or review is treated as a target here).
 
-Version combo of the evidence: hub `f816076`, pi plugin (branch fix/runtime-placement) `7a23419`,
+Version combo of the evidence: hub `f729a56`, pi plugin (branch fix/runtime-placement) `7b84cb0` (0.1.10),
 pi runtime `@earendil-works/pi-coding-agent@1.0.0`, provider HOME-JP-prod, Windows.
 Also verified against jouzu plugin `89e17d4` (runtime jouzu 0.1.18 / pi 0.87.1).
 

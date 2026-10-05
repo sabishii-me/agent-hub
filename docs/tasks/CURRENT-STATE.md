@@ -31,16 +31,14 @@ routes, or mock-driven "verification". §17 of `docs/ARCHITECTURE.md` is the ord
 (approvals/preset-gates 8/8, deny-blocks 2/2, review-toggle 9/9). Full suite `python
 tests/run.py` = **32/32** (the layer list now covers plugins/harnesses/presets).
 - **dsh**: BLOCKED (upstream runtime cannot boot here). docs/tasks/dsh-blocked.md.
-- **HEADLINE FINDING (2026-10-05), docs/issues/20261005-010000**: the pi adapter delivers
-EXTENSIONS the WRONG way - it copies the hub's snapshot into the USER WORKSPACE
-(`<cwd>/.pi/extensions`) and spawns pi with `--approve`, so pi loads them by workspace
-discovery. The design (`crates/extensions` doc; ARCHITECTURE 136/273; contract/adapter-v1
-'exactly like extensions' for skills) is: hub-owned path + DISCOVERY OFF - the adapter
-points the harness at the hub dir, i.e. pi `--no-extensions --extension <dir>`. The SAME
-adapter already does this correctly for SKILLS (`--no-skills --skill <dir>`); extensions are
-the deviation. The whole preset/review gate currently rides the wrong (workspace+--approve)
-shape. NOT fixed - the change is an adapter redesign; scope was to be confirmed with the
-owner. CHECK IT FIRST next session.
+- **EXTENSION DELIVERY FIXED on pi (20261005-010000)**: the pi adapter delivered extensions
+  the wrong way (copy into the user workspace + `--approve`). Now it loads them from the
+  hub-owned snapshot with discovery off: pi `--no-extensions --extension
+  <AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>`, and the preset config lives in the hub-owned
+  harness dir. Nothing is written into the user's project. pi adapter `7b84cb0` (0.1.10).
+  Real: presets 2/2, approvals 8/8+2/2+9/9, full suite 32/32; the gate no longer needs the
+  workspace. **jouzu still has the wrong shape** (a separate fork, NOT a mirror) - its fix is
+  owed and must be verified on jouzu's own suite.
 
 ## Open defects (recorded, NOT fixed)
 
