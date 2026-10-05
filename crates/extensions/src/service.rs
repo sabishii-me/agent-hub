@@ -102,38 +102,48 @@ pub fn install_for_harness(
     // missing set. There is no shared mutable name to swap, hence no window
     // (TASK-048 S5). Older snapshots are swept by COUNT: keep the newest few so a
     // still-running adapter's snapshot is not deleted under it, drop the rest.
-    sweep_old_snapshots(&snapshots, &snapshot, KEEP_SNAPSHOTS);
+    sweep_old_snapshots(&snapshots, &snapshot);
 
     Ok(snapshot)
 }
 
-/// How many recent snapshots to keep (a running adapter reads its own; the newest
-/// few cover overlapping starts). Sweeping is best-effort and never removes the
-/// just-published snapshot.
-const KEEP_SNAPSHOTS: usize = 8;
+/// A snapshot older than this is swept. A live session reads its snapshot shortly
+/// after start; nothing holds one for an hour. The point of an AGE bound (not a
+/// COUNT) is that a count can never cover an unbounded number of concurrent
+/// starts: with `keep = 8`, the 9th concurrent start deleted the 1st session's
+/// snapshot before its harness had loaded it (docs/issues/20261005-040000). An age
+/// bound deletes only what no live session can still be using.
+const SNAPSHOT_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
-/// Sweep old extension snapshots, keeping the newest `keep`. A failure to sweep is
-/// a leak, not a correctness failure.
-fn sweep_old_snapshots(dir: &Path, keep: &Path, keep_count: usize) {
-    let mut snaps: Vec<std::path::PathBuf> = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.file_name().map(|n| n.to_string_lossy().starts_with(".snap-")).unwrap_or(false))
-            .collect(),
+/// Sweep extension snapshots older than `SNAPSHOT_MAX_AGE`, never the just-published
+/// one. A failure to sweep is a leak, not a correctness failure.
+fn sweep_old_snapshots(dir: &Path, keep: &Path) {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(SNAPSHOT_MAX_AGE)
+        .unwrap_or(std::time::UNIX_EPOCH);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
         Err(_) => return,
     };
-    // Newest first by the millis prefix in the name.
-    snaps.sort();
-    snaps.reverse();
-    for (i, p) in snaps.iter().enumerate() {
+    for entry in entries.flatten() {
+        let p = entry.path();
         if p == keep {
             continue;
         }
-        if i < keep_count {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if !name.starts_with(".snap-") {
             continue;
         }
-        let _ = std::fs::remove_dir_all(p);
+        // Age by mtime: robust to any name format, and the snapshot dir is written
+        // once and never touched again.
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|mtime| mtime < cutoff)
+            .unwrap_or(false);
+        if old {
+            let _ = std::fs::remove_dir_all(p);
+        }
     }
 }
 
