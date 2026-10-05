@@ -157,14 +157,30 @@ raised. So the failing approval_need is answered on a path that does not run the
 handler (stale waiter / wrong session runtime) - same family as 20261004-040000. See the
 issue's UPDATE 2. NOT root-caused; the pi-1.0 path is unaffected.
 
-## OPEN DIRECTION QUESTION raised by the owner (READ THE DESIGN/ADR FIRST)
+## NEXT SESSION STARTS HERE: the extension delivery is the WRONG SHAPE (20261005-010000)
 
-The owner says the EXTENSION HAS BEEN REDESIGNED and asks whether we are still using the
-WORKSPACE + `--approve` approach. If so, it is WRONG: the task's point is that the extension
-is NOT to be placed into the workspace. CHECK `docs/ARCHITECTURE.md` and the ADRs (in the
-desktop/web repo `docs/decisions/`) for how the extension is meant to be delivered, BEFORE
-any more adapter work. The current pi adapter still does `installAgentPresetsExt(cwd)` into
-`<cwd>/.pi/extensions` and spawns pi with `--approve`; that may be the entire wrong shape.
+The owner: the EXTENSION was REDESIGNED and must NOT go into the workspace. CONFIRMED by the design:
+- `crates/extensions/src/lib.rs`: the hub writes a harness's selected extensions into its DATA DIR
+  and the adapter places them with DISCOVERY OFF.
+- `docs/ARCHITECTURE.md:136`/`:273`: placement = hub-owned path, discovery off.
+- `contract/adapter-v1.json` (skills, "exactly like extensions"): the hub installs into
+  `<DATA_DIR>/agents/<harness>/...`, hands the path over as `AGENT_HUB_INSTALLED_*_DIR`, and the
+  adapter only POINTS the harness at it - pi/jouzu with `--no-skills --skill <dir>` so the user's
+  own dirs stay out.
+
+WHAT PI DOES NOW (wrong): `pi-adapter.cjs` copies the snapshot into the USER WORKSPACE
+(`<cwd>/.pi/extensions`) and spawns pi with `--approve` (workspace discovery). The SAME adapter
+already does SKILLS correctly (`--no-skills --skill <AGENT_HUB_INSTALLED_SKILLS_DIR>`).
+
+FIX (adapter-owned, confirm scope first): spawn pi with `--no-extensions --extension
+<AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>` for each selected extension (the snapshot is
+complete/immutable); stop writing extensions + `agent-presets.json` + the plan extension into the
+workspace; read from `AGENT_HUB_INSTALLED_EXTENSIONS_DIR` / `AGENT_HUB_PRESETS_DIR`. Then re-run
+`tests/approvals/*` and `tests/presets/*` on pi and jouzu - the preset/review gate rides this
+delivery, so 050000/070000 may change once the delivery is right.
+
+Issue: `docs/issues/20261005-010000-*`. The pi-1.0 half of 070000 is fixed; the jouzu residual is
+the approval answered allowed-without-a-raise (see the issue).
 
 ## THE RULE THIS RUN MUST HOLD
 
@@ -187,7 +203,14 @@ any more adapter work. The current pi adapter still does `installAgentPresetsExt
 
 ## NEXT ACTION
 
-The store/leak problem is closed; the suite is green (28/28) and no longer pollutes the host.
-Return to the task: §17 in `docs/ARCHITECTURE.md`, driven by `docs/tasks/alignment-code-vs-goal.md`
-(the next capability that is OPEN/unproven). Also owed: re-trace 060000 (do not leave unlocated
-failures worded as a plugin defect). Keep the rules below.
+1. Confirm scope with the owner, then FIX THE EXTENSION DELIVERY (20261005-010000): pi
+   `--no-extensions --extension <AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>`, no workspace copy,
+   no `--approve` reliance. Mirror to jouzu. Then re-run approvals/presets on pi and jouzu and
+   re-assess 050000/070000 - the gate rides this delivery.
+2. Re-trace 20261004-060000 (unlocated jouzu failures - do not leave them worded as a plugin
+   defect until located).
+3. Then resume §17 via `docs/tasks/alignment-code-vs-goal.md` (the next OPEN/unproven
+   capability). Suite is 32/32 and no longer pollutes the host.
+
+Keep the rules above (control before cause; no SKIP; never experiment on the owner's system;
+unlocated is unlocated).
