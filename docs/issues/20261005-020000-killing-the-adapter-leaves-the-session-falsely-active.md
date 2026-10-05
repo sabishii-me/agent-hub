@@ -55,3 +55,17 @@ happen. Fix direction: the hub must not keep `active` when the process behind it
 the turn must be refused or settle (it does settle `failed`, so that half is fine). The specific
 status when a live hub loses its adapter child is NOT contract-dictated -> assert the RE
 QUIRED property (`!= active`, no hang), not an invented exact value.
+
+## Code under test (snapshot)
+
+`docs/review/snapshots/20261005-020000-c8a3f36.txt` (hub @ `c8a3f36`, pi adapter @ `7b84cb0`).
+
+The site: `crates/sessions/src/runtime.rs`, the per-session notification pump task
+(`tokio::spawn(async move { while let Some(n) = notifications.recv().await { ... } })`). When the
+adapter child's stdout closes, `notifications` ends and the loop EXITS; on that path nothing
+updates the session's status, so the session row keeps `active` though no process serves it.
+`is_running(sid)` still holds a handle in the `running` map, so callers also still believe it.
+
+Reconciliation: the fix must, on pump end (child gone), settle the session honestly - the
+design's `needs-repair` (an orphaned tail; ARCHITECTURE §21 N2) or an explicit failed state -
+and it must be provable by the two asserted properties (never `active`; a turn does not hang).

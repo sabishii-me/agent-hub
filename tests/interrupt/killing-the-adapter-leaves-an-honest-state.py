@@ -36,11 +36,13 @@ try:
     # The hub is still up (only the adapter died).
     t.check(hub.child.poll() is None, "the HUB survives the adapter death")
 
-    # The hub must be honest: either the session reports a non-active state, OR a turn now
-    # fails fast rather than hanging. Read the session and (if providerless) send a turn.
+    # The hub must be honest: it must NOT keep reporting `active` for a session whose adapter
+    # process is gone (the docstring's claim). This is the SPECIFIC property; `is not None`
+    # accepted `active` and hid a real defect (docs/issues/20261005-020000).
     g = hub.get(f"/v1/sessions/{sid}")
     st = (g["json"] or {}).get("session", {}).get("status")
-    t.check(st is not None, "the hub still answers about the session", f"status={st}")
+    t.check(st != "active", "the session no longer claims `active` after its adapter died",
+            f"status={st} (a processless session reporting `active` is the defect)")
 
     # A providerless turn without a live adapter must NOT hang: it settles.
     tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "hi"}], "idempotencyKey": "ka-t1"}, key="ka-t1")
@@ -54,7 +56,12 @@ try:
                 settled = row.get("ended")
                 break
             time.sleep(0.25)
+        # A turn must not HANG: it must reach a terminal. Any terminal value is honest here
+        # (the contract does not fix which); the property is "it settled, not `running` forever".
         t.check(settled is not None, "a turn after the adapter died settles (does not hang)", f"ended={settled}")
+        t.check(settled != "completed",
+                "a turn whose adapter is dead is NOT reported as a clean `completed`",
+                f"ended={settled} (a dead adapter cannot have completed a turn cleanly)")
     else:
         # Refused before admit is also honest (the session is not usable).
         t.check(tr["status"] in (409, 422, 503), "a turn after the adapter died is refused honestly", f"status={tr['status']} {tr['text'][:120]}")
