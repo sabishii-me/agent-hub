@@ -132,3 +132,26 @@ and bounded), but it is NOT proven to fix error 8, and must not be reported as a
 Next: reproduce error 8 with a KNOWN-CORRECT program (the keyring CLI's `new_with_target`
 path, or a `CREDENTIALW` built exactly as keyring builds it), controlling the before/after
 state, before drawing any conclusion.
+
+## RESOLVED (2026-10-04) — the store was never broken: the TEST SUITE filled it
+
+The real cause, found by enumerating the store (`CredEnumerateW`): **589 credentials, 532 of
+them the hub's**, in the form `<instance-id>:provider-p.agent-hub:<instance-id>`. Every
+`Hub()` in the suite made a fresh data dir -> a fresh hub instance id -> a fresh keychain
+entry, and `cleanup()` only deleted the temp dir, so entries only accumulated. Windows
+Credential Manager has a per-user cap; once full, `CredWriteW` returns
+`ERROR_NOT_ENOUGH_MEMORY` (8) for EVERY write, so the hub's boot probe failed and every
+credential was refused (501). The Windows vault, `VaultSvc`, `cmdkey` and `keyring` were
+never broken - they were full.
+
+- Cleaned: deleted the 532 agent-hub entries (kept the user's 57; `DELETED=532 FAILED=0`).
+  Immediately: `POST /v1/model-providers` -> 200, `tokenConfigured:true`, session active.
+- Fixed `tests/lib/hub.py`: `cleanup()` deletes each provider/connection it created through
+  the real `/v1` API BEFORE the data dir goes away, so the hub releases the keychain entry it
+  owns (the production path for removing a resource). No test-only id, no data-dir trickery;
+  one Hub = one dir = one persisted id, unchanged.
+- Verified: provider CRUD twice on a clean store -> 13/13 each, agent-hub entries 0 before
+  and after; full suite 28/28, count effectively flat.
+
+Supersedes entirely the earlier (uncontrolled, retracted) "name length" and "Windows vault
+broken" theories above.
