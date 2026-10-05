@@ -23,7 +23,7 @@ each fix can be reconciled.
 | 3 | interrupt/a-provider-that-hangs-does-not-hang-the-turn.py:49 | `final is not None` + `!= active` | TBD (measure) | TBD | pending |
 | 4 | interrupt/a-killed-hub-recovers-its-sessions.py:46 | `st in ("active","needs-repair","readonly","starting_failed")` — accepts `active` | ARCHITECTURE §21 N2: after restart an `active` session with no process -> `needs-repair` | product CORRECT: `needs-repair` | FIXED: assertion now `== "needs-repair"`; passes |
 | 5 | interrupt/a-cancelled-turn-releases-the-session.py:73 | `ended in ("cancelled","interrupted")` | a CONFIRMED cancel -> `cancelled` (contract/v1.json turn.ended; `interrupted` is the unconfirmed/restart case, §21 N2) | pi yields `cancelled` | FIXED: assertion now `== "cancelled"`; passes |
-| 6 | interrupt/killing-the-adapter-during-a-cancel-settles-the-turn.py:43 | `ended in ("cancelled","interrupted","failed")` | TBD | TBD | pending |
+| 6 | interrupt/killing-the-adapter-during-a-cancel-settles-the-turn.py:43 | `ended in ("cancelled","interrupted","failed")` | a turn `cancelling` when the adapter died -> `interrupted` (ARCHITECTURE §21 N2) | not yet re-measured | FIXED assertion (`== "interrupted"`); verify pending (needs >10s) |
 | 7 | interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py:47 | `ended in ("failed","interrupted","cancelled")` | TBD | TBD | pending |
 | 8 | interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py:54 | `st in ("needs-repair","starting_failed","readonly","active")` — accepts `active` | TBD | TBD | pending |
 | 9 | interrupt/the-network-drops-mid-turn-and-the-turn-settles.py:63 | `ended in ("failed","interrupted","cancelled")` | TBD | TBD | pending |

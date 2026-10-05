@@ -40,8 +40,13 @@ try:
     end = wait_turn(hub, sid, tid, {"ended"}, tries=240)
     t.check(end.get("state") == "ended", "the turn settles after the adapter died mid-cancel (no hang)",
             f"state={end.get('state')}")
-    t.check(end.get("ended") in ("cancelled", "interrupted", "failed"),
-            "the terminal is an honest value", f"ended={end.get('ended')}")
+    # The turn was `cancelling` when the adapter died: ARCHITECTURE §21 N2 says an
+    # open turn settles `failed`, "or `interrupted` if it was `cancelling`". This turn
+    # WAS cancelling, so the required terminal is exactly `interrupted` (accepting
+    # `failed`/`cancelled` too was a fake that hid a mis-classification).
+    t.check(end.get("ended") == "interrupted",
+            "a turn cancelling when the adapter died ends `interrupted` (§21 N2)",
+            f"ended={end.get('ended')} (required: interrupted)")
     t.check(hub.child.poll() is None, "the HUB survives")
     t.check(hub.get(f"/v1/sessions/{sid}")["status"] == 200, "the session still reads")
 finally:
