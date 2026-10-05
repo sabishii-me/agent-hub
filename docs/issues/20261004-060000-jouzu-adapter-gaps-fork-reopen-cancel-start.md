@@ -119,3 +119,35 @@ Traced each symptom to code (controlled: same hub, same test; pi passes the iden
 Both located. NOT yet fixed (jouzu adapter + jouzu runtime changes; to be applied on jouzu's own
 code and verified on jouzu's own suite). The earlier 'three gaps' wording is superseded: it is
 two mechanisms across four symptoms.
+
+### Cause A fixed; Cause B located to SOURCE (cross-repo)
+
+**Cause A fixed** on the jouzu adapter (`prts-harness-jouzu` `282e249`): `turn_end` now carries
+`clientMessageId` + `state`. Verified: `interrupt/send-after-cancel` 8/8 (was 7/8),
+`model/identity` 8/8 (was 6/7 / hang). The jouzu parameterized set is now 22/24 files; only
+cross-talk and fork remain, both Cause B.
+
+**Cause B is NOT fixable in the plugin.** The lock lives in the jouzu RUNTIME, which is
+`runtime/` - gitignored, materialised from the published `jouzu@0.1.18` tarball
+(`runtime.sources.json`). Editing `runtime/dist/*.js` would edit a downloaded artifact and be
+lost on reinstall. The lock is OUR code, though: the source is the separate product repo
+`E:/AI/ideas/jouzu` (a public product repo with its OWN conventions - `AGENTS.md`, plans/tests,
+release flow):
+
+- `jouzu/packages/cli/src/main-cli.ts:288` (and `:187`) calls `applyProfile(...)` on every start.
+- `jouzu/packages/cli/src/profile-manager.ts:359` `applyProfile` -> `:365` `acquireStateLock({
+  path: join(paths.stateDir, 'profile.lock'), ... onBusy: () => new ProfileStateError('another
+  profile operation is in progress') })`.
+- `jouzu/packages/cli/src/state-lock.ts` `acquireStateLock`: atomic `openSync(path,'wx')`; a
+  lock held by a LIVE pid THROWS immediately (no wait/retry).
+
+Because `JOUZU_HOME` is shared per harness, two jouzu starts at once both apply the profile and
+one throws -> the harness exits 1 -> `adapter_crash`/`starting_failed`. This is a REAL jouzu
+defect (concurrent starts are not tolerated), and the fix must land in the jouzu product repo
+and be REPUBLISHED (a delivery step, per ADR-0005) - it cannot ride the plugin repo.
+
+Correct fix (jouzu source, for the owner to schedule): make the startup profile apply
+concurrency-tolerant - either (a) the session-start apply waits-and-retries on a live lock
+(bounded), or (b) apply-once is guarded so a second concurrent start does not re-enter, or
+(c) `acquireStateLock` gains a bounded wait mode for the profile case. The exact choice is an
+owner decision (it changes a shared lock's semantics). Do NOT special-case it in the hub.
