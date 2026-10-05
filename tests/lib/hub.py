@@ -48,6 +48,12 @@ class Hub:
         self.extra_env = env or {}
         self.child = None
         self.ep = None
+        # Resources this test registered through /v1. cleanup() deletes them FIRST
+        # (the same path a real deployment uses) so the OS keychain entries they own
+        # are removed, not leaked. A leaked credential is a real side effect on the
+        # host, not test scratch.
+        self._providers = set()
+        self._connections = set()
         self._log = open(os.path.join(self.dir, "hub-stdout.log"), "a", encoding="utf-8")
 
     @staticmethod
@@ -122,7 +128,22 @@ class Hub:
         return self.req("GET", p, **k)
 
     def post(self, p, body=None, **k):
-        return self.req("POST", p, body, **k)
+        r = self.req("POST", p, body, **k)
+        self._track(p, body, r)
+        return r
+
+    def _track(self, path, body, r):
+        # Remember what this run created so cleanup() can delete it via /v1 and the
+        # hub can release the keychain entry it owns.
+        if r.get("status") not in (200, 201, 202) or not isinstance(body, dict):
+            return
+        rid = body.get("id")
+        if not isinstance(rid, str):
+            return
+        if path == "/v1/model-providers":
+            self._providers.add(rid)
+        elif path == "/v1/connections":
+            self._connections.add(rid)
 
     def patch(self, p, body=None, **k):
         return self.req("PATCH", p, body, **k)
@@ -165,6 +186,16 @@ class Hub:
         time.sleep(0.2)
 
     def cleanup(self):
+        # Delete every credential-bearing resource THIS run created, through the real
+        # /v1 API, BEFORE the data dir goes away: that is how a provider/connection's
+        # keychain entry is released (the store is keyed by the instance id in the
+        # data dir). Without this, each run leaks an OS credential.
+        for pid in list(self._providers):
+            try: self.delete(f"/v1/model-providers/{pid}")
+            except Exception: pass
+        for cid in list(self._connections):
+            try: self.delete(f"/v1/connections/{cid}")
+            except Exception: pass
         self.stop()
         try:
             self._log.close()
