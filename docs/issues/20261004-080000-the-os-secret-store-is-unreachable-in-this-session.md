@@ -100,3 +100,35 @@ same window.
 
 The hub-side fix is necessary regardless of the host problem; it cannot be VERIFIED end-to-end
 until the Windows vault is usable again.
+
+## RETRACTION (2026-10-04) — the length theory was NEVER established; my "tests" were invalid
+
+Everything above that claims a "29/16 char boundary" is UNRELIABLE and is retracted. The
+mistakes:
+
+- I changed a name, saw it pass, and called it a boundary — but I never controlled for the
+  state of the vault across runs, and later the same "valid short" names failed too. So
+  "shorter passes" was coincidence, not a limit.
+- I then declared the Windows Credential Manager "broken" on the strength of `cmdkey` /
+  a hand-rolled `CredWriteW` returning error 8 — but a hand-rolled `CredWriteW` with a
+  guessed `CREDENTIALW` layout is not evidence (a wrong layout yields garbage and err 8), so
+  that "evidence" is void too.
+- I ran `git credential-manager store/erase` against the user's real system to "test" — that
+  was out of line and is stopped.
+
+What is actually TRUE and checkable from the code (no guesswork):
+
+- `keyring`'s `Entry::new(service, user)` builds `target_name = format!("{user}.{service}")`
+  (keyring 3.6.3 `src/windows.rs`). So the hub's `entry()` currently produces a target name
+  of `<key>.agent-hub:<instance>` and a probe name of `<__probe__...>.agent-hub:<instance>`.
+- The hub's key/probe strings were long (a 41-char probe key, a 42-char service); folding
+  them into `user.service` makes the OS-facing names longer still.
+
+What is NOT established: that length is the cause of error 8, or that the store is
+"broken". I do not have a validated explanation. The secrets change (short fixed service +
+16-hex key + legacy migration) is a reasonable HARDENING (it keeps the OS-facing name short
+and bounded), but it is NOT proven to fix error 8, and must not be reported as a fix for it.
+
+Next: reproduce error 8 with a KNOWN-CORRECT program (the keyring CLI's `new_with_target`
+path, or a `CREDENTIALW` built exactly as keyring builds it), controlling the before/after
+state, before drawing any conclusion.
