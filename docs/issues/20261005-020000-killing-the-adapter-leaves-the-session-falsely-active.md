@@ -80,3 +80,13 @@ decision: when a live hub's adapter child dies, does the session go `needs-repai
 (and a turn is refused until `reopen`), or stay readable-but-refusing, or something else?
 The test asserts the two properties the file itself claims (`!= active`, no hang); the exact
 status is left to the owner.
+
+## Sites in the test suite that HID this
+
+- `tests/interrupt/killing-the-adapter-leaves-an-honest-state.py:43` - `st is not None` (fixed: now `!= active`).
+- `tests/interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py:54` - `st in
+  ("needs-repair","starting_failed","readonly","active")` (fixed: now `!= active`).
+
+Both files' docstrings SAY the session must not keep claiming `active`; both assertions
+permitted exactly that. Confirmed by running the real system: kill the adapter child mid-turn ->
+turn `failed`, session status still `active`.

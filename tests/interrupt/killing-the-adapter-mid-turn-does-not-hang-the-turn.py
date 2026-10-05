@@ -51,8 +51,11 @@ try:
     t.check(hub.child.poll() is None, "the HUB survives the adapter death")
     g = hub.get(f"/v1/sessions/{sid}")
     st = (g["json"] or {}).get("session", {}).get("status")
-    t.check(st in ("needs-repair", "starting_failed", "readonly", "active"),
-            "the session reports a defined status", f"status={st}")
+    # The file's own docstring: "the session must not keep claiming `active`". The old
+    # assertion accepted `active` and hid the defect (docs/issues/20261005-020000).
+    t.check(st != "active",
+            "the session does NOT keep claiming `active` with no process behind it",
+            f"status={st} (a processless session reporting `active` is the defect)")
 finally:
     ok = t.done()
     hub.cleanup()
