@@ -2,8 +2,8 @@
 
 Recorded: 2026-10-05. Found by: reading the design after the owner's correction ("the extension
 is not meant to go into the workspace; it was redesigned"). Owner: **PLUGIN**
-(`prts-harness-pi`; the same shape is in `prts-harness-jouzu`). Status: **RESOLVED on pi** (adapter `7b84cb0`, 0.1.9 -> 0.1.10). jouzu is a separate,
-independent change (NOT a mirror - jouzu is a fork with its own `jouzu-adapter.cjs`).
+(`prts-harness-pi`; the same shape is in `prts-harness-jouzu`). Status: **RESOLVED on pi and jouzu** - pi adapter `7b84cb0` (0.1.9 -> 0.1.10); jouzu adapter
+`c007b35` (0.1.10 -> 0.1.11). jouzu was changed on its OWN code (a fork, NOT a mirror).
 
 ## The design (what the shape must be)
 
@@ -83,3 +83,18 @@ re-check those (pi half) in this shape.
 JOUZU: the same WRONG shape exists in `jouzu-adapter.cjs`, but jouzu is a FORK (its own file, its
 own spawn: `... 'pi', '--mode', ...`), so its fix is a separate change to verify on jouzu's own
 suite - NOT a mirror of this diff.
+
+## RESOLUTION (jouzu, 2026-10-05)
+
+`jouzu-adapter.cjs` now spawns `jouzu ... --mode rpc ... --no-extensions --extension
+<AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>` and writes `agent-presets.json` into the hub-owned
+harness dir. Changed on jouzu's own code (its spawn carries an extra `pi` arg; it re-roots
+`JOUZU_HOME`), NOT by mirroring the pi diff. adapter `c007b35` (0.1.11).
+
+Evidence (real, jouzu 0.1.18): presets 2/2, approvals 8/8 + 2/2 + 9/9; a real run writes
+`agents/jouzu/agent-presets.json` and creates no workspace `.pi`.
+
+CONTROL on the pre-existing jouzu failures: the parameterized suite has 4 failures on jouzu
+(cross-talk 1/3, send-after-cancel 7/8, fork 6/7, model-identity 6/7). Stashing this change
+(back to `63d57d7`) and re-running gives the SAME failures, cross-talk 1/3 x3 both before and
+after - so this change causes none of them; they are 20261004-060000.
