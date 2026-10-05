@@ -63,8 +63,15 @@ try:
                 "a turn whose adapter is dead is NOT reported as a clean `completed`",
                 f"ended={settled} (a dead adapter cannot have completed a turn cleanly)")
     else:
-        # Refused before admit is also honest (the session is not usable).
-        t.check(tr["status"] in (409, 422, 503), "a turn after the adapter died is refused honestly", f"status={tr['status']} {tr['text'][:120]}")
+        # The session is now needs-repair (not active); a turn must be REFUSED, never
+        # 2xx. The contract does not pin WHICH 4xx for a non-active session, so assert
+        # the real property (a 4xx refusal that names the state), not an invented set.
+        body = (tr["json"] or {})
+        refused = 400 <= tr["status"] < 500
+        names_state = "needs-repair" in tr["text"] or "active" in tr["text"] or body.get("error") in ("validation_failed", "session_busy", "conflict")
+        t.check(refused and names_state,
+                "a turn after the adapter died is refused (4xx) and says why",
+                f"status={tr['status']} body={tr['text'][:140]}")
 finally:
     ok = t.done()
     hub.cleanup()

@@ -90,3 +90,21 @@ status is left to the owner.
 Both files' docstrings SAY the session must not keep claiming `active`; both assertions
 permitted exactly that. Confirmed by running the real system: kill the adapter child mid-turn ->
 turn `failed`, session status still `active`.
+
+## RESOLVED (2026-10-05)
+
+Product fix (not the test):
+- `crates/sessions/src/runtime.rs`: the per-session pump task now signals an adapter
+  DEATH when its notification stream ends (the adapter's stdout closed): it sends
+  `(sid, generation)` on a death channel. The generation distinguishes an unintended
+  death from a deliberate stop/reopen/repair (which bumps it).
+- `crates/sessions/src/service.rs`: `spawn_death_watcher()` consumes the channel; when the
+  generation still matches and the row is `active`, it runs the existing `quarantine_session`
+  (the §21 N2 rule, applied live: settle to `needs-repair`, settle open turns, block turns).
+- `hub/src/main.rs`: wires the watcher at composition time.
+
+Verified (real pi adapter): kill the adapter child on an IDLE session -> status becomes
+`needs-repair` (was `active`); kill it MID-TURN -> the turn settles `failed` and the session
+becomes `needs-repair`. `killing-the-adapter-leaves-an-honest-state` 5/5 (its 'st is not None'
+and 'settled is not None' fake assertions replaced with the real properties),
+`killing-the-adapter-mid-turn-does-not-hang` 8/8.

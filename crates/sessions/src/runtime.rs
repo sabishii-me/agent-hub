@@ -174,6 +174,14 @@ pub struct Sessions {
     /// `None` to leave a plain notification alone). The composition root wires this
     /// to Humans for `approval_need`/`question_need` (TASK-048 G1).
     reverse: std::sync::Mutex<Option<ReverseHandler>>,
+    /// Adapter-death signals: sent by a session's pump task when its adapter's
+    /// stdout closes (the adapter process exited). Carries `(sid, generation)` so
+    /// the consumer can tell an UNINTENDED death (generation unchanged) from a
+    /// stop/reopen/repair that bumped the generation on purpose. The composition
+    /// root consumes this to reconcile the session honestly: an adapter that is
+    /// gone must never leave a session `active` (ARCHITECTURE 21 N2, applied live).
+    deaths: tokio::sync::mpsc::UnboundedSender<(String, u64)>,
+    deaths_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<(String, u64)>>>,
 }
 
 /// A boxed reverse-request handler.
@@ -185,6 +193,7 @@ pub type ReverseHandler = std::sync::Arc<
 
 impl Sessions {
     pub fn new(events: agent_hub_events::Bus) -> Self {
+        let (death_tx, death_rx) = tokio::sync::mpsc::unbounded_channel();
         Sessions {
             running: Mutex::new(std::collections::HashMap::new()),
             requests: Mutex::new(std::collections::HashMap::new()),
@@ -192,7 +201,21 @@ impl Sessions {
             generations: Mutex::new(std::collections::HashMap::new()),
             terminals: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             reverse: std::sync::Mutex::new(None),
+            deaths: death_tx,
+            deaths_rx: std::sync::Mutex::new(Some(death_rx)),
         }
+    }
+
+    /// Take the adapter-death receiver (once). The composition root uses it to
+    /// reconcile a session whose adapter exited on its own.
+    pub fn take_deaths(
+        &self,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<(String, u64)> {
+        self.deaths_rx
+            .lock()
+            .expect("deaths_rx")
+            .take()
+            .expect("take_deaths called once")
     }
 
     /// Install the reverse-request handler (the adapter -> hub requests). Wired
@@ -377,6 +400,13 @@ impl Sessions {
         let pump_reply = bus.requests.clone();
         let pump_terminals = self.terminals.clone();
         let pump_reverse = self.reverse.lock().expect("reverse").clone();
+        let pump_deaths = self.deaths.clone();
+        // The generation THIS process runs under. `start` writes it right after it
+        // bumps (below), because the pump task is spawned BEFORE that bump. A later
+        // stop/reopen/repair bumps it again, so a death whose generation no longer
+        // matches the live one is a DELIBERATE stop, not an adapter death.
+        let pump_generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let pump_generation_write = pump_generation.clone();
         let mut notifications = std::mem::replace(
             &mut bus.notifications,
             agent_hub_adapter::Notifications::closed(),
@@ -433,6 +463,13 @@ impl Sessions {
                 }
                 pump_events.publish(n.method, payload);
             }
+            // The adapter's stdout closed: the adapter process is GONE. This is the
+            // ONLY channel the hub had to that harness, so the session can no longer
+            // be served: signal the death so the session is reconciled off `active`
+            // (ARCHITECTURE 21 N2, applied live). The generation says whether anyone
+            // stopped it on purpose (a bump by stop/reopen/repair means: NOT a death).
+            let gen = pump_generation.load(std::sync::atomic::Ordering::Relaxed);
+            let _ = pump_deaths.send((pump_sid.clone(), gen));
         });
         let process = SessionProcess {
             sid: sid.clone(),
@@ -455,7 +492,10 @@ impl Sessions {
         {
             let mut reqs = self.requests.lock().expect("requests");
             reqs.insert(sid.clone(), bus_requests.clone());
-            self.bump_generation(&spec.sid);
+            let gen = self.bump_generation(&spec.sid);
+            // Publish the generation THIS pump task runs under, so its death signal
+            // can be attributed to this process (not to a later stop/reopen).
+            pump_generation_write.store(gen, std::sync::atomic::Ordering::Relaxed);
         }
         self.running
             .lock()

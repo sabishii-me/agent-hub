@@ -274,6 +274,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Box::new(move || conns.materialize().map_err(|e| e.to_string()))
         }),
     );
+    // Reconcile a session whose adapter exits on its own: an adapter that is gone
+    // must never leave a session `active` (ARCHITECTURE 21 N2, applied live).
+    sessions.clone().spawn_death_watcher();
 
     // The reverse-request handler: the adapter asks the hub to decide. For
     // `approval_need`/`question_need`, raise the resource and AWAIT the /v1

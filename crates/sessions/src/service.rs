@@ -319,6 +319,41 @@ impl Sessions {
         }
     }
 
+    /// Watch for ADAPTER DEATHS: a session's adapter process exiting on its own.
+    /// The runtime signals `(sid, generation)` when the adapter's stdout closes.
+    /// If the generation still matches the live one (nobody stopped/reopened/repair ed
+    /// it on purpose) and the row is still `active`, the session is reconciled
+    /// honestly via `quarantine_session` (the ARCHITECTURE 21 N2 rule, applied live):
+    /// an adapter that is gone can NOT leave a session `active`. Call once, on an
+    /// `Arc<Self>`, at composition time.
+    pub fn spawn_death_watcher(self: std::sync::Arc<Self>) {
+        let mut deaths = match self.runtime.take_deaths() {
+            rx => rx,
+        };
+        let me = self.clone();
+        tokio::spawn(async move {
+            while let Some((sid, gen)) = deaths.recv().await {
+                // A deliberate stop/reopen/repair bumped the generation; this death
+                // is then already handled and must not be re-reconciled.
+                if me.runtime.generation(&sid) != gen {
+                    continue;
+                }
+                let active = me
+                    .db
+                    .session(&sid)
+                    .ok()
+                    .flatten()
+                    .map(|r| r.status == "active")
+                    .unwrap_or(false);
+                if !active {
+                    continue;
+                }
+                tracing::warn!(session = %sid, "the adapter exited on its own; reconciling the session off active");
+                let _ = me.quarantine_session(&sid, "the adapter exited").await;
+            }
+        });
+    }
+
     /// Inject the provider resolver (the composition root owns this). It is the
     /// ONLY way a hub-managed provider reaches a session.
     pub fn with_provider_resolver(
