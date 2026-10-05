@@ -52,8 +52,12 @@ try:
         t.check(bool(fid) and fid != sid, "fork yields a distinct session", f"fork={fid} src={sid}")
         fs = hub.wait_status(fid, "active")
         t.check(fs.get("status") == "active", "the fork reaches active", f"status={fs.get('status')}")
+        # The contract (fork): "the source session is NOT changed ... still usable".
+        # It was reopened to `active` just above, so the fork must leave it `active`
+        # exactly. `in (...,"closed")` was a fake that passed if the fork closed it.
         src = hub.get(f"/v1/sessions/{sid}")["json"]["session"]
-        t.check(src.get("status") in ("active", "closed"), "the fork does not disturb the source", f"src={src.get('status')}")
+        t.check(src.get("status") == "active", "the fork does not disturb the source (still active)",
+                f"src={src.get('status')}")
 finally:
     ok = t.done()
     hub.cleanup()

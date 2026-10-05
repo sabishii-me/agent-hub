@@ -31,14 +31,14 @@ each fix can be reconciled.
 | 11 | interrupt/cancel-is-idempotent-and-bounded.py:39 | `status in (3 codes)` | not wedged = a defined, non-5xx outcome | verify pending | FIXED: `< 500` |
 | 12 | concurrency/many-sessions-cancel-at-once.py:43 | `started >= 1` (of N) | N turns AT ONCE -> all N observed running | verify pending | FIXED `started == N` |
 | 13 | presets/plan-mode-is-applied-and-reports.py:40 | `reported is True or warning` | pi ships the plan ext -> plan must be APPLIED | verify pending | FIXED `reported is True` |
-| 14 | lifecycle/...forks...:56 | `src in ("active","closed")` | TBD | TBD | pending |
-| 15 | model/a-real-model-answers-with-a-confirmed-identity.py:48,67 | `a1 is not None` | TBD | TBD | pending |
-| 16 | plugins/...:42,51 | `in (409,403)` / `in (200,404)` | TBD | TBD | pending |
-| 17 | presets/a-preset-is-listed-and-applied.py:43 | `r2["status"] in (202,400,422)` | TBD | TBD | pending |
-| 18 | provider/...:27,52 | `in (400,422)` / `in (200,202,204)` | TBD | TBD | pending |
-| 19 | lifecycle/the-session-crud...:63,67 | `in (200,409)` / `in (200,202,204)` | TBD | TBD | pending |
-| 20 | connections/...:39 | `in (200,204,404)` | TBD | TBD | pending |
-| 21 | tools/the-model-really-runs-a-tool.py:64 | `any(n in (...6 names...))` | TBD | TBD | pending |
+| 14 | lifecycle/...forks...:56 | `src in ("active","closed")` | fork leaves the source UNCHANGED -> `active` (contract) | FIXED `== "active"` | fixed |
+| 15 | model/...identity:48,67 | `a1 is not None` | a message must exist; identity checked separately (appliedProvider/Model) | NOT fake (None fails) | keep |
+| 16 | plugins/...:42,51 | `in (409,403)` / `in (200,404)` | deployment-dir remove -> 409; the plugin SHIPS the icon -> 200 | FIXED `== 409` / `== 200` | fixed |
+| 17 | presets/...:43 | `in (202,400,422)` | contract: accepted-then-fails OR refused-before; both branches handled | NOT fake | keep |
+| 18 | provider/...:27,52 | `in (400,422)` / `in (200,202,204)` | contract permits both codes; delete allows several | NOT fake | keep |
+| 19 | lifecycle/crud:63,67 | `in (200,409)` / `in (200,202,204)` | contract permits both; delete allows several | NOT fake | keep |
+| 20 | connections/...:39 | `in (200,204,404)` | delete idempotent: contract permits these | NOT fake | keep |
+| 21 | tools/...:64 | `any(n in (7 tools))` | a REAL tool ran (the model chooses which); any real tool is valid | NOT fake | keep |
 
 ## Rules for this review
 

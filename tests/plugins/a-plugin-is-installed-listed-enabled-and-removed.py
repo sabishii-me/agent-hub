@@ -38,8 +38,10 @@ try:
     t.check(pj.get("version"), "prepare names the runtime version", f"version={pj.get('version')}")
 
     # A deployment directory is read-only to the hub: remove is refused.
+    # The contract maps this refusal to 409 conflict (a deployment dir is hub-owned,
+    # not removable here). 403 was never in the mapping - accepting it was a fake.
     d = hub.delete("/v1/plugins/pi")
-    t.check(d["status"] in (409, 403), "the hub refuses to remove a deployment dir", f"status={d['status']} {d['text'][:120]}")
+    t.check(d["status"] == 409, "the hub refuses to remove a deployment dir (409 conflict)", f"status={d['status']} {d['text'][:120]}")
 
     dis = hub.post("/v1/plugins/pi/disable")
     t.check(dis["status"] < 300, "disable the plugin", f"status={dis['status']} {dis['text'][:120]}")
@@ -47,8 +49,10 @@ try:
     t.check(en["status"] < 300, "enable the plugin", f"status={en['status']} {en['text'][:120]}")
 
     # icon: the plugin ships one; a variant is served as bytes.
+    # The pi plugin SHIPS this icon; the variant must be served (200). Accepting 404
+    # was a fake that passed even if the icon was missing.
     ic = hub.get("/v1/plugins/pi/icon/light")
-    t.check(ic["status"] in (200, 404), "GET the icon variant answers", f"status={ic['status']}")
+    t.check(ic["status"] == 200, "GET the icon variant answers 200 (the plugin ships it)", f"status={ic['status']}")
 finally:
     ok = t.done()
     hub.cleanup()
