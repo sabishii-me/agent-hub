@@ -36,7 +36,12 @@ try:
     # The session is still usable: a providerless turn is admitted (or refused cleanly), and
     # the session is not wedged by the cancels.
     tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "hi"}], "idempotencyKey": "ci-t1"}, key="ci-t1")
-    t.check(tr["status"] in (202, 409, 503), "the session is not wedged by idle cancels", f"status={tr['status']} {tr['text'][:120]}")
+    # "Not wedged" = the request is DEFINED (it returned, and not a 5xx). The old set
+    # (202,409,503) was a fake: it silently excluded a 400 (this session has no model)
+    # and so tested the set, not the property.
+    t.check(tr["status"] < 500,
+            "the session is not wedged by idle cancels (a defined, non-5xx outcome)",
+            f"status={tr['status']} {tr['text'][:120]}")
 
     # get is still honest
     g = hub.get(f"/v1/sessions/{sid}")

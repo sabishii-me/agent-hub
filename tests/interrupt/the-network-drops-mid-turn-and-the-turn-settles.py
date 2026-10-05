@@ -60,8 +60,12 @@ try:
                 f"state={end.get('state')}")
         t.check(end.get("ended") != "completed", "a dropped network is never a clean `completed`",
                 f"ended={end.get('ended')}")
-        t.check(end.get("ended") in ("failed", "interrupted", "cancelled"), "the terminal is honest",
-                f"ended={end.get('ended')} cause={end.get('cause')}")
+        # No cancel and no restart: the turn died on its own, so the terminal is
+        # `failed` (ARCHITECTURE §21 N2 reserves `interrupted` for a turn that was
+        # `cancelling`; `cancelled` needs a confirmed cancel - neither happened here).
+        t.check(end.get("ended") == "failed",
+                "a turn killed by a network drop ends `failed`",
+                f"ended={end.get('ended')} cause={end.get('cause')} (required: failed)")
         # The hub is still alive and answers.
         t.check(hub.child.poll() is None, "the hub survives the network drop")
         t.check(hub.get(f"/v1/sessions/{sid}")["status"] == 200, "the hub still answers after the drop")

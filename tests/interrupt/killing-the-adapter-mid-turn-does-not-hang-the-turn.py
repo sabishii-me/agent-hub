@@ -44,8 +44,12 @@ try:
     end = wait_turn(hub, sid, tid, {"ended"}, tries=240)
     t.check(end.get("state") == "ended", "the turn settles after the adapter died (no hang)",
             f"state={end.get('state')} ended={end.get('ended')}")
-    t.check(end.get("ended") in ("failed", "interrupted", "cancelled"),
-            "the terminal is an honest non-completed value", f"ended={end.get('ended')}")
+    # Killed mid-turn, no cancel: the turn died on its own -> `failed` (ARCHITECTURE
+    # §21 N2). The old `in (failed,interrupted,cancelled)` accepted terminals the
+    # situation cannot produce.
+    t.check(end.get("ended") == "failed",
+            "a turn whose adapter died mid-turn ends `failed`",
+            f"ended={end.get('ended')} (required: failed)")
 
     # The hub is still alive; the session is honest (not silently `active`-and-dead).
     t.check(hub.child.poll() is None, "the HUB survives the adapter death")

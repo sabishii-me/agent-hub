@@ -34,13 +34,16 @@ try:
         t.check(tr["status"] == 202, f"turn {i} is accepted", f"status={tr['status']}")
         tids.append(tr["json"]["turn"]["id"])
 
-    # Wait until they are running (bounded; require at least one observed running).
+    # Wait until they are running. The point of this test is N turns AT ONCE, so the
+    # property is that ALL N are observed in-flight (a turn that ends before we look is
+    # not "running", so `ended` is NOT counted as started). `started >= 1` was a fake:
+    # it passed with a single session, proving nothing about concurrency.
     started = 0
     for sid, tid in zip(sids, tids):
         row = wait_turn(hub, sid, tid, {"running", "awaiting_approval", "awaiting_question", "ended"}, tries=160)
         if row.get("state") in ("running", "awaiting_approval", "awaiting_question"):
             started += 1
-    t.check(started >= 1, f"at least one of {N} turns observed running", f"started={started}")
+    t.check(started == N, f"all {N} turns observed running at once", f"started={started}/{N}")
 
     # Cancel ALL at once (no waiting between).
     for sid in sids:

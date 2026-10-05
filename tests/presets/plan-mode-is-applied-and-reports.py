@@ -33,13 +33,14 @@ try:
     t.check(p["status"] < 300, "PATCH plan:true is accepted", f"status={p['status']} {p['text'][:160]}")
     body = p["json"] or {}
     sess = body.get("session", body)
-    # The hub follows the harness. Either the response reports plan true, or a warning says
-    # it was not confirmed - a silent no-op is the failure we are exposing.
+    # pi SHIPS the plan extension, so plan:true must be genuinely APPLIED: the session
+    # reports `plan == True`. The contract's warning path is for a harness that CANNOT
+    # apply it; accepting a warning here was a fake that passed even when plan did
+    # nothing (the very failure this file exists to expose).
     reported = sess.get("plan")
-    warning = body.get("warning") or sess.get("warning")
-    t.check(reported is True or warning,
-            "plan:true is either APPLIED (plan=true) or honestly warned (never a silent no-op)",
-            f"plan={reported} warning={warning}")
+    t.check(reported is True,
+            "plan:true is APPLIED (the session reports plan true)",
+            f"plan={reported} warning={body.get('warning') or sess.get('warning')}")
 
     # Turn plan OFF again (a preset that does not ask must be switchable away).
     p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False})

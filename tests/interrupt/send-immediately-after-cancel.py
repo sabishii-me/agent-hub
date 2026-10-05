@@ -44,7 +44,13 @@ try:
     t.check(cn["status"] < 300, "cancel is accepted", f"status={cn['status']}")
     tr2 = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "say hi"}], "idempotencyKey": "sc-t2"}, key="sc-t2")
     # EITHER refused (while the cancel is unconfirmed) OR admitted - never a 500/hang.
-    t.check(tr2["status"] in (202, 409, 422, 503), "the immediate second turn is refused or accepted, never a 5xx",
+    # The real property: a DEFINED outcome (2xx admitted, or any 4xx refusal). The old
+    # (202,409,422,503) set was a fake: it silently excluded a legitimate 400 and would
+    # fail on it, while calling itself "never a 5xx".
+    t.check(tr2["status"] < 500, "the immediate second turn is refused or accepted, never a 5xx",
+            f"status={tr2['status']} {tr2['text'][:160]}")
+    t.check(tr2["status"] == 202 or 400 <= tr2["status"] < 500,
+            "the immediate second turn has a DEFINED outcome (admitted or 4xx-refused)",
             f"status={tr2['status']} {tr2['text'][:160]}")
 
     # The first turn settles.
