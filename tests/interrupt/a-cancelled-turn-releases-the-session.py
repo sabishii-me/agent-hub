@@ -66,13 +66,14 @@ try:
             ended = row.get("ended")
             break
         time.sleep(0.25)
-    # A cancel the hub CONFIRMED should settle `cancelled`/`interrupted`. The real pi
-    # adapter reports the aborted run as `failed` instead - a REAL finding (the adapter
-    # mis-classifies an aborted run when a turn_end clears its abort flag before
-    # agent_settled; docs/tasks/test-findings.md F1). Recorded, not softened.
-    t.check(ended in ("cancelled", "interrupted"),
-            "a cancelled turn ends cancelled/interrupted",
-            f"ended={ended} (F1: the adapter reported a failed run for a confirmed abort)")
+    # A cancel the hub CONFIRMED settles `cancelled` (contract/v1.json turn.ended enum;
+    # `interrupted` is the OTHER terminal - an unconfirmed cancel reconciled at restart,
+    # ARCHITECTURE §21 N2 - so it is NOT acceptable for a confirmed cancel here). Measured
+    # on pi: a confirmed cancel yields exactly `cancelled`. `in (...)` was a fake that hid
+    # an adapter's `failed` mis-classification (test-findings F1).
+    t.check(ended == "cancelled",
+            "a confirmed cancel ends `cancelled`",
+            f"ended={ended} (required: cancelled; `interrupted`/`failed` are not a confirmed cancel)")
 
     # The session is usable again: a NEW turn is admitted (occupancy released).
     tr2 = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "say hi"}], "idempotencyKey": "cn-turn-2"}, key="cn-turn-2")

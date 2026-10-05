@@ -39,12 +39,15 @@ try:
     hub2.plugins = hub.plugins
     hub2.start()
     try:
-        # After recovery, the session must NOT claim active unless a process is live.
-        # The honest states are `active` (a process was re-attached) or `needs-repair`.
+        # ARCHITECTURE §21 (N2): at boot no session process runs, so an `active`
+        # session (its process is gone) is reconciled to `needs-repair` (an orphaned
+        # tail). This is the SPECIFIC state; accepting `active` here would assert the
+        # very lie the rule forbids.
         g = hub2.get(f"/v1/sessions/{sid}")
         st = (g["json"] or {}).get("session", {}).get("status")
-        t.check(st in ("active", "needs-repair", "readonly", "starting_failed"),
-                "after recovery the session reports a real state, not a lie", f"status={st}")
+        t.check(st == "needs-repair",
+                "after restart the killed session is reconciled to needs-repair (§21 N2)",
+                f"status={st} (an `active` session with no process is the defect)")
 
         # The recovered hub must still serve: a fresh session works.
         r2 = hub2.post("/v1/sessions", {"harnessId": HARNESS}, key="k-2")
