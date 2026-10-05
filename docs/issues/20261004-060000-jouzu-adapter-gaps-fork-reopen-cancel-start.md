@@ -69,3 +69,53 @@ they are ALSO **not yet located to a jouzu code path**. They are four symptoms. 
 this worded as 'three jouzu adapter gaps' until each is traced to a line of jouzu code (or
 shown hub-side). The cross-talk and fork symptoms in particular need a trace of the jouzu
 spawn/fork path, not an assumption.
+
+## LOCATED (2026-10-05): TWO distinct root causes, both in jouzu (not the hub)
+
+Traced each symptom to code (controlled: same hub, same test; pi passes the identical sequence).
+
+### Cause A - jouzu's `turn_end` event omits `clientMessageId` (and `state`)
+
+- The hub binds a turn's terminal by the `clientMessageId` on the adapter's `turn_end` event
+  (`crates/sessions/src/runtime.rs`, the pump: `pump_terminals.remove(cmid)`; waiter registered by
+  `watch_terminal(clientMessageId)` in `service.rs`). The `clientMessageId` is the TURN id.
+- **pi** sends `{type:'turn_end', clientMessageId, state, status}` (`pi-adapter.cjs:797`).
+- **jouzu** sends `{type:'turn_end', status}` ONLY, at `jouzu-adapter.cjs:913` and `:1112` - no
+  `clientMessageId`, no `state`. So the hub's `if let (Some(cmid), Some(state))` never matches;
+  the waiter is never fired; after the 5s wait the hub settles the turn with the honest fallback
+  (`service.rs`: cancelled -> `interrupted`, else -> `failed` with 'the adapter did not report a
+  turn state').
+- Evidence: a temporary turn trace (reverted) showed the adapter itself settling
+  `status=completed` for the third turn, while the hub recorded `ended: failed`. Direct probe:
+  after an 8s wait, turn 1 reads `state=ended ended=failed` though the model answered.
+- Explains: **interrupt/send-after-cancel** (post-cancel turn ends `failed`), **model/identity**
+  (turn 1 ends `failed`; turn 2 then has no clean occupancy).
+- Fix (jouzu-adapter, jouzu's own code): include `clientMessageId` (the turn's id) and a contract
+  `state` on every `turn_end` exactly as pi does. This is the same shape pi already emits.
+
+### Cause B - jouzu's profile lock is non-blocking, so two harnesses starting at once collide
+
+- Every jouzu start calls `applyProfile` (`runtime/dist/main-cli.js:244`), which acquires a
+  `profile.lock` via atomic `openSync(path,'wx')` (`runtime/dist/profile-manager.js:303` ->
+  `runtime/dist/state-lock.js::acquireStateLock`). When the lock is held by a LIVE pid it THROWS
+  immediately (`onBusy` -> `ProfileStateError 'another profile operation is in progress'`) -
+  there is no wait/retry. The process then exits code=1.
+- Because `JOUZU_HOME` is shared per harness (`<harness_dir>/jouzu-home`, jouzu-adapter:41), TWO
+  sessions of the same jouzu harness that start together both apply the profile and one loses.
+- Evidence: concurrent-create probe - session A -> `starting_failed`, `startError: adapter
+  protocol: config/set failed: the adapter closed its stdout`; the adapter log carried
+  `Jouzu profile state is unreadable: another profile operation is in progress` and
+  `[jouzu-adapter] harness exited code=1`.
+- Explains: **concurrency/cross-talk** (`session A is active` fails), **lifecycle fork**
+  (`502 adapter_crash` - a fork starts a second harness while the first's profile op is in
+  flight; it is timing-dependent, a plain fork succeeds).
+- Fix (jouzu runtime/adapter, jouzu's own code): the profile apply on a session start must be
+  idempotent/converged-once, or the lock must wait-and-retry (bounded) instead of throwing, or
+  the hub must serialize jouzu harness starts. The correct owner of the fix is the jouzu side
+  (the lock is jouzu's); do NOT paper over it in the hub.
+
+### Status
+
+Both located. NOT yet fixed (jouzu adapter + jouzu runtime changes; to be applied on jouzu's own
+code and verified on jouzu's own suite). The earlier 'three gaps' wording is superseded: it is
+two mechanisms across four symptoms.
