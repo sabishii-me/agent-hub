@@ -416,12 +416,16 @@ impl Adapters {
         Ok(handle)
     }
 
-    /// Stop a harness's cached adapter process, if one is running. Dropping the
-    /// handle closes the bus, and the child is killed (the bus spawns with
-    /// `kill_on_drop`). Used before REMOVING a plugin so a live adapter does not
-    /// hold the plugin's files (docs/issues/20261005-060000). Idempotent.
-    pub fn stop_harness(&self, id: &str) {
-        self.running.lock().expect("running").remove(id);
+    /// Stop a harness's cached adapter process and CONFIRM it exited. Used before
+    /// REMOVING a plugin: a live adapter holds the plugin's files, so the delete
+    /// fails until it is gone (docs/issues/20261005-060000). Idempotent.
+    pub async fn stop_harness(&self, id: &str) {
+        let handle = self.running.lock().expect("running").remove(id);
+        if let Some(handle) = handle {
+            if let Err(e) = handle.kill().await {
+                tracing::warn!(harness = %id, error = %e, "could not kill the cached adapter before remove");
+            }
+        }
     }
 
     /// The `AGENT_HUB_*` environment for an adapter, plus the connection

@@ -62,12 +62,32 @@ pub struct RequestHandle {
     /// handle that is dead must not be reused: a one-shot capability adapter exits
     /// after it answers.
     alive: Arc<AtomicBool>,
+    /// The child process, shared with the bus, so a caller holding only a handle can
+    /// KILL it. Needed before removing a plugin: a live adapter holds the plugin's
+    /// files, so the delete fails until it is stopped (docs/issues/20261005-060000).
+    child: Arc<tokio::sync::Mutex<Child>>,
 }
 
 impl RequestHandle {
     /// Whether the adapter process is still alive (its stdout is open).
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    /// Stop the adapter process and confirm it exited. The exit is only proven when
+    /// `wait` returns; a kill error when the child already exited is not a failure.
+    pub async fn kill(&self) -> Result<(), BusError> {
+        let mut child = self.child.lock().await;
+        if let Ok(Some(_)) = child.try_wait() {
+            return Ok(());
+        }
+        if let Err(e) = child.kill().await {
+            if child.try_wait().ok().flatten().is_none() {
+                return Err(e.into());
+            }
+        }
+        let _ = child.wait().await;
+        Ok(())
     }
 
     /// Answer a REVERSE REQUEST the adapter pushed (its `id` from the
@@ -144,7 +164,7 @@ impl Notifications {
 
 /// A running adapter process.
 pub struct AgentBus {
-    child: Child,
+    child: Arc<tokio::sync::Mutex<Child>>,
     pub requests: RequestHandle,
     pub notifications: Notifications,
     _reader: tokio::task::JoinHandle<()>,
@@ -265,13 +285,15 @@ impl AgentBus {
             }
         });
 
+        let child = Arc::new(tokio::sync::Mutex::new(child));
         Ok(AgentBus {
-            child,
+            child: child.clone(),
             requests: RequestHandle {
                 stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
                 next_id: Arc::new(AtomicU64::new(1)),
                 pending,
                 alive,
+                child,
             },
             notifications: Notifications { rx },
             _reader: reader,
@@ -284,19 +306,20 @@ impl AgentBus {
     /// does (the adapter is responsible for it, per the contract); the hub does
     /// not scan for processes by name.
     pub async fn shutdown(&mut self) -> Result<(), BusError> {
-        // A child that has ALREADY exited is a CONFIRMED stop (TASK-048 S3). A
-        // stdout EOF alone is NOT proof of exit, so we consult the child itself.
-        if let Ok(Some(_status)) = self.child.try_wait() {
+        // The shared child is locked for the kill. A child that has ALREADY exited
+        // is a CONFIRMED stop (TASK-048 S3). A stdout EOF alone is NOT proof of
+        // exit, so we consult the child itself. Kill, then WAIT: the exit is only
+        // confirmed when `wait` returns.
+        let mut child = self.child.lock().await;
+        if let Ok(Some(_status)) = child.try_wait() {
             return Ok(());
         }
-        // Kill, then WAIT: the exit is only confirmed when `wait` returns. A kill
-        // error when the child has just exited on its own is not a failure.
-        if let Err(e) = self.child.kill().await {
-            if self.child.try_wait().ok().flatten().is_none() {
+        if let Err(e) = child.kill().await {
+            if child.try_wait().ok().flatten().is_none() {
                 return Err(e.into());
             }
         }
-        let _status = self.child.wait().await?;
+        let _status = child.wait().await?;
         Ok(())
     }
 }

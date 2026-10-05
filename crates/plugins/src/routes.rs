@@ -322,7 +322,7 @@ async fn remove(
                     // adapter holds files under the plugin dir, so the delete fails
                     // with os error 32 (docs/issues/20261005-060000). Dropping the
                     // handle kills the child (kill_on_drop).
-                    adapters.stop_harness(&id2);
+                    adapters.stop_harness(&id2).await;
                     // Give the OS a moment to release the files the child held.
                     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     let plugins2 = plugins.clone();
