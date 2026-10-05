@@ -5,8 +5,9 @@ REAL, usable `/v1` capabilities against the REAL adapters. §17 is the order of 
 states, capability by capability, what the CURRENT CODE does, with the REAL test result as the
 context (no document or review is treated as a target here).
 
-Version combo of the evidence: hub `42cf838`+, pi plugin 0.1.9, pi runtime
-`@earendil-works/pi-coding-agent@1.0.0`, provider HOME-JP-prod, Windows.
+Version combo of the evidence: hub `f816076`, pi plugin (branch fix/runtime-placement) `7a23419`,
+pi runtime `@earendil-works/pi-coding-agent@1.0.0`, provider HOME-JP-prod, Windows.
+Also verified against jouzu plugin `89e17d4` (runtime jouzu 0.1.18 / pi 0.87.1).
 
 ## How to read this
 
@@ -40,13 +41,14 @@ Version combo of the evidence: hub `42cf838`+, pi plugin 0.1.9, pi runtime
 | concurrency: cancelling one session does not disturb another | REAL | concurrency/cross-talk 9/9 |
 | concurrency: N sessions cancelled together all settle | REAL | concurrency/many-cancel 15/15 |
 | provider CRUD / types / unknown refused before write / token never echoed | REAL | provider/crud 13/13 |
-| plugin install/prepare/enable/disable/icon/remove (deployment-dir refusal) | REAL | plugins/lifecycle 9/9 |
+| plugin install/prepare/enable/disable/icon/remove (deployment-dir refusal is 409, not 500) | REAL | plugins/lifecycle 9/9 |
 | connections CRUD; row gone after delete; token never echoed | REAL | connections/crud 8/8 |
 | harness list; capability-gated routes answer honestly | REAL | harnesses 7/7 |
 | **preset: enumerated, applied, unknown preset -> starting_failed** | REAL | presets/apply 8/8 |
 | **plan toggle applied (or honestly warned)** | REAL | presets/plan 4/4 |
-| **approval: an `approve:true` preset raises a REAL approval before a tool** | **RED** | approvals/preset-gates 3/4 |
-| **approval: denying blocks the side effect** | **RED** | approvals/deny-blocks 0/1 |
+| **approval: an `approve:true` preset raises a REAL approval before a tool** | REAL | approvals/preset-gates 8/8 |
+| **approval: denying blocks the side effect** | REAL | approvals/deny-blocks 2/2 |
+| **review: switchable after a preset (on -> off -> on)** | REAL | approvals/review-toggle 9/9 |
 | questions (harness asks the user) | OPEN | no test |
 | model-providers/{id}/models/refresh | OPEN | no test |
 | harnesses/{id}/connections/validate | OPEN | no test |
@@ -54,19 +56,25 @@ Version combo of the evidence: hub `42cf838`+, pi plugin 0.1.9, pi runtime
 | harnesses/{id}/auth*, extensions PATCH | OPEN | no test |
 | skills (the plugin-sourced model) | OPEN | only the directory model is tested |
 
-Suite total: **25/27 files pass; 2 fail (both approvals).**
+Suite total: **32/32 files pass** (`python tests/run.py`). The layers list now covers every
+real layer (plugins/harnesses/presets were previously missing, so a real plugins failure hid there).
 
-## The one capability that is implemented but NOT real
+## Capabilities implemented but NOT real
 
-**The approval path.** The hub half exists (the adapter can map `extension_ui_request` to
-`approval_need`; the routes exist); but a REAL `approve:true` preset raises NO approval and the
-tool runs ungated. So "the user consents before a tool runs" is NOT delivered today. This is the
-single largest gap between the goal ("real, usable capability") and the code.
+None in the approval/preset area anymore: the approval path is REAL (a preset's `approve:true`
+raises a real approval; deny blocks the side effect; review stays switchable). Two defects were
+closed to get here: `20261004-050000` (the pre-preset spawn's stale review record overrode the
+preset) and the hub-side `list_approvals` returning resolved rows + a bare `deny` read as allow.
+
+Still NOT real / NOT proven: the OPEN rows above (questions; model list refresh; connection
+validate; registry refresh; harness auth/extensions PATCH; the plugin-sourced skills model).
+And one KNOWN open defect: `20261004-070000` (PATCH review:true can race the next turn, ~4/20).
 
 ## Verdict
 
 - The core the product is used for - sessions, turns, cancel, interrupt/restart honesty,
   concurrency, providers, plugins, connections, plan, presets - is REAL and proven by running it.
-- The approval path is implemented but not real; it is the capability to fix next (or to report
-  as unsupported until it works).
-- The OPEN rows above are unproven, not broken.
+- The approval/preset/review capability is now REAL, proven end-to-end through `/v1` against the
+  real pi adapter (and re-checked on jouzu 0.1.18).
+- The OPEN rows above are unproven, not broken. `20261004-070000` is a known open defect (review
+  re-enable race).

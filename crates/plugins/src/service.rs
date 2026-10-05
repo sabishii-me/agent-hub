@@ -42,7 +42,10 @@ impl PluginError {
     pub fn code(&self) -> &'static str {
         match self {
             PluginError::NotFound(_) => "not_found",
-            PluginError::NotInstalledByHub(_) => "plugin_remove_failed",
+            // A deployment directory is READ-ONLY to the hub, not a failed remove: the
+            // contract names 409 conflict (nothing was attempted; a 500 would be a lie
+            // and, being retryable, would loop).
+            PluginError::NotInstalledByHub(_) => "conflict",
             PluginError::InUse(_, _) => "plugin_in_use",
             PluginError::Busy(_, _) => "plugin_dir_busy",
             PluginError::InvalidManifest(_) => "plugin_archive_invalid",

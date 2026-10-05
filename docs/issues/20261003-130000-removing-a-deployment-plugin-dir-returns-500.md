@@ -30,3 +30,13 @@ says 409). Map the `NotInstalledByHub` error to a 409 code, not `plugin_remove_f
 
 `python tests/plugins/a-plugin-is-installed-listed-enabled-and-removed.py` ->
 "the hub refuses to remove a deployment dir" with status 409 must pass.
+
+## Status: FIXED (2026-10-05)
+
+`crates/plugins/src/service.rs`: `PluginError::NotInstalledByHub` now maps to the contract code
+`conflict` (**409**), not `plugin_remove_failed` (500). The detail still names the directory.
+Verified: `tests/plugins/a-plugin-is-installed-listed-enabled-and-removed.py` -> 9/9
+("the hub refuses to remove a deployment dir" now sees 409).
+
+Also (`tests/run.py`): the default layer list was missing `plugins`, `harnesses` and `presets`,
+so this failure never ran in a default `run.py`. Completed the list; the suite is now **32/32**.

@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LAYERS = ["contract", "lifecycle", "interrupt", "approvals", "concurrency", "provider", "tools", "model", "skills", "connections"]
+LAYERS = ["contract", "lifecycle", "interrupt", "approvals", "concurrency", "provider", "plugins", "harnesses", "presets", "tools", "model", "skills", "connections"]
 
 
 def collect(layer):
