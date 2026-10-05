@@ -64,15 +64,19 @@ try:
     t.check(p["status"] < 300 and pj.get("ready") is True, "prepare reports a ready runtime", f"body={p['text'][:160]}")
     t.check(pj.get("version"), "prepare names the runtime version", f"version={pj.get('version')}")
 
-    # disable / enable flip the plugin's enabled state (read it back, not just the 2xx).
+    # disable / enable flip the HARNESS status (the contract has no plugin `enabled`
+    # field; the plugin's `state` is absent|installing|removing|preparing|failed|ready).
+    # Read the harness back and assert its status, not a guessed field.
     dis = hub.post("/v1/plugins/pi/disable")
     t.check(dis["status"] < 300, "disable is accepted", f"status={dis['status']} {dis['text'][:120]}")
-    t.check((hub.get("/v1/plugins/pi")["json"] or {}).get("plugin", {}).get("enabled") is False,
-            "after disable the plugin reads disabled", f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
+    hs = next((h for h in (hub.get("/v1/harnesses")["json"] or {}).get("harnesses", []) if h.get("id") == "pi"), None)
+    t.check(hs is not None and hs.get("status") == "disabled",
+            "after disable the harness reads disabled", f"harnesses={(hub.get('/v1/harnesses')['json'] or {}).get('harnesses')}")
     en = hub.post("/v1/plugins/pi/enable")
     t.check(en["status"] < 300, "enable is accepted", f"status={en['status']} {en['text'][:120]}")
-    t.check((hub.get("/v1/plugins/pi")["json"] or {}).get("plugin", {}).get("enabled") is True,
-            "after enable the plugin reads enabled", f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
+    hs2 = next((h for h in (hub.get("/v1/harnesses")["json"] or {}).get("harnesses", []) if h.get("id") == "pi"), None)
+    t.check(hs2 is not None and hs2.get("status") == "enabled",
+            "after enable the harness reads enabled", f"harnesses={(hub.get('/v1/harnesses')['json'] or {}).get('harnesses')}")
 
     # icon: the plugin ships one; the variant is served as bytes.
     ic = hub.get("/v1/plugins/pi/icon/light")
@@ -81,15 +85,18 @@ try:
     # REMOVE: really removes the plugin this hub installed.
     d = hub.delete("/v1/plugins/pi", key="remove-1")
     t.check(d["status"] in (200, 202), "remove is accepted", f"status={d['status']} {d['text'][:140]}")
+    # After remove the plugin is gone: GET is 404 (the contract's `state` has no
+    # "removed" value - absent = catalog-only - so absence is a 404, not a field).
+    gone = False
     state2 = None
     for _ in range(240):
         g2 = hub.get("/v1/plugins/pi")
-        st = g2["status"]
-        state2 = "absent" if st == 404 else (g2["json"] or {}).get("plugin", {}).get("state")
-        if state2 == "absent":
+        if g2["status"] == 404:
+            gone = True
             break
+        state2 = (g2["json"] or {}).get("plugin", {}).get("state")
         time.sleep(0.25)
-    t.check(state2 == "absent", "after remove the plugin is ABSENT (really removed)", f"state={state2}")
+    t.check(gone, "after remove the plugin GET is 404 (really removed)", f"last_state={state2}")
     still = [r.get("id") for r in (hub.get("/v1/plugins")["json"] or {}).get("plugins", [])]
     t.check("pi" not in still, "the removed plugin is gone from the list", f"rows={still}")
 finally:
