@@ -492,6 +492,21 @@ impl Plugins {
         Ok(())
     }
 
+    /// A remove that FAILED: the plugin could not be deleted (e.g. a live process
+    /// still holds its files). It must NOT stay `removing` forever - the caller can
+    /// never learn it failed and the resource lies. Leave `Removing`, record
+    /// `failed` with the reason, and announce. The plugin dir is still on disk, so
+    /// the verdict is `failed` (docs/issues/20261005-060000).
+    pub fn fail_remove(&self, id: &str, reason: &str) {
+        self.leave(id, Op::Removing);
+        self.enter(id, Op::Failed);
+        let mut row = self.row_for_dir(id);
+        row.state = PluginState::Failed;
+        row.detail = Some(reason.to_string());
+        let _ = self.db.upsert_plugin(&row);
+        self.announce(id);
+    }
+
     fn current_op(&self, id: &str) -> Option<Op> {
         let ops = self.ops.lock().expect("ops mutex");
         ops.get(id).and_then(|s| s.verdict())

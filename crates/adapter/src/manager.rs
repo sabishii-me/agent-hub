@@ -416,6 +416,14 @@ impl Adapters {
         Ok(handle)
     }
 
+    /// Stop a harness's cached adapter process, if one is running. Dropping the
+    /// handle closes the bus, and the child is killed (the bus spawns with
+    /// `kill_on_drop`). Used before REMOVING a plugin so a live adapter does not
+    /// hold the plugin's files (docs/issues/20261005-060000). Idempotent.
+    pub fn stop_harness(&self, id: &str) {
+        self.running.lock().expect("running").remove(id);
+    }
+
     /// The `AGENT_HUB_*` environment for an adapter, plus the connection
     /// credentials, exactly as the contract and the old hub define it: the
     /// process environment with `AGENT_HUB_SECRET_KEY` removed, then the hub's

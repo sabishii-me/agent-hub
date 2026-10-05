@@ -318,7 +318,16 @@ async fn remove(
                 location,
                 serde_json::json!({ "id": id, "state": "removing" }),
                 async move {
-                    let outcome = tokio::task::spawn_blocking(move || plugins.finish_remove(&id2)).await;
+                    // Stop the harness's cached adapter FIRST: a prepared/running
+                    // adapter holds files under the plugin dir, so the delete fails
+                    // with os error 32 (docs/issues/20261005-060000). Dropping the
+                    // handle kills the child (kill_on_drop).
+                    adapters.stop_harness(&id2);
+                    // Give the OS a moment to release the files the child held.
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    let plugins2 = plugins.clone();
+                    let id3 = id2.clone();
+                    let outcome = tokio::task::spawn_blocking(move || plugins.finish_remove(&id3)).await;
                     match outcome {
                         Ok(Ok(())) => {
                             // The plugin is GONE: drop it from the live registry
@@ -326,8 +335,15 @@ async fn remove(
                             // until a restart).
                             adapters.scan();
                         }
-                        Ok(Err(e)) => tracing::error!(error = %e, "detached remove failed"),
-                        Err(e) => tracing::error!(error = %e, "remove task panicked"),
+                        Ok(Err(e)) => {
+                            // A failed remove must NOT hang at `removing` forever.
+                            tracing::error!(error = %e, "detached remove failed");
+                            plugins2.fail_remove(&id2, &e.to_string());
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "remove task panicked");
+                            plugins2.fail_remove(&id2, &e.to_string());
+                        }
                     }
                 },
             )

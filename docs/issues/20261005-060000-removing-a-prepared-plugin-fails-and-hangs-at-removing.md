@@ -40,3 +40,18 @@ triggers it.)
 ## Status
 
 recorded, NOT fixed.
+
+## UPDATE (2026-10-05): defect 2 FIXED; defect 1 needs a manager change
+
+- **Defect 2 FIXED**: a failed remove now records `failed` (a terminal state) instead of
+  hanging at `removing` forever (`Plugins::fail_remove`, wired in the remove route). Verified:
+  remove of a prepared plugin now reads `failed`, not `removing`.
+- **Defect 1 NOT fixed**: `Adapters` caches ONE adapter process per harness (a `RequestHandle`
+  in a map), but the `AgentBus` (which owns the `Child`) is moved into the pump task, so
+  `stop_harness` (remove the map entry) does NOT kill the child - it stays alive (observed: a
+  `node` process survives) and still holds the plugin's files, so `remove_dir_all` keeps failing
+  with os error 32. The manager needs a real way to STOP a cached adapter (keep a kill handle /
+  the bus, or a shutdown signal) - a design change, recorded rather than guessed.
+
+Net: the resource is now HONEST (`failed`) but the remove still cannot complete when the plugin
+was prepared. Both are the SAME issue; the test stays RED on the 'really removed' assertions.
