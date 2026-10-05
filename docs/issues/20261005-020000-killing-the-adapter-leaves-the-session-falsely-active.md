@@ -36,3 +36,22 @@ Is "stays active" a pre-existing hub defect, or did `ab2f1fa` (removing the boun
 waits / making control requests bounded only by process liveness) remove the very death-detection
 that used to flip the status? MUST be answered with a controlled comparison (run this probe at the
 pre-`ab2f1fa` commit), not by assumption. Recorded here BEFORE any fix.
+
+## CONTROL (2026-10-05): it is PRE-EXISTING, not from my change
+
+Built `ab2f1fa^` (1a2efbc, BEFORE my timeout/liveness edits) in a git worktree and ran the
+SAME probe against THAT binary (same pi adapter, same kill of the node child):
+
+```
+before kill: active
+adapter children: [56020]
+AFTER kill, session status = 'active'
+```
+
+Identical. So the 'still claims active after the adapter child dies' behaviour is PRE-EXISTING
+(not introduced by `ab2f1fa`), and my change did not cause it. What I DID do wrong is hide it:
+the test asserted `st is not None`, so it passed on the very symptom its docstring says must not
+happen. Fix direction: the hub must not keep `active` when the process behind it is gone; and
+the turn must be refused or settle (it does settle `failed`, so that half is fine). The specific
+status when a live hub loses its adapter child is NOT contract-dictated -> assert the RE
+QUIRED property (`!= active`, no hang), not an invented exact value.
