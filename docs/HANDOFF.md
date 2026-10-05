@@ -1,11 +1,10 @@
-# HANDOFF — resume here (2026-10-04)
+# HANDOFF — resume here (2026-10-05)
 
-Context is about to be lost. Read this, then `docs/tasks/alignment-code-vs-goal.md`, then
-`docs/issues/20261004-050000-*`. Do NOT act before reading the OPEN PROBLEM below.
+Read this, then `docs/tasks/alignment-code-vs-goal.md`, then the open issues below.
 
-Hub HEAD: `76e968c` (branch `feat/hub-modular-redesign`), working tree clean.
-Plugin SHAs: pi `9fb8c1c` (+ an UNCOMMITTED `pi-adapter.cjs` change: the turn_end
-clientMessageId fix), jouzu `31ce603`, dsh `580aca8` (+ uncommitted dialect/sources fixes).
+Hub HEAD: `628b4d8` (branch `feat/hub-modular-redesign`), working tree clean.
+Plugin SHAs (branch `fix/runtime-placement`): pi `7a23419`, jouzu `89e17d4` (runtime 0.1.18),
+dsh `580aca8`. The pi `turn_end clientMessageId` change is COMMITTED (`7a23419`).
 
 ## THE TASK (unchanged)
 
@@ -106,45 +105,44 @@ Candidate sub-hypotheses to check with that dump (none confirmed):
   `session_busy`; the unconfirmed-cancel sweep judges by PROCESS LIVENESS, never a timer
   (`crates/db/src/sessions.rs`). Contract: `turn_end` now `requires clientMessageId`; the
   missing `plugins/PROTOCOL.md` (the contract's `proseAuthority`) was RESTORED.
-- The pi adapter's `turn_end` now carries `clientMessageId` + `state` (UNCOMMITTED in
-  prts-harness-pi).
+- The pi adapter's `turn_end` carries `clientMessageId` + `state` (COMMITTED: pi `7a23419`).
 - Real test suite (Python, `python tests/run.py [layer]`): 28 files / 234 checks, NO env gate,
   NO skip (a missing real dependency FAILS). Layers: contract, lifecycle, model, tools,
   interrupt, approvals, presets, concurrency, provider, skills, connections, harnesses,
-  plugins. Last full run: **25/27 files pass; the 2 RED are the approval tests
-  (`tests/approvals/*`) - the open problem above.**
+  plugins. Latest full run: **28/28 files pass** (the keychain-leak fixture was fixed; see
+  the 080000 section below).
 
-## ALSO DONE THIS RUN: jouzu upgraded 0.1.13 -> 0.1.18
+## RESOLVED: 20261004-080000 (the OS store was full of our leaked test credentials)
 
-- `prts-harness-jouzu` `89e17d4`: manifest plugin 0.1.9 -> 0.1.10, runtime pin 0.1.13 -> 0.1.18;
-  `runtime.sources.json` re-recorded with `scripts/record-runtime.mjs --resolve --write` (131
-  sources, every non-bundled one with registry integrity). `runtime/` is gitignored; installed
-  from the record via the hub's `runtime.mjs installRuntime`. Verified: `jouzu 0.1.18`,
-  bundles pi `0.87.1`. Real `/v1`: session active, turn ended; approvals 8/8 + 2/2 + 9/9 pass
-  on the newer pi. The remaining jouzu suite failures are pre-existing (also fail at 0.1.13).
+The suite leaked OS credentials: every `Hub()` made a fresh temp data dir -> a fresh hub
+instance id -> a fresh `<id>:provider-p.agent-hub:<id>` keychain entry, and `cleanup()` only
+deleted the dir. Accumulated to 532 of 589 entries; the Windows store's per-user cap filled
+and `CredWriteW` then returned error 8 for EVERY write, so the hub's boot probe failed and
+every credential write was 501. NOT a broken vault (my earlier claim - retracted).
 
-## NEW OPEN ISSUES (recorded, NOT fixed)
+Fixed: cleaned the 532 entries (kept the user's 57) and `tests/lib/hub.py` `cleanup()` now
+deletes each provider/connection it created via `/v1` (the production path) before the data
+dir goes away, releasing the keychain entry. Commits: hub `f816076` (fix), `a8f772f` (issue
+resolved), `628b4d8` (postmortem `docs/postmortems/20261005-000000-*`). Verified: provider
+CRUD twice -> 13/13 each, entries 0 before/after; full suite 28/28 with a flat count. Reverted
+the earlier `crates/secrets` name-length change (`a3b00db`) - it was based on a retracted
+theory and fixed nothing.
 
-- `docs/issues/20261004-060000` — jouzu adapter gaps (fork-after-reopen crashes the adapter;
-  post-cancel turn settles failed; concurrent cancel+start). Pre-existing, NOT upgrade
-  regressions. Owner: the jouzu adapter.
-- `docs/issues/20261004-070000` — PATCH `review:true` is reported applied but the next turn can
-  run ungated (~4/20). A race: the adapter treats pi's prompt ACCEPTANCE of `/review on` as the
-  switch taking effect and reads `applied.review` from a log entry that can predate the
-  command's own append ("applied" from the log, not the live gate — same class as 050000).
-  Exposed by `tests/approvals/review-remains-switchable-after-a-preset.py`. Owner: the adapter.
+## ALSO DONE: jouzu upgraded 0.1.13 -> 0.1.18
 
-## BLOCKED RIGHT NOW: the OS secret store (20261004-080000)
+- `prts-harness-jouzu` `89e17d4`: plugin 0.1.9 -> 0.1.10, runtime pin -> 0.1.18 (bundles pi
+  0.87.1); `runtime.sources.json` re-recorded. Real `/v1`: session active, turn ended;
+  approvals 8/8 + 2/2 + 9/9 pass on the newer pi.
 
-`POST /v1/model-providers` is 501 (`no secret store`) and `cargo test -p agent-hub-secrets --
---nocapture` prints `SKIP: OS secret store unavailable on this host`. Every REAL-provider test
-is therefore blocked (they FAIL, correctly). VaultSvc is Running and `cmdkey` works, so it is
-the keyring backend in a freshly-spawned shell, not the code; 7 stray agent-hub.exe were killed
-and the 501 persists. Resume when that probe stops printing SKIP.
+## OPEN (recorded, NOT fixed)
 
-Also in flight (uncommitted): `prts-harness-pi` `stash@{0}` = a partial fix for 20261004-070000
-(reviewCommand waits for the observed review state; 4/20 -> 2/20, residual unexplained). Do not
-commit until the residual is fixed and verified.
+- `docs/issues/20261004-060000` - three jouzu suite failures. **WARNING: MISLABELED.** They
+  were recorded as "jouzu adapter gaps" but NEVER located to jouzu code; they are UNLOCATED.
+  Re-check and trace before believing the wording (they also predate the 0.1.18 upgrade).
+- `docs/issues/20261004-070000` - `PATCH review:true` is reported applied but the next turn can
+  run ungated (~4/20). A real, separately located defect (adapter `reviewCommand` treats pi's
+  acceptance as the switch taking effect). `prts-harness-pi` `stash@0` holds an UNVERIFIED
+  partial fix (4/20 -> 2/20); do not commit until the residual is fixed and verified.
 
 ## THE RULE THIS RUN MUST HOLD
 
@@ -157,9 +155,17 @@ commit until the residual is fixed and verified.
 - Review results have a shelf life; they are NOT targets or preconditions.
 - Do NOT add debug to shipped code to chase a bug; use the adapter's existing traces, or a
   temporary diagnostic you REVERT.
+- A diagnosis needs a CONTROL (change one variable, hold state fixed); one observation is a
+  guess, and it is reported as a guess, never as a cause.
+- Enumerate the real STATE before theorizing (one `CredEnumerateW` ended a day of guessing).
+- Suspect MY inputs first (my test, my run, what I put on the host) before the environment.
+- NEVER experiment on the owner's system (no `git credential-manager`, `cmdkey`, registry edits).
+- NEVER make a test green by weakening it; a red test pointing at a real defect is correct output.
+- An unlocated failure is UNLOCATED; never attribute it to a component I did not trace it to.
 
 ## NEXT ACTION
 
-The preset/approval capability is now real and enforced end-to-end (20261004-050000 closed).
-Continue §17: the next capability that is OPEN/unproven in `docs/tasks/alignment-code-vs-goal.md`
-(see ALSO OPEN above). Keep the rule: when a document is silent, stop and ask - do not invent.
+The store/leak problem is closed; the suite is green (28/28) and no longer pollutes the host.
+Return to the task: §17 in `docs/ARCHITECTURE.md`, driven by `docs/tasks/alignment-code-vs-goal.md`
+(the next capability that is OPEN/unproven). Also owed: re-trace 060000 (do not leave unlocated
+failures worded as a plugin defect). Keep the rules below.
