@@ -3,6 +3,12 @@
 # honestly (the model call can no longer complete), the session must stay usable, and the
 # hub must not be left thinking a turn is running. Real fault injection: only a real
 # process is killed; nothing is faked.
+#
+# FACT:    killing the RUNTIME process (adapter alive) settles the turn and never reports a clean completed
+# SOURCE:  ARCHITECTURE s21 N2; contract/v1.json turn.ended
+# EXPOSES: a killed runtime reported as a clean completion
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

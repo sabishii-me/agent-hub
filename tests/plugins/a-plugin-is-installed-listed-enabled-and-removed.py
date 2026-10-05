@@ -2,6 +2,12 @@
 # local path (a git source), list, read, prepare (the adapter materialises its runtime),
 # disable/enable, then remove. The hub scans its OWN plugins root; a deployment dir is not
 # removed (that rule is exercised in the docs, not faked here).
+#
+# FACT:    plugin list/get/prepare/enable/disable/icon; a deployment dir is NOT removable (409)
+# SOURCE:  contract/v1.json /v1/plugins/*; ARCHITECTURE s21 N3
+# EXPOSES: a removable deployment dir, or a 500 on the refusal
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

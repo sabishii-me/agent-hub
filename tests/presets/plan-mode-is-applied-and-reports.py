@@ -3,6 +3,12 @@
 # (the contract's plan.changed). A PATCH to true must be APPLIED (the session reports
 # plan true, or the change is refused with a reason) - never silently ignored. Exposes the
 # case where the plan knob does nothing. Real adapter; no model call needed to toggle.
+#
+# FACT:    PATCH plan:true is APPLIED (the session reports plan true), and plan:false is accepted
+# SOURCE:  ARCHITECTURE s23; contract/v1.json PATCH session policy plan
+# EXPOSES: a plan knob that silently does nothing
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

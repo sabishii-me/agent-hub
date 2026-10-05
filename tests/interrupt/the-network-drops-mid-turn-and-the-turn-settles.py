@@ -2,6 +2,12 @@
 # forwarder (a real network hop, not a fake provider); the turn runs; then the forwarder
 # is KILLED, so the in-flight connection dies - a REAL network failure. The turn must
 # settle HONESTLY (not hang, never `completed`), and the hub must keep answering.
+#
+# FACT:    a network drop mid-turn settles the turn (failed), never a clean completed; the hub survives
+# SOURCE:  ARCHITECTURE s21 N2; contract/v1.json turn.ended
+# EXPOSES: a dropped network reported as a completed turn, or a frozen hub
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

@@ -3,6 +3,12 @@
 # the real reason - never a session that looks `active` and then silently produces no
 # model answer. The failure is real (a real connection attempt); the hub is driven
 # through /v1.
+#
+# FACT:    a session whose provider endpoint is unreachable fails the start honestly (starting_failed + the real error)
+# SOURCE:  contract/v1.json session status + startError
+# EXPOSES: a fake active session on a dead provider
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

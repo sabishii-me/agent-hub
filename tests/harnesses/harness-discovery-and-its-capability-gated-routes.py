@@ -3,6 +3,12 @@
 # a fabricated empty. pi has models/presets/skills; it has NO providers, so its
 # connections/auth routes must be `unsupported`, and jouzu's (which HAS providers) must not
 # be a blanket 501.
+#
+# FACT:    GET /v1/harnesses lists the real plugins; capability-gated routes answer from the harness's own declaration
+# SOURCE:  contract/adapter-v1.json manifest+capabilitySurface; contract/v1.json /v1/harnesses/*
+# EXPOSES: a fabricated capability answer (known:true when the harness does not declare it)
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

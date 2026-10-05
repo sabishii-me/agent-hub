@@ -2,6 +2,12 @@
 # state and the session must be usable again - the occupancy is released by a CONFIRMED stop,
 # not a hope. This needs a REAL provider (a turn only runs with one), so it SKIPs without
 # authorization; it is never faked.
+#
+# FACT:    a CONFIRMED cancel ends the turn cancelled and the session accepts a new turn
+# SOURCE:  contract/v1.json turn.ended enum; ARCHITECTURE s21 N2 (interrupted is the UNCONFIRMED case)
+# EXPOSES: a confirmed cancel reported as failed/interrupted, or a session left wedged
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

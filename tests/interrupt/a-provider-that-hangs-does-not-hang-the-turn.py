@@ -3,6 +3,12 @@
 # simply never answers. The session start (the adapter probes /models at grant) must not
 # hang the hub forever, and it must fail honestly. This is the "no first token / dead
 # route" case that a fake provider would hide.
+#
+# FACT:    a HANGING provider does not freeze the hub; the session reaches a defined, non-active state
+# SOURCE:  ADR-0009; ARCHITECTURE s12/13
+# EXPOSES: a hub frozen by a provider that never answers
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

@@ -3,6 +3,12 @@
 # approval appears on GET /v1/sessions/{id}/approvals, allowing it (POST the SAME id)
 # resumes and the tool runs; denying it blocks the tool with no side effect. This test
 # EXISTS TO EXPOSE THE PROBLEM: if the preset does not actually gate, it goes red.
+#
+# FACT:    a session with an approve:true preset raises a REAL approval before the tool runs
+# SOURCE:  ARCHITECTURE s22; contract/v1.json PATCH session policy review; the heavy-review preset in <plugin>/presets/
+# EXPOSES: a preset that reports appliedPreset but does NOT gate the tool (20261004-050000 class)
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

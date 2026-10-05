@@ -1,6 +1,12 @@
 # The hub's own connection store: create -> list -> patch -> delete, over the REAL /v1
 # surface. A connection's token goes to the secret store; the row keeps a reference, never
 # the value. Delete is idempotent.
+#
+# FACT:    connections CRUD over /v1; a deleted row is gone; the token value is never echoed
+# SOURCE:  contract/v1.json /v1/connections
+# EXPOSES: a token leaked into a response, or a delete that leaves the row
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

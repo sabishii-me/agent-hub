@@ -1,6 +1,12 @@
 # Metadata routes must answer REAL, not 501: the hub's status, its surface, its OpenAPI
 # projection, and the merged model list. Each is read and its SHAPE checked against the
 # contract (a red here is the product's fault).
+#
+# FACT:    status/surface/openapi/models answer REAL (200), and the served openapi equals the committed contract
+# SOURCE:  contract/v1.json GET /v1/status,/v1/surface,/v1/openapi.json,/v1/models
+# EXPOSES: a stub/501 metadata route, or a served contract drifting from the file
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import json
 import os
 import sys

@@ -2,6 +2,12 @@
 # mid-turn. The turn must settle honestly (not hang forever, not stay `running` with no
 # process), and the session must not keep claiming `active`. The adapter is the real pi
 # adapter - only its process is killed (real fault injection, the hub is never bypassed).
+#
+# FACT:    an adapter killed MID-TURN settles the turn (failed), and the session does not keep claiming active
+# SOURCE:  ARCHITECTURE s21 N2; docs/issues/20261005-020000
+# EXPOSES: a turn left running, or a processless session stuck active
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

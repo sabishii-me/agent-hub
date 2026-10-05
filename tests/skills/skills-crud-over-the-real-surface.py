@@ -1,6 +1,12 @@
 # The /v1/skills routes as they exist today (the directory model). This file proves the ROUTES
 # behave (list/read/write/delete + path refusal); it does NOT claim the model is the approved
 # one - the skills DECISION is open (docs/issues + test-suite.md, timestamped 2026-10-03).
+#
+# FACT:    the /v1/skills routes answer over the real surface, and a path escape is refused
+# SOURCE:  contract/v1.json /v1/skills/*
+# EXPOSES: a stub skill route or a path escape accepted
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

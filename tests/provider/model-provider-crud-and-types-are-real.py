@@ -1,5 +1,11 @@
 # The model-provider domain: types come from a REAL plugin descriptor; create refuses an
 # unknown type BEFORE any write; CRUD is real; the credential is never echoed; delete is real.
+#
+# FACT:    provider types come from a REAL plugin descriptor; an unknown type is refused before any write; the token is never echoed
+# SOURCE:  contract/v1.json /v1/model-providers/*; contract/adapter-v1.json providerSurface
+# EXPOSES: a fabricated provider type, a stored-but-refused write, or a leake
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

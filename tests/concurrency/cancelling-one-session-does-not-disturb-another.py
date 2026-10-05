@@ -2,6 +2,12 @@
 # abort is bound to the cancelled turn's own process generation, so the other session's
 # turn must keep running and settle on its own. No fake: a real provider drives two real
 # turns on two real sessions.
+#
+# FACT:    cancelling one session does not disturb another running concurrently
+# SOURCE:  ARCHITECTURE s12; contract/v1.json POST /v1/sessions/{id}/cancel
+# EXPOSES: cross-talk: a cancel touching a sibling session
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

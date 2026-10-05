@@ -3,6 +3,12 @@
 # the contract states; a queued second turn would run two prompts on one process and
 # the abort/cancel binding would be ambiguous. No fake: a real provider drives a real
 # turn on the real pi adapter.
+#
+# FACT:    a second turn while one RUNS is refused 409 session_busy, never queued
+# SOURCE:  contract/v1.json POST /v1/sessions/{id}/turns; ARCHITECTURE s12
+# EXPOSES: a queued or parallel second turn on one process (20261003-160000)
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

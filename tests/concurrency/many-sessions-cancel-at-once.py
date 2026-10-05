@@ -2,6 +2,12 @@
 # must reach a terminal state; none may wedge another; every session must stay usable.
 # The stop of one adapter must not block the settle of another. No fake: N real turns on
 # N real sessions, N real aborts.
+#
+# FACT:    N turns run at once, and cancelling them together settles every one
+# SOURCE:  ARCHITECTURE s12; contract/v1.json cancel + turns
+# EXPOSES: a wedged turn after a concurrent cancel
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

@@ -1,6 +1,12 @@
 # ADR-0009: the hub serves >=100 concurrent connections, and no in-flight operation times a
 # connection out. This is measured (a real concurrent poll against the real binary), never
 # asserted. A slow request must not block a fast one either.
+#
+# FACT:    the hub serves >=100 concurrent connections and no in-flight op times out
+# SOURCE:  ADR-0009; ARCHITECTURE s12
+# EXPOSES: request handling blocked by another request (a freeze)
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import concurrent.futures as cf
 import os
 import sys

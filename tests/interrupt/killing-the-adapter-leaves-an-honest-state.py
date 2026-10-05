@@ -2,6 +2,12 @@
 # session is live. The hub must notice (its pipe to the child closes) and become HONEST:
 # the session must not keep claiming `active` with no process, and a turn must not hang
 # forever. The adapter is the REAL pi adapter (no fake): only the process is killed.
+#
+# FACT:    killing the adapter CHILD does not leave the session claiming active; a later turn is refused, not hung
+# SOURCE:  ARCHITECTURE s21 N2 (no process behind the row); docs/issues/20261005-020000
+# EXPOSES: a session that keeps active with no process (20261005-020000)
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

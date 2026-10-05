@@ -2,6 +2,12 @@
 #  - cancel on an IDLE session is idempotent and does not error or wedge it;
 #  - repeated cancel is idempotent;
 #  - a cancel with no in-flight turn does NOT put the session into a stuck state.
+#
+# FACT:    cancel on an idle session is a clean no-op, repeated cancel is idempotent, and the session is not wedged
+# SOURCE:  contract/v1.json POST /v1/sessions/{id}/cancel
+# EXPOSES: a cancel that 500s or wedges an idle session
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

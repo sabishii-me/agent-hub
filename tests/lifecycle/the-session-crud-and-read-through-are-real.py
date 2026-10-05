@@ -1,6 +1,12 @@
 # The session CRUD and every read-through route against a REAL adapter (no model turn, so no
 # auth): list, get, patch (title), turns, messages, stats, skills, artifacts, compact,
 # repair preview, delete. Each is read and its SHAPE checked against the contract.
+#
+# FACT:    session CRUD and every read-through route answer from a REAL adapter
+# SOURCE:  contract/v1.json /v1/sessions/*
+# EXPOSES: a stub read-through route or a delete that leaves the row
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 

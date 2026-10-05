@@ -1,6 +1,12 @@
 # The hub must serve EXACTLY what the contract declares: no route it does not declare, and
 # no declared route left unmounted. A route that answers `not_implemented` is a stub, which
 # is not a capability; this file proves the SHAPE, not the behaviour (other layers do that).
+#
+# FACT:    the hub serves EXACTLY the contract's routes: none extra, none missing, no stub
+# SOURCE:  contract/v1.json endpoints (74)
+# EXPOSES: an undeclared route, a missing route, or a parameterless GET answering 501
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import json
 import os
 import sys

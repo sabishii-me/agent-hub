@@ -1,6 +1,12 @@
 # A real model turn must produce a real assistant message AND confirm the identity: the model
 # that answered is the one that was requested, and the hub reports it. A second turn continues
 # the SAME conversation. This needs a REAL provider, so it SKIPs without authorization.
+#
+# FACT:    a real model turn produces an assistant message, the hub confirms the applied provider/model, and turn 2 continues the conversation
+# SOURCE:  contract/v1.json session appliedProvider/appliedModel + messages shape
+# EXPOSES: a fabricated assistant message, or a second turn that does not recall the first
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

@@ -4,6 +4,12 @@
 # the cancel settles (and runs on a clean process), or it is refused while the old turn is
 # still held. What it must NEVER do: run two prompts at once, or leave the session stuck.
 # Real provider, real adapter, real abort.
+#
+# FACT:    a turn sent the instant a cancel is in flight has a DEFINED outcome (admitted or 4xx), never a 5xx/hang
+# SOURCE:  contract/v1.json POST /v1/sessions/{id}/turns
+# EXPOSES: a 5xx or a hang from the immediate follow-up
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 import time

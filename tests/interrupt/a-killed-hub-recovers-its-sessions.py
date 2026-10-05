@@ -1,6 +1,12 @@
 # A hub KILLED mid-life (a power cut, no cleanup) must come back to a state that makes sense
 # and must not leave a session claiming `active` without a live process. This drives a real
 # binary, kills it with taskkill /T /F, restarts on the SAME data dir, and reads the truth.
+#
+# FACT:    a hub killed with no cleanup restarts, reconciles an orphaned active session to needs-repair, and still serves
+# SOURCE:  ARCHITECTURE s21 N2 (restart reconciliation)
+# EXPOSES: a restart that leaves a processless session active, or a hub that cannot recover
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
 import sys
 
