@@ -111,3 +111,27 @@ approved (a turn-settle abort that yields `undefined` would DENY, so it is not t
 exact `extension_ui_response` value the adapter writes for the failing turn, and whether the
 hub raised an approval at all for it. Do NOT claim this fixed until the toggle test is 0/20 on
 jouzu too.
+
+## UPDATE 2 (2026-10-05): on jouzu the failing turn's approval is answered WITHOUT the hub raising it
+
+Instrumented the adapter's bus reply and the hub's reverse handler for one failing jouzu run:
+
+- Adapter (bus): the failing turn's tool sends `approval_need` (reqId UUID) and receives
+  `{"approved":true,"reason":"allowed"}` - so the ADAPTER sees an allow.
+- Hub (temporary eprintln in the reverse handler): for that run it printed exactly ONE
+  `raise` and ONE `resolve` - and both were for the **step-1** approval
+  (`ap-1791190628481`, decision `Some("allow")`, the test's own allow). **It never raised the
+  failing turn-3 approval at all.**
+
+So on jouzu the failing turn's `approval_need` reaches the adapter's reply path already
+answered `allowed`, while the hub's reverse handler never raised it. That points at the
+adapter/hub **reverse-request binding for the restarted/again-attached pi**, not at the review
+gate (the extension is correct: it gated, and `hub-review/decision` shows `approved:true`
+because the adapter handed it an allow). Candidate shape: the `approval_need` is answered on a
+path that does not run the reverse handler (a stale/previous waiter, or the reply associated
+with the wrong session runtime) - the same family as `20261004-040000` (a terminal taken by the
+next turn). NOT yet root-caused; the pi-1.0 path is unaffected (0/20).
+
+Next: trace WHERE the `{"approved":true,"reason":"allowed"}` reply for the failing turn
+originates on jouzu (which waiter/id answered it), and whether the hub's pump for that session
+had a reverse handler at that moment.
