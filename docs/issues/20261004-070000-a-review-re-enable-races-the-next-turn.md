@@ -135,3 +135,17 @@ next turn). NOT yet root-caused; the pi-1.0 path is unaffected (0/20).
 Next: trace WHERE the `{"approved":true,"reason":"allowed"}` reply for the failing turn
 originates on jouzu (which waiter/id answered it), and whether the hub's pump for that session
 had a reverse handler at that moment.
+
+## UPDATE 3 (2026-10-05): pi re-verified in the NEW delivery shape
+
+The extension delivery changed (20261005-010000: pi now loads the hub extension with
+`--no-extensions --extension <hub dir>`, no workspace copy, no `--approve`). The pi half of this
+issue was re-run in that shape, because the old evidence rode the removed `--approve` discovery
+path:
+- `tests/approvals/review-remains-switchable-after-a-preset.py` **20x -> 20/20** (step 3: after
+  `PATCH review:true`, the tool raises an approval every run).
+- `tests/approvals/an-approval-preset-asks-before-every-tool.py` **12x -> 12/12**.
+
+So on pi the fix (adapter `096759f`) holds under the explicit-`-e` delivery too. The JOZU half is
+still open and is NOT this code (jouzu is a fork): see UPDATE 2, and the jouzu extension-delivery
+change owed under 20261005-010000.
