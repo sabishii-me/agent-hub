@@ -144,6 +144,28 @@ theory and fixed nothing.
   acceptance as the switch taking effect). `prts-harness-pi` `stash@0` holds an UNVERIFIED
   partial fix (4/20 -> 2/20); do not commit until the residual is fixed and verified.
 
+## 070000 RESIDUAL (investigated 2026-10-05, NOT closed)
+
+The stale-log half is FIXED (pi `096759f`, jouzu `63d57d7`): reviewCommand resolves only
+from a NEW hub-review/state entry, and settle() no longer clobbers applied.review. Verified
+pi 1.0.0: review-toggle 9/9, 20x loop 0/20, suite 32/32.
+
+REMAINING on jouzu (pi 0.87.1): ~3/12. Isolated, NOT the review gate: the extension gates
+correctly and sends approval_need; the adapter sees {approved:true,reason:"allowed"} while
+the hub's reverse handler raised/resolved ONLY the step-1 approval - turn 3's was never
+raised. So the failing approval_need is answered on a path that does not run the reverse
+handler (stale waiter / wrong session runtime) - same family as 20261004-040000. See the
+issue's UPDATE 2. NOT root-caused; the pi-1.0 path is unaffected.
+
+## OPEN DIRECTION QUESTION raised by the owner (READ THE DESIGN/ADR FIRST)
+
+The owner says the EXTENSION HAS BEEN REDESIGNED and asks whether we are still using the
+WORKSPACE + `--approve` approach. If so, it is WRONG: the task's point is that the extension
+is NOT to be placed into the workspace. CHECK `docs/ARCHITECTURE.md` and the ADRs (in the
+desktop/web repo `docs/decisions/`) for how the extension is meant to be delivered, BEFORE
+any more adapter work. The current pi adapter still does `installAgentPresetsExt(cwd)` into
+`<cwd>/.pi/extensions` and spawns pi with `--approve`; that may be the entire wrong shape.
+
 ## THE RULE THIS RUN MUST HOLD
 
 - When a document is silent, DO NOT invent; stop and ask for a design decision.
