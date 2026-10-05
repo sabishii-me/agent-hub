@@ -48,3 +48,26 @@ recorded, NOT fixed. The test is the record; do not lower N to hide it.
 - NOT root-caused. Do NOT guess a fix; trace the exact syscall + which process holds the file
   (the adapter's provider write vs the pi process's own config read/write) with a controlled
   run before changing anything.
+
+## ROOT CAUSE (2026-10-05): the hub's EXTENSION SNAPSHOT SWEEP deletes a snapshot a live session is using
+
+The failure is NOT in the adapter. The adapter log shows:
+
+```
+[pi-harness] Error: Failed to load extension "...extensions.snapshots/.snap-<id>/agent-presets": Extension path does not exist
+[pi-adapter] pi exited code=1
+```
+
+The hub hands each session an IMMUTABLE extension snapshot path (`AGENT_HUB_INSTALLED_EXTENSIONS_DIR`,
+`crates/extensions/src/service.rs::install_for_harness`) and the adapter loads it with `-e`. But
+`sweep_old_snapshots` keeps only the newest `KEEP_SNAPSHOTS = 8` and **deletes every older one -
+with NO check that a live session is still using it**. At N=32 concurrent starts, session #1's
+snapshot is deleted by session #9's sweep before #1's pi runtime loads it -> pi exits 1 ->
+`the adapter closed its stdout`. pi N=32: 28-30/32; pi N=4 never hits it (only 4 < 8).
+
+The design (TASK-048 S5) states the sweep is "by age, NEVER while current" - the implementation
+keeps only 8 and deletes current ones. Owner: **HUB**.
+
+Fix direction: a snapshot in use by a live session must not be swept. Sweep by AGE with a bound
+longer than any session start, or track which snapshot each live process holds and never delete
+one in use. Do NOT simply raise KEEP_SNAPSHOTS (a count can never cover an unbounded N).
