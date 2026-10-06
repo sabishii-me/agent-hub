@@ -28,7 +28,11 @@ pub enum PluginError {
     InstallFailed(String),
     #[error(transparent)]
     Source(#[from] crate::source::SourceError),
-    #[error("no registry URL is configured")]
+    // The detail MUST name WHICH registry failure happened: a caller and a test can
+    // only distinguish "not set" from "the address did not answer" from "the body is
+    // not a registry" by this string, and the code is the same for all of them
+    // (docs/issues/20261005-110000).
+    #[error("{0}")]
     RegistryUrlMissing(String),
     #[error(transparent)]
     Db(#[from] agent_hub_db::DbError),

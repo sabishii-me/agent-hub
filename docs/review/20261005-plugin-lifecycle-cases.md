@@ -26,14 +26,14 @@ decided by the owner, not invented. Status: `tested` / `TODO`.
 
 | # | case | expected | src | status |
 |---|---|---|---|---|
-| B1 | id lives in a directory the hub does NOT own (deployment) | **409**, naming the directory | v1 POST ("refused with 409") | TODO |
+| B1 | id lives in a directory the hub does NOT own (deployment) | **409**, naming the directory | v1 POST ("refused with 409") | **RED: HANGS (20261005-120000)** |
 | B2 | a harness with OPEN SESSIONS exists for that id | **409 `plugin_in_use`**, naming the sessions | v1 POST | TODO |
 | B3 | concurrent install of the SAME id | one 202, the rest **409** conflict | owner's rule (20261005-070000) | tested (6/6) |
 | B4 | same `Idempotency-Key`, same body (a retry) | original result, NO second install | v1 idempotency | TODO |
 | B5 | same `Idempotency-Key`, different body | **409 `idempotency_conflict`** | errors.json | TODO |
-| B6 | source names neither url nor artifact | **400 validation_failed** | v1 POST ("must name a git url or an artifact") | TODO |
-| B7 | git source whose dir has NO manifest.json | refused, error names it; **no half tree left** | v1 POST | TODO |
-| B8 | artifact sha256 mismatch | refused BEFORE unpacking; error names it | v1 POST ("verifies ... before anything is unpacked") | TODO |
+| B6 | source names neither url nor artifact | **400 validation_failed** | v1 POST ("must name a git url or an artifact") | tested (install-refusals) |
+| B7 | git source whose dir has NO manifest.json | refused, error names it; **no half tree left** | v1 POST | tested (install-refusals) |
+| B8 | artifact sha256 mismatch | refused BEFORE unpacking; error names it | v1 POST ("verifies ... before anything is unpacked") | tested (install-refusals) |
 | B9 | manifest needs a newer hub (min_hub_version) | refused (ADR-0008), naming the reason | ADR-0008 | TODO |
 | B10 | install fails MIDWAY after an old copy existed | the OLD plugin is left EXACTLY as it was | v1 POST | TODO |
 | B11 | install fails mid-way (no old copy) | state `failed` (not stuck `installing`), detail set | v1 "state ... failed" | TODO |
