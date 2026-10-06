@@ -5,50 +5,53 @@ DEFAULT test entry therefore verifies only LOCAL boundaries; the plugin-driven u
 UNVERIFIED. This is the account of the entry change. No test run beyond the entry itself; no registry;
 no model; no new scaffold. No assertion changed.
 
-## A. KEPT in the entry (no registry needed) — and exactly what each proves
+## A. KEPT in the default entry (PURE-LOCAL: no override, no local registry server, no external refresh)
 
 | file | proves (narrow) | does NOT prove |
 |---|---|---|
-| contract/status-surface-openapi-and-models-answer | the served metadata shapes: openapi equals the committed file; `/v1/models` is an ARRAY of {id,providerId} | that any plugin/model feature works |
+| contract/status-surface-openapi-and-models-answer | served metadata shapes: openapi equals the committed file; `/v1/models` is an ARRAY of {id,providerId} | any plugin/model feature |
 | contract/the-served-surface-equals-the-contract | the served ROUTE SET equals the contract; no parameterless GET is 501 | that a route is capable |
-| concurrency/one-hundred-connections-do-not-time-out | 120 raw sockets held open at once; a held SSE (first byte, not ended) does not block a GET | any plugin/user capability |
-| plugins/a-caller-cannot-install-from-an-arbitrary-url | with NO registry, an unlisted source -> 403 `plugin_not_in_registry`, nothing lands | that a published registry authorizes correctly |
+| concurrency/one-hundred-connections-do-not-time-out | 120 raw sockets held open; a held SSE (first byte, not ended) does not block a GET | any plugin/user capability |
+| plugins/a-caller-cannot-install-from-an-arbitrary-url | with NO registry, an unlisted source -> 403 plugin_not_in_registry, nothing lands | that a published registry authorizes correctly |
 | plugins/install-reconciles-against-the-registry | with NO registry, all sources refused 403 (authorized path BLOCKED inside) | the authorized install |
 | plugins/install-refusals-have-honest-codes | with NO registry, git/artifact refusals use contract codes (sha256 path BLOCKED inside) | the sha256 check |
-| plugins/registry-refresh-updates-the-local-registry | refresh ERROR codes (dead/500/non-JSON/no-array) name the case (success path BLOCKED inside) | that the registry is usable |
-| plugins/the-release-hub-error-surface | release build: 400/404/403 error codes (refresh BLOCKED inside) | registry capability |
-| plugins/the-release-hub-ignores-the-registry-override | a RELEASE binary does not contact a canary registry (measured by server hits) | that the registry is trusted |
 | harnesses/an-uninstalled-harness-cannot-be-used | an empty hub lists no harness; a session is 404 harness_not_found | any installed-harness behaviour |
 | skills/skills-crud-over-the-real-surface | skills CRUD; delete proven by the file's 404 | any plugin/user task |
 | connections/connections-are-crud-and-delete-is-real | connections CRUD; PATCH read back; delete proven by a 200 list lacking the id | any plugin/user task |
 
-These four are PARTIAL (an internal BLOCKED sub-check): install-reconciles, install-refusals,
-registry-refresh, the-release-hub-error-surface. "PARTIAL" is NOT a capability pass.
+Default entry, measured: **9 files -> 7 PASS, 2 PARTIAL, 0 FAIL, 0 BLOCKED**. PARTIAL = the two
+files with an internal BLOCKED sub-check. This is NOT a capability result.
 
-## B. MOVED out of the default entry (to `--materials`, informational) — and why
+## B. REMOVED from the default entry (and why)
 
-All 33 files that need a plugin installed through the hub: lifecycle/* (3), interrupt/* (10),
-approvals/* (3), concurrency/* (4 minus the local one), provider/* (1), plugins lifecycle/events/
-concurrent (5), harnesses/discovery (1), presets/* (2), tools/* (1), model/* (1), contract/events (1).
+Three files LEFT THE ENTRY (not the tree) because they use a registry substitute or an external
+registry request - exactly what the entry must not do:
+- plugins/registry-refresh-updates-the-local-registry.py (registry override + a local registry server)
+- plugins/the-release-hub-ignores-the-registry-override.py (registry override + a local canary server)
+- plugins/the-release-hub-error-surface.py (sends a registry refresh; runs a RELEASE binary)
 
-Reason: each requires a plugin environment that can only be established through the hub's own
-directory mechanism, which needs the PUBLISHED registry. With no registry they cannot run; with a
-FABRICATED one they test the scaffold, not the hub. Their result is not a capability result and is
-not an acceptance entry. NOT deleted — they remain as unverified materials.
+They are NOT deleted. They are listed under `--materials` (path + reason).
 
-## C. PRODUCT GAPS (not working operations; do not present as available)
+The other 33 chain files (lifecycle/interrupt/approvals/concurrency/provider/plugin-lifecycle/
+events/harness-discovery/presets/tools/model) also left the entry: each needs a plugin installed
+through the hub, which needs the PUBLISHED registry. 36 files total are listed under `--materials`.
 
-1. **Install by ID is NOT implemented.** `POST /v1/plugins` accepts a caller `url`/`artifact` (a git
-   ref, or an artifact url+sha256) — it does NOT accept `{source:{id}}`. So 'the hub resolves a
-   plugin from its registry by id' does not exist as an operation. A test must not assemble an
-   artifact to fill this in. (Proposal only, unreviewed: docs/review/20261005-contract-proposal...)
-2. **The registry is not published**, so even the caller-url path has no authoritative source.
+## C. `--materials` is a LIST, not an entry
 
-## D. WAITING on the published registry + a real provider (the chain to verify)
+`python tests/run.py --materials` prints each material path, why it is not run, and the product gaps,
+and **starts NO subprocess** (verified: 0 processes). It cannot execute installs, credentials, or
+models. Retaining the source files does not retain an execution entry.
 
-The whole user chain: obtain the directory via the hub -> install a LISTED plugin by id -> prepare the
-runtime -> open a session -> a real tool turn with an independent observable -> close/remove. Design:
-docs/tasks/20261005-verification-design.md; ordered run: docs/tasks/20261005-post-publication-acceptance.md.
+## D. PRODUCT GAPS (not available operations)
+
+1. install by id is NOT implemented: POST /v1/plugins takes a caller url/artifact, not {source:{id}}.
+   A test must not assemble an artifact to fill this in. (Proposal only, unreviewed.)
+2. the official registry release is UNPUBLISHED, so no authoritative plugin source exists.
+
+The full user chain (obtain directory via the hub -> install a LISTED plugin by id -> prepare the
+runtime -> session -> a real tool turn -> close/remove) is designed in
+docs/tasks/20261005-verification-design.md and ordered in
+docs/tasks/20261005-post-publication-acceptance.md.
 
 ## E. What is NOT claimed
 The entry result is NOT 'hub capabilities passed'. No plugin/user capability is accepted. No plugin
