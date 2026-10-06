@@ -183,6 +183,21 @@ class Hub:
     def delete(self, p, **k):
         return self.req("DELETE", p, **k)
 
+    def sse_open(self, last_event_id=None, timeout=30):
+        """Open GET /v1/events as a REAL SSE stream and return a reader with
+        `.events` (parsed so far) and `.wait(n, timeout)` to block until n frames
+        arrived. A background thread reads the socket. Frames are parsed into
+        {id, event, data} - the hub's real framing, not a fake."""
+        import threading
+        url = self.base + "/v1/events" + (f"?lastEventId={last_event_id}" if last_event_id is not None else "")
+        req = urllib.request.Request(url)
+        req.add_header("authorization", "Bearer " + self.token)
+        if last_event_id is not None:
+            req.add_header("last-event-id", str(last_event_id))
+        reader = _SSEReader(req, timeout)
+        reader.start()
+        return reader
+
     def log(self):
         try:
             with open(os.path.join(self.dir, "hub-stdout.log"), encoding="utf-8", errors="replace") as f:
@@ -365,5 +380,68 @@ def kill_pid(pid):
     else:
         try:
             os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
+class _SSEReader:
+    """A real SSE reader over urllib: a thread reads frames into a list; the test
+    waits for N of them. Parses the hub's own framing (`id:`, `event:`, `data:`)."""
+    def __init__(self, req, timeout):
+        import threading
+        self._req = req
+        self._timeout = timeout
+        self._resp = None
+        self._err = None
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self.events = []
+        self._t = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._t.start()
+        # Wait until the response is open (or errored) so a caller sees a failure.
+        deadline = time.time() + self._timeout
+        while self._resp is None and self._err is None and time.time() < deadline:
+            time.sleep(0.02)
+        if self._resp is None and self._err is None:
+            raise RuntimeError('SSE stream did not open')
+
+    def _run(self):
+        try:
+            self._resp = urllib.request.urlopen(self._req, timeout=self._timeout)
+            cur = {}
+            for raw in self._resp:
+                line = raw.decode('utf-8').rstrip(chr(13)+chr(10))
+                if line == '':
+                    if cur:
+                        with self._lock:
+                            self.events.append(cur)
+                        self._event.set()
+                        cur = {}
+                    continue
+                if line.startswith(':'):
+                    continue
+                field, _, val = line.partition(':')
+                val = val[1:] if val.startswith(' ') else val
+                cur[field] = val
+        except Exception as e:
+            self._err = e
+        finally:
+            self._event.set()
+
+    def wait(self, n, timeout=20):
+        end = time.time() + timeout
+        while time.time() < end:
+            with self._lock:
+                if len(self.events) >= n:
+                    return True
+            time.sleep(0.05)
+        return False
+
+    def close(self):
+        try:
+            if self._resp is not None:
+                self._resp.close()
         except Exception:
             pass
