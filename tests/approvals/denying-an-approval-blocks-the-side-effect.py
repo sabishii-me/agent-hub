@@ -31,6 +31,7 @@ try:
     r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL, "presetId": "heavy-review"}, key="dn-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
+    cwd = s.get("cwd")
     t.require(cwd is not None, "the session reports a cwd (so the write target is a real path)",
               "no cwd on the session; cannot test a side effect without a target path")
     target = os.path.join(cwd, "must-not-exist.txt")
@@ -52,12 +53,19 @@ try:
     t.check(approval is not None, "an approval is raised for the write", "no approval raised (the write preset did not gate)")
     if approval:
         aid = approval.get("id")
-        hub.post(f"/v1/sessions/{sid}/approvals/{aid}", {"decision": "deny"})
-        wait_turn(hub, sid, tid, {"ended"}, tries=240)
+        dn = hub.post(f"/v1/sessions/{sid}/approvals/{aid}", {"decision": "deny"})
+        # The deny must be ACCEPTED: an unchecked deny could fail and the file still not exist for
+        # an unrelated reason.
+        t.check(dn["status"] < 300, "the DENY decision is accepted", f"status={dn['status']} {dn['text'][:120]}")
+        row = wait_turn(hub, sid, tid, {"ended"}, tries=240)
+        # The turn must actually REACH a terminal; a turn stuck awaiting the approval must not pass.
+        t.check(row.get("state") == "ended", "the turn reaches a terminal after the deny",
+                f"state={row.get('state')}")
         t.check(not os.path.exists(target),
                 "the DENIED write did NOT happen (no side effect)", f"target={target} exists={os.path.exists(target)}")
     else:
-        wait_turn(hub, sid, tid, {"ended"}, tries=120)
+        row = wait_turn(hub, sid, tid, {"ended"}, tries=120)
+        t.check(row.get("state") == "ended", "the turn settles even with no approval", f"state={row.get('state')}")
 finally:
     ok = t.done()
     hub.cleanup()

@@ -39,11 +39,15 @@ try:
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")
-    # appliedProvider/appliedModel are the contract's CONFIRMATION read-backs; on their own they
-    # are claims, not proof. The proof of a real model identity follows: a turn that must RECALL
-    # what a previous turn was told (a fact only a real conversation can carry).
-    t.check(s.get("appliedProvider") == "p", "the hub confirms the applied provider (a claim)", f"appliedProvider={s.get('appliedProvider')}")
-    t.check(s.get("appliedModel") == MODEL, "the hub confirms the applied model (a claim)", f"appliedModel={s.get('appliedModel')}")
+    # appliedProvider/appliedModel are the contract's CONFIRMATION read-backs; they are CLAIMS.
+    # They do NOT prove which model actually served the turn - a wrong model would report the same
+    # fields and could also recall 4242. So identity is left UNVERIFIED; only the claims are read.
+    t.check(s.get("appliedProvider") == "p", "the hub REPORTS the applied provider (a claim)", f"appliedProvider={s.get('appliedProvider')}")
+    t.check(s.get("appliedModel") == MODEL, "the hub REPORTS the applied model (a claim, not proof)", f"appliedModel={s.get('appliedModel')}")
+    t.blocked_check(
+        "the ACTUAL model identity is the selected one",
+        "no independent evidence: a different model would report the same fields and could also "
+        "recall 4242; cross-turn recall proves conversation continuity, not model identity")
 
     # turn 1
     hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "Remember the number 4242. Reply with just: ok"}], "idempotencyKey": "m-t1"}, key="m-t1")

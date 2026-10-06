@@ -111,6 +111,12 @@ class Hub:
         # registry injection, no test-side stand-in for the product). A test that needs a registry
         # says so explicitly via `env` and marks the capability BLOCKED - it does not smuggle one
         # in here. (`AGENT_HUB_REGISTRY_FILE` is a DEV override; a release build ignores it.)
+        #
+        # CLEAR any registry override inherited from the parent environment, so a test NEVER
+        # accidentally points the hub at a foreign registry: an install must go to the hub's own
+        # official address. A test that needs a specific registry sets it EXPLICITLY via `env`.
+        env.pop("AGENT_HUB_REGISTRY_URL", None)
+        env.pop("AGENT_HUB_REGISTRY_FILE", None)
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
@@ -138,10 +144,20 @@ class Hub:
                 "installing a plugin needs the official registry, which is UNPUBLISHED "
                 f"({why}). The harness will not fabricate one; the capability is UNVERIFIED."
             )
-        # Published: the hub pulls its registry, then we install the release IT lists.
+        # Published: the hub pulls its registry (the official address), then we install the release
+        # IT lists. The registry IS published, so a refresh failure here is a PRODUCT failure (or a
+        # host-network failure) - NOT a block. Only an unpublished registry is a block.
         rr = self.post("/v1/plugins/registry/refresh", timeout=60)
         if rr["status"] >= 300:
-            _tally.blocked(f"the hub could not load the published registry: {rr['status']} {rr['text'][:120]}")
+            code = (rr["json"] or {}).get("error")
+            detail = (rr["json"] or {}).get("detail") or ""
+            if code == "registry_unavailable" and "404" in detail:
+                _tally.blocked(f"the hub's registry became unreachable (404): {detail[:120]}")
+            else:
+                raise RuntimeError(
+                    f"the registry is PUBLISHED but the hub's refresh failed with {rr['status']} "
+                    f"{code}: {detail[:160]} - a PRODUCT failure, not a block"
+                )
         for spec in self._plugin_sources:
             if isinstance(spec, str) and os.path.isdir(spec):
                 pid = self._plugin_id(spec)

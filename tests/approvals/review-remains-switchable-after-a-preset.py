@@ -69,18 +69,29 @@ try:
     # 2. Switch review OFF; a tool must now run WITHOUT asking.
     p = hub.patch(f"/v1/sessions/{sid}", {"review": False}, key="rt-off")
     t.check(p["status"] < 300, "review:false is accepted", f"status={p['status']} {p['text'][:120]}")
+    # Freeze the message count BEFORE the OFF turn, so evidence can be scoped to the OFF turn only.
+    before_off = len((hub.get(f"/v1/sessions/{sid}/messages")["json"] or {}).get("messages", []))
     ap2, t2 = run_read_turn(hub, sid, "rt-t2")
-    # 'No approval raised' is NOT the same as 'the tool ran'. Prove the tool actually ran on the
-    # ungated turn: read the turn's messages and require a tool call in them.
+    # 'No approval raised' is NOT the same as 'the tool ran'. Prove the tool ran on the OFF turn
+    # ONLY: count messages BEFORE the OFF turn and look only at what was added AFTER it, so a tool
+    # call from the earlier gated turn cannot be borrowed as evidence.
     if not t.check(ap2 is None, "review switched OFF: the read is not gated (no approval)", f"an approval was raised anyway: {ap2}"):
         wait_turn(hub, sid, t2, {"ended"}, tries=120)
         hub.post(f"/v1/sessions/{sid}/approvals/{ap2['id']}", {"decision": "allow"})
     t.check(wait_turn(hub, sid, t2, {"ended"}, tries=240).get("state") == "ended", "the ungated turn settles", "turn did not settle")
-    # The tool must have actually RUN (not merely 'no approval'). Read the turn's messages.
     msgs = (hub.get(f"/v1/sessions/{sid}/messages")["json"] or {}).get("messages", [])
-    tools = [x for m in msgs for x in (m.get("tools") or [])]
-    t.check(len(tools) > 0, "review OFF: the read tool actually RAN (a tool call is in the transcript)",
-            f"tools={tools}")
+    off_msgs = msgs[before_off:]   # only messages added AFTER the OFF turn started
+    off_tools = [x for m in off_msgs for x in (m.get("tools") or [])]
+    t.check(len(off_tools) > 0,
+            "review OFF: a tool call appears in the OFF turn's OWN messages (not an earlier turn's)",
+            f"off_tools={off_tools} (total msgs before OFF={before_off}, after={len(msgs)})")
+    # And the tool must have produced a real RESULT, not merely been requested: the read tool's
+    # output must appear in the OFF turn's assistant text.
+    off_text = " ".join("".join(c.get("text", "") for c in (m.get("content") or []) if c.get("type") == "text")
+                        for m in off_msgs)
+    t.check("[package]" in off_text or "edition" in off_text,
+            "review OFF: the read tool's RESULT reached the answer (the file was really read)",
+            f"off_text={off_text[:160]!r}")
 
     # 3. Switch review back ON; a tool must ask again (the fix did not freeze it off).
     p = hub.patch(f"/v1/sessions/{sid}", {"review": True}, key="rt-on")

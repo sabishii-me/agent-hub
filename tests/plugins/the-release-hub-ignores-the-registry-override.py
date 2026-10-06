@@ -81,30 +81,41 @@ finally:
             status = int(line[8:])
         if line.startswith("IDS "):
             ids = [x for x in line[4:].split(",") if x]
-    return HITS["n"], status, ids
+    # Return the exit code and stderr too: a hub that CRASHED (or did not start) must not be read
+    # as 'it did not contact the canary, so it correctly ignored the override'.
+    return {"hits": HITS["n"], "status": status, "ids": ids,
+            "rc": out.returncode, "stderr": (out.stderr or "")[-300:]}
 
 
-dbg_hits, dbg_status, dbg_ids = run("debug")
-rel_hits, rel_status, rel_ids = run("release")
-print(f"debug  : canary hits={dbg_hits} refresh={dbg_status} ids={dbg_ids}")
-print(f"release: canary hits={rel_hits} refresh={rel_status} ids={rel_ids}")
+dbg = run("debug")
+rel = run("release")
+print(f"debug  : {dbg}")
+print(f"release: {rel}")
 
-# The DEBUG build must actually reach the canary: this proves the canary server works AND that the
-# override is live in a dev build. Without this, "release did not hit it" proves nothing.
-t.check(dbg_hits > 0 and CANARY in dbg_ids,
+# PREMISE: each hub actually RAN and answered the refresh. Without this, 'hits==0' proves nothing.
+t.check(dbg["rc"] == 0 and dbg["status"] is not None,
+        "the DEBUG hub started and answered the refresh (the probe is meaningful)",
+        f"rc={dbg['rc']} status={dbg['status']} stderr={dbg['stderr']}")
+t.check(rel["rc"] == 0 and rel["status"] is not None,
+        "the RELEASE hub started and answered the refresh (the probe is meaningful)",
+        f"rc={rel['rc']} status={rel['status']} stderr={rel['stderr']}")
+
+# The DEBUG build must actually reach the canary.
+t.check(dbg["hits"] > 0 and CANARY in dbg["ids"],
         "the DEBUG build uses AGENT_HUB_REGISTRY_URL and CONTACTED the canary (server was hit)",
-        f"hits={dbg_hits} ids={dbg_ids}")
+        f"hits={dbg['hits']} ids={dbg['ids']}")
 
-# The RELEASE build must NOT contact the canary at all - a fact about the server, not the catalog.
-t.check(rel_hits == 0,
+# The RELEASE build must NOT contact the canary - AND must have run (asserted above).
+t.check(rel["hits"] == 0,
         "the RELEASE build did NOT contact the canary (the override is compiled out)",
-        f"hits={rel_hits} ids={rel_ids}")
-
-# And its refresh went to the BUILT-IN address (so the canary id is absent). Whether that address
-# answers 2xx (published) or fails (unpublished) is a separate fact, reported separately.
-t.check(CANARY not in rel_ids,
+        f"hits={rel['hits']} ids={rel['ids']}")
+t.check(CANARY not in rel["ids"],
         "the RELEASE build's catalog has NO canary id (it did not use the override)",
-        f"ids={rel_ids}")
+        f"ids={rel['ids']}")
+
+_ok = t.done()
+sys.exit(0 if _ok else 1)
+
 
 _ok = t.done()
 sys.exit(0 if _ok else 1)

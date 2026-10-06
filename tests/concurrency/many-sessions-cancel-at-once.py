@@ -1,11 +1,16 @@
-# C1: several sessions run turns at once, then ALL are cancelled together. Every turn
-# must reach a terminal state; none may wedge another; every session must stay usable.
-# The stop of one adapter must not block the settle of another. No fake: N real turns on
-# N real sessions, N real aborts.
+# C1: several sessions each start a turn, then ALL are cancelled together. Every turn must
+# reach a terminal state; none may wedge another; every session must stay usable.
 #
-# FACT:    N turns run at once, and cancelling them together settles every one
+# SCOPE (honest): this proves that N sessions can each be ADMITTED a turn and that cancelling
+# them all releases every one. It does NOT prove the N turns were CONCURRENTLY IN FLIGHT at the
+# moment of cancellation (a short turn can finish before it is sampled), nor that cancellation
+# interleaved concurrently - the cancels are issued in a loop. Concurrent-in-flight cancellation
+# is therefore UNVERIFIED and marked BLOCKED below, not claimed.
+#
+# FACT:    N sessions each get a turn admitted and, when cancelled together, ALL settle and stay
+#          readable (a stop of one does not block another's settle)
 # SOURCE:  ARCHITECTURE s12; contract/v1.json cancel + turns
-# EXPOSES: a wedged turn after a concurrent cancel
+# EXPOSES: a wedged turn after a batch cancel
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
@@ -60,6 +65,14 @@ try:
             settled += 1
         t.check(ok, f"turn {i} settled after the concurrent cancels", f"state={row.get('state')} ended={row.get('ended')}")
     t.check(settled == N, f"all {N} turns settled (none wedged)", f"settled={settled}/{N}")
+
+    # The settlement check above is what is proven: N admitted turns, cancelled together, all
+    # settle and stay readable. What is NOT proven - and is marked BLOCKED, not claimed - is that the
+    # N turns were CONCURRENTLY IN FLIGHT when cancelled. A poll across N turns is racy (a short
+    # turn can finish before it is sampled), so it cannot be asserted; this is the honest gap.
+    t.blocked_check(
+        "N turns were concurrently IN FLIGHT at the moment of cancellation",
+        "not assertable without a reliable in-flight signal; a poll across N turns is racy")
 
     # Every session is still readable (none left in a broken state).
     readable = sum(1 for sid in sids if hub.get(f"/v1/sessions/{sid}")["status"] == 200)

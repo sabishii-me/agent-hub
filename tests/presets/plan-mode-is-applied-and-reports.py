@@ -59,17 +59,37 @@ try:
             "content": [{"type": "text", "text": f"Use the write tool to create {plan_target} with the word PLAN."}],
             "idempotencyKey": "plan-write"}, key="plan-write")
         if (tr["json"] or {}).get("turn"):
-            wait_turn(hub, sid, tr["json"]["turn"]["id"], {"ended"}, tries=240)
+            tid = tr["json"]["turn"]["id"]
+            row = wait_turn(hub, sid, tid, {"ended"}, tries=240)
+            # The turn must have REACHED a terminal - a provider error or a hang must not pass.
+            t.check(row.get("state") == "ended", "the plan-mode write turn reached a terminal",
+                    f"state={row.get('state')}")
             t.check(not os.path.exists(plan_target),
-                    "under plan, a requested WRITE did not happen (plan is really in effect)",
+                    "under plan, a requested WRITE did not happen",
                     f"target={plan_target} exists={os.path.exists(plan_target)}")
         else:
             t.check(False, "the plan-mode write turn was accepted", f"status={tr['status']} {tr['text'][:120]}")
+
+        # CAUSALITY: with plan OFF, the SAME write on a fresh target MUST now happen. Without this,
+        # 'no file' could just mean the tools are broken - not that plan blocked it.
+        p_off = hub.patch(f"/v1/sessions/{sid}", {"plan": False}, key="plan-off")
+        t.check(p_off["status"] < 300, "plan:false is accepted (to test restoration)", f"status={p_off['status']}")
+        off_target = os.path.join(cwd, "plan-off-should-write.txt")
+        tr2 = hub.post(f"/v1/sessions/{sid}/turns", {
+            "content": [{"type": "text", "text": f"Use the write tool to create {off_target} with the word OFF."}],
+            "idempotencyKey": "plan-off-write"}, key="plan-off-write")
+        if (tr2["json"] or {}).get("turn"):
+            row2 = wait_turn(hub, sid, tr2["json"]["turn"]["id"], {"ended"}, tries=240)
+            t.check(row2.get("state") == "ended", "the plan-OFF write turn reached a terminal", f"state={row2.get('state')}")
+            t.check(os.path.exists(off_target),
+                    "with plan OFF, the SAME write DOES happen (plan, not a broken tool, was the difference)",
+                    f"target={off_target} exists={os.path.exists(off_target)}")
+        else:
+            t.check(False, "the plan-OFF write turn was accepted", f"status={tr2['status']} {tr2['text'][:120]}")
+        p2 = p_off
     else:
         t.check(False, "the session reports a cwd (to test plan's read-only effect)", "no cwd")
-
-    # Turn plan OFF again (a preset that does not ask must be switchable away).
-    p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False})
+        p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False})
     t.check(p2["status"] < 300, "PATCH plan:false is accepted", f"status={p2['status']} {p2['text'][:160]}")
 finally:
     ok = t.done()
