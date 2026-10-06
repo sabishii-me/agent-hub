@@ -35,3 +35,5 @@ A status is FIXED only with a real run as evidence. `OPEN` = not fixed.
 ## Missing test coverage (recorded, not hidden)
 
 - 20261004-030000: no current test drives the cancel/sweep race.
+| 20261005-050000 | HUB | a plugin installed through /v1 is not usable until a restart | FIXED | install/remove re-scan; whole-chain 13/13 |
+| 20261005-060000 | HUB | removing a prepared plugin fails and hangs at `removing` | FIXED | kill the cached adapter before remove; failed remove records `failed`; plugins 16/16 |

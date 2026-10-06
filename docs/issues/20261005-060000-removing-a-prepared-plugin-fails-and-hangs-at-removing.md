@@ -55,3 +55,5 @@ recorded, NOT fixed.
 
 Net: the resource is now HONEST (`failed`) but the remove still cannot complete when the plugin
 was prepared. Both are the SAME issue; the test stays RED on the 'really removed' assertions.
+
+_STATUS: **FIXED** - the cached adapter is killed before remove, and a failed remove records `failed`. plugins/lifecycle 16/16._
