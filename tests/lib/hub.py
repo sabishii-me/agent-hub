@@ -82,31 +82,75 @@ class Hub:
         return self
 
     def install_plugins(self):
-        """Install every plugin source THROUGH /v1 (POST /v1/plugins), then wait for
-        `ready`. This is the ONLY way a plugin lands in this hub's plugins root - there
-        is no copy-the-dir shortcut. A source is a git url/path + ref."""
-        for src in self._plugin_sources:
-            ref = os.environ.get("PI_PLUGIN_REF", "fix/runtime-placement")
-            pid = self._plugin_id(src)
+        """Install every requested plugin THROUGH /v1 as a REAL ARTIFACT: the published
+        release zip named in the repository's `registry.json` (url + sha256 + size), and
+        then `prepare` so its runtime is materialised the way the hub really does it.
+
+        There is NO copy-the-dir shortcut any more. A `plugins_src` value is a plugin ID
+        (e.g. "pi"); the artifact comes from registry.json, NOT from a local path. This is
+        the only install path a real deployment has."""
+        if not self._plugin_sources:
+            return
+        reg = self._registry()
+        for spec in self._plugin_sources:
+            # A source may be a plugin ID ("pi") or a path to the plugin repo (legacy
+            # call sites pass PI_PLUGIN_DIR). Either way the ID is what the registry is
+            # keyed by; a directory is read for its manifest id, NEVER copied.
+            if isinstance(spec, str) and os.path.isdir(spec):
+                pid = self._plugin_id(spec)
+            else:
+                pid = str(spec)
             if pid in self._installed:
                 continue
-            r = self.post("/v1/plugins", {"source": {"url": src, "ref": ref}}, key="install-" + pid)
-            if r["text"] is None or (isinstance(r.get("json"), dict) and r["json"].get("error")):
+            entry = next((p for p in reg.get("plugins", []) if p.get("id") == pid), None)
+            if entry is None:
+                raise RuntimeError(f"no registry entry for plugin `{pid}`")
+            v = (entry.get("versions") or [None])[0]
+            if not v:
+                raise RuntimeError(f"registry entry `{pid}` names no versions")
+            artifact = {"url": v["url"], "sha256": v["sha256"], "id": pid,
+                        "pluginType": entry.get("pluginType"), "version": v["version"],
+                        "size": v.get("size")}
+            r = self.post("/v1/plugins", {"source": {"artifact": artifact}}, key="install-" + pid)
+            if isinstance(r.get("json"), dict) and r["json"].get("error"):
                 raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
-            # The install is a LONG command: the plugin resource may 404 for a moment
-            # after the 202 (the detached install has not landed yet). 404 means "not
-            # yet", NOT failure - keep waiting for `ready`; only `failed` aborts.
-            for _ in range(960):
-                g = self.get(f"/v1/plugins/{pid}")
-                st = None if g["status"] == 404 else (g["json"] or {}).get("plugin", {}).get("state")
-                if st == "ready":
-                    self._installed.add(pid)
-                    break
-                if st == "failed":
-                    raise RuntimeError(f"install {pid} FAILED: {g['text'][:200]}")
-                time.sleep(0.25)
-            else:
-                raise RuntimeError(f"install {pid} timed out waiting for ready: {self.get(f'/v1/plugins/{pid}')['text'][:200]}")
+            self._await_plugin(pid, "ready")
+            # Materialise the runtime (the zip is adapter-only; the runtime is fetched by
+            # the adapter). A real install ends with a runnable runtime.
+            pr = self.post(f"/v1/plugins/{pid}/prepare")
+            if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
+                raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
+            self._await_runtime(pid)
+            self._installed.add(pid)
+
+    def _registry(self):
+        path = os.environ.get("AGENT_HUB_REGISTRY_FILE", os.path.join(REPO, "registry.json"))
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _await_plugin(self, pid, want):
+        for _ in range(1920):
+            g = self.get(f"/v1/plugins/{pid}")
+            st = None if g["status"] == 404 else (g["json"] or {}).get("plugin", {}).get("state")
+            if st == want:
+                return st
+            if st == "failed":
+                raise RuntimeError(f"plugin {pid} FAILED: {g['text'][:220]}")
+            time.sleep(0.25)
+        raise RuntimeError(f"plugin {pid} did not reach {want}: {self.get(f'/v1/plugins/{pid}')['text'][:220]}")
+
+    def _await_runtime(self, pid):
+        # `prepare` answers ready; confirm the manifest's command is on disk (the hub's
+        # own `runtimeReady` is a filesystem fact).
+        for _ in range(1920):
+            g = self.get(f"/v1/plugins/{pid}")
+            pj = (g["json"] or {}).get("plugin", {})
+            if pj.get("runtimeReady"):
+                return True
+            if pj.get("state") == "failed":
+                raise RuntimeError(f"runtime for {pid} FAILED: {g['text'][:220]}")
+            time.sleep(0.25)
+        raise RuntimeError(f"runtime for {pid} never became ready: {self.get(f'/v1/plugins/{pid}')['text'][:220]}")
 
     def _await_endpoint(self, timeout=30.0):
         epfile = os.path.join(self.dir, "endpoint.json")
