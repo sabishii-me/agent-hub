@@ -20,8 +20,26 @@ BLOCKED row: the official registry release is UNPUBLISHED.
 `python tests/run.py` classifies each file by EXIT CODE and its summary into SEPARATE buckets —
 PASS / PARTIAL / BLOCKED / FAIL / CRASH / EMPTY. There is no "N/N passed".
 
-Full-suite composition (45 files): 12 PASS, 33 BLOCKED, 0 FAIL, 0 CRASH, plus the PARTIAL files
-(some checks pass, some blocked). Re-run after this revision to confirm.
+Full-suite result for commit 5bd6fe3 (raw output: docs/tasks/20261005-run-output-raw.txt):
+```
+files: 45
+  PASS    : 8      (independent, no registry)
+  PARTIAL : 4      (some checks pass, some BLOCKED)
+  BLOCKED : 33     (a real precondition is missing -> UNVERIFIED)
+  FAIL    : 0
+  CRASH   : 0
+```
+8 + 4 + 33 = 45. The buckets are DISJOINT: each file is exactly one of PASS/PARTIAL/BLOCKED/FAIL/
+CRASH (a PARTIAL file is counted once, not also in BLOCKED). The per-file verdicts and every
+summary line are in the raw output.
+
+PASS files (all verifiable without the registry): contract/status-surface, contract/served-surface,
+concurrency/one-hundred-connections, plugins/a-caller-cannot-install-from-an-arbitrary-url,
+plugins/the-release-hub-ignores-the-registry-override, harnesses/an-uninstalled-harness-cannot-be-used,
+skills/crud, connections/crud.
+
+PARTIAL files: plugins/install-reconciles, plugins/install-refusals, plugins/registry-refresh,
+plugins/the-release-hub-error-surface.
 
 ---
 
@@ -70,19 +88,38 @@ did NOT verify plugin discovery, install, or a cold-start chain.
 - "release hub installs nothing (secure)": measured on a STALE binary.
 - "the suite is isolated": a test wrote the registry into the repo's registry.json; fixed, restored.
 
-## Four. Distortions fixed or retracted this round
+## Four. Distortions fixed or retracted
+
+### Round two (review of a592ec3)
+- release-ignores-override: run() did not check the subprocess returncode, so a crashed/missing
+  binary (0 hits) read as 'correctly ignored'. Now both hubs must START and answer the refresh
+  before canary hits are judged. 5/5.
+- denying-an-approval: a NameError (`cwd` undefined) crashed the test on any run once it got past
+  the registry block; restored `cwd = s.get("cwd")`, and now checks the deny POST result and the
+  wait_turn result (a failed deny / stuck turn no longer passes on 'file absent').
+- review-remains: the tool evidence was the WHOLE session, so an earlier turn's tool call satisfied
+  it. Now the message count is frozen before the OFF turn and only the OFF turn's own messages are
+  read, plus the read tool's RESULT must reach the answer.
+- plan-mode: 'no file' could mean provider-error/hang/broken tool. Now the plan write turn must
+  reach a terminal, AND a second write with plan OFF must SUCCEED - proving plan, not a broken
+  tool, was the difference.
+- model identity: cross-turn recall is conversation CONTINUITY, not model IDENTITY. Split: the
+  fields are 'reports a claim'; the actual identity is BLOCKED (no independent evidence).
+- install_plugins: a refresh failure with the registry PUBLISHED is now a RuntimeError (product
+  failure); only an unpublished 404 is BLOCKED. start() clears an inherited registry override.
+- many-sessions-cancel: the FACT line claimed 'N turns run at once', which is NOT verified. Claim
+  corrected to 'N admitted turns, batch-cancelled, all settle'; the concurrency question is an
+  explicit BLOCKED; the cancels are issued in a loop and this is stated.
+- report numbers corrected to the real run; raw output archived at docs/tasks/20261005-run-output-raw.txt.
+
+### Round one (earlier)
 - tcpfwd.die(): closed only the listener; now closes established connections with SO_LINGER=0 (a
-  real mid-turn RST). Previously mislabelled "cut the route".
-- denying-an-approval: `target is None` passed trivially; now a missing cwd is a FAILURE and the
-  file's absence is asserted against a real path.
-- review-remains: proved only "no approval", not that the tool ran; now asserts a tool call is in
-  the transcript.
+  real mid-turn RST). (Static: not yet re-measured for RST.)
 - session-crud compact: `!= 501` let a 500 pass; now requires 2xx.
 - concurrent-mixed-install-remove: an EMPTY event set satisfied `ids <= {..}`; now requires
   `ids == {pi, deepseek}` (both seen).
-- plan-mode: a bool field is not execution; now ALSO asserts a write did NOT happen under plan.
-- model identity: appliedModel is a claim; the proof remains the cross-turn recall (4242), noted.
-- many-sessions-cancel: already refuses to assert "running at once" (written reason) — kept.
+- nine files discarded a FAIL into exit 0; runner classification hardened (FAIL/CRASH win over
+  BLOCKED; exit-0 + failed>0 is FAIL; 0/0 is EMPTY; all-BLOCKED exits non-zero).
 
 ## Five. Readiness
 Verified without the registry: the contract surface, the refusal gate, the refresh error surface,
