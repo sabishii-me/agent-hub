@@ -68,30 +68,38 @@ try:
     t.check(r["status"] == 404 and code_of(r) == "not_found",
             "prepare a missing plugin -> 404 not_found", f"status={r['status']} code={code_of(r)}")
 
+    # A RELEASE hub has NO registry (the official one is unpublished). Every install source is
+    # therefore refused at the registry gate with 403 plugin_not_in_registry - the correct
+    # behaviour with no registry, and the digest/download checks are UNREACHABLE (nothing is
+    # fetched). These are asserted as the real behaviour, not the old (unreachable) 502s.
     r = hub.post("/v1/plugins", {"source": {"artifact": {
         "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/harness-adapter-pi-0.1.8.zip",
         "sha256": "1" * 64, "id": "pi", "pluginType": "harness-adapter", "version": "0.1.8"}}},
         key="rel-sha", timeout=40)
-    t.check(r["status"] == 502 and code_of(r) == "artifact_digest_mismatch",
-            "artifact with a wrong sha256 -> 502 artifact_digest_mismatch",
-            f"status={r['status']} code={code_of(r)}")
+    t.check(r["status"] == 403 and code_of(r) == "plugin_not_in_registry",
+            "release hub with no registry: an artifact is refused 403 at the gate (not fetched)",
+            f"status={r['status']} code={code_of(r)} {r['text'][:120]}")
 
     r = hub.post("/v1/plugins", {"source": {"artifact": {
         "url": "https://example.invalid/x.zip", "sha256": "0" * 64, "id": "pi",
         "pluginType": "harness-adapter", "version": "0.1.8"}}}, key="rel-dl", timeout=30)
-    t.check(r["status"] == 502 and code_of(r) == "artifact_download_failed",
-            "artifact with an unreachable url -> 502 artifact_download_failed",
-            f"status={r['status']} code={code_of(r)}")
+    t.check(r["status"] == 403 and code_of(r) == "plugin_not_in_registry",
+            "release hub with no registry: an unreachable url is refused 403 at the gate",
+            f"status={r['status']} code={code_of(r)} {r['text'][:120]}")
 
-    # The release binary must IGNORE AGENT_HUB_REGISTRY_URL (compiled out): the refresh goes
-    # to the build-time address and succeeds (6 first-party plugins), never to the override.
+    # The built-in address is the maintainer's 'registry' release asset, which is NOT PUBLISHED
+    # yet (404). So the refresh cannot succeed: this capability is BLOCKED on publication, not
+    # passed and not failed.
     r = hub.post("/v1/plugins/registry/refresh", timeout=40)
-    src = (r["json"] or {}).get("source", "")
-    n = (r["json"] or {}).get("plugins")
-    t.check(r["status"] < 300 and isinstance(n, int) and n > 0,
-            "the release hub refreshes from its BUILT-IN address (not the dev override)",
-            f"status={r['status']} source={src} plugins={n}")
+    if r["status"] < 300:
+        n = (r["json"] or {}).get("plugins")
+        t.check(isinstance(n, int) and n > 0,
+                "the release hub refreshed from its built-in address", f"status={r['status']} body={r['text'][:120]}")
+    else:
+        t.blocked_check("the release hub refreshes from its built-in registry address",
+                  f"the 'registry' release asset is UNPUBLISHED; refresh answered {r['status']} {r['text'][:100]}")
 finally:
     hub.cleanup()
 
-t.done()
+_ok = t.done()
+sys.exit(0 if _ok else 1)

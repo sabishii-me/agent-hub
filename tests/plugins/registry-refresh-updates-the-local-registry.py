@@ -138,4 +138,5 @@ finally:
     hub.stop()
     srv6.shutdown()
 
-t.done()
+_ok = t.done()
+sys.exit(0 if _ok else 1)

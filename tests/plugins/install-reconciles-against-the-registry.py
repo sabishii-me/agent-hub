@@ -28,22 +28,21 @@ combo(hub_sha())
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 repo_reg = json.load(open(os.path.join(REPO, "registry.json")))
 pi = next(p for p in repo_reg["plugins"] if p["id"] == "pi" and p["pluginType"] == "harness-adapter")
-v = pi["versions"][0]
-
-# A registry that lists exactly this one release.
-d = tempfile.mkdtemp(prefix="reg-")
-rf = os.path.join(d, "registry.json")
-open(rf, "w").write(json.dumps(
-    {"schema": 1, "plugins": [{"id": "pi", "pluginType": "harness-adapter", "name": "Pi",
-                               "versions": [v]}]}))
+v = pi["versions"][0]   # a real release url+sha256, used as the SOURCE whose refusal we test
 
 
 def code_of(r):
     return (r["json"] or {}).get("error")
 
 
-# --- No registry: nothing is authorized.
-hub0 = Hub()
+# This file tests the NO-REGISTRY behaviour of the reconcile gate. The AUTHORIZED path (a
+# registry that lists a release -> the hub installs it) needs the OFFICIAL registry, which is
+# unpublished; it is NOT tested here by fabricating a registry (no mock registry, no local
+# injection - owner direction). It is BLOCKED.
+#
+# --- No registry: nothing is authorized. The harness supplies none, and we clear any dev override,
+# so the hub REALLY has no registry.
+hub0 = Hub(env={"AGENT_HUB_REGISTRY_FILE": ""})
 try:
     hub0.start()
     r = hub0.post("/v1/plugins", {"source": {"artifact": {
@@ -52,38 +51,27 @@ try:
     t.check(r["status"] == 403 and code_of(r) == "plugin_not_in_registry",
             "no registry loaded -> even a real release is refused (403 plugin_not_in_registry)",
             f"status={r['status']} code={code_of(r)} {r['text'][:160]}")
-finally:
-    hub0.cleanup()
-
-# --- With the registry loaded.
-hub = Hub(env={"AGENT_HUB_REGISTRY_FILE": rf, "AGENT_HUB_REGISTRY_URL": "file://" + rf})
-try:
-    hub.start()
-    # authorized: exact url + sha256.
-    r = hub.post("/v1/plugins", {"source": {"artifact": {
-        "url": v["url"], "sha256": v["sha256"], "id": "pi",
-        "pluginType": "harness-adapter", "version": v["version"]}}}, key="ok", timeout=60)
-    t.check(r["status"] == 202, "a source matching a registry release (url+sha256) is accepted",
-            f"status={r['status']} {r['text'][:160]}")
-
-    # unauthorized: url not listed at all.
-    r = hub.post("/v1/plugins", {"source": {"artifact": {
+    # An unlisted url likewise: no registry -> refused.
+    r = hub0.post("/v1/plugins", {"source": {"artifact": {
         "url": "https://example.com/evil.zip", "sha256": "0" * 64, "id": "evil",
         "pluginType": "harness-adapter", "version": "1.0.0"}}}, key="evil", timeout=30)
     t.check(r["status"] == 403 and code_of(r) == "plugin_not_in_registry",
-            "a url the registry does not list is refused (403 plugin_not_in_registry)",
+            "no registry loaded -> an unlisted url is also refused (403)",
             f"status={r['status']} code={code_of(r)} {r['text'][:160]}")
-
-    # unauthorized: the LISTED url, but a DIFFERENT sha256 (a proxied url serving other bytes).
-    r = hub.post("/v1/plugins", {"source": {"artifact": {
-        "url": v["url"], "sha256": "0" * 64, "id": "pi",
-        "pluginType": "harness-adapter", "version": v["version"]}}}, key="proxy", timeout=30)
+    # A git source: no sha256, cannot match a release registry -> refused.
+    r = hub0.post("/v1/plugins", {"source": {"url": "https://example.com/evil.git", "ref": "main"}}, key="git", timeout=30)
     t.check(r["status"] == 403 and code_of(r) == "plugin_not_in_registry",
-            "the listed url with a DIFFERENT sha256 is refused (a proxied url cannot pass)",
+            "no registry loaded -> a git source is refused (403)",
             f"status={r['status']} code={code_of(r)} {r['text'][:160]}")
 finally:
-    hub.cleanup()
-    import shutil
-    shutil.rmtree(d, ignore_errors=True)
+    hub0.cleanup()
 
-t.done()
+# The AUTHORIZED path (registry lists a release -> the hub installs it, url+sha256 reconcile) and
+# the proxied-url case (listed url, different sha256) BOTH need the official registry, which is
+# UNPUBLISHED. Testing them would require fabricating a registry, which is forbidden. BLOCKED.
+t.blocked_check(
+    "a source matching a registry release is accepted; a proxied url is refused",
+    "needs the official registry (UNPUBLISHED); not tested by fabricating one")
+
+_ok = t.done()
+sys.exit(0 if _ok else 1)

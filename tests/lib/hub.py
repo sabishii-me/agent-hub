@@ -26,6 +26,32 @@ _PROFILE = os.environ.get("AGENT_HUB_PROFILE", "debug").strip() or "debug"
 EXE = os.path.join(REPO, "target", _PROFILE, "agent-hub" + _SUFFIX)
 
 
+def registry_published():
+    """Whether the official hub registry release asset is REACHABLE right now. A test that must
+    install a plugin calls this to decide PASS-path vs BLOCKED: it does NOT fabricate a registry.
+    Returns (ok, reason)."""
+    import urllib.request
+    url = "https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json"
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return (r.status == 200, f"registry asset answered {r.status}")
+    except Exception as e:
+        return (False, f"the official registry release is not reachable: {e}")
+
+
+def require_registry_or_blocked():
+    """A test that installs a plugin needs the OFFICIAL registry (it must NOT fabricate one).
+    If it is unpublished, raise BLOCKED (exit 3), so the capability is reported UNVERIFIED."""
+    import tally as _tally
+    ok, why = registry_published()
+    if not ok:
+        _tally.blocked(
+            "installing a plugin needs the official registry, which is UNPUBLISHED "
+            f"({why}). The test will not fabricate a registry; the capability is UNVERIFIED."
+        )
+
+
 def hub_sha():
     try:
         return subprocess.check_output(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], text=True).strip()
@@ -80,12 +106,11 @@ class Hub:
             "AGENT_HUB_ADDR": "127.0.0.1:0",
             "AGENT_HUB_CONTRACT_DIR": os.path.join(REPO, "contract"),
         })
-        # Give the hub a registry to reconcile installs against (docs/issues/20261005-130000),
-        # unless the caller set one explicitly. This is the DEV override (compiled out of a
-        # release build); it points the hub at the repository's own registry.json. A test that
-        # wants NO registry passes AGENT_HUB_REGISTRY_FILE="" in `env` to clear it.
-        if "AGENT_HUB_REGISTRY_FILE" not in self.extra_env:
-            env["AGENT_HUB_REGISTRY_FILE"] = os.path.join(REPO, "registry.json")
+        # The hub has NO registry by default: the official one is unpublished, and a test must not
+        # fabricate one to make an install pass (owner direction: no mock registry, no local
+        # registry injection, no test-side stand-in for the product). A test that needs a registry
+        # says so explicitly via `env` and marks the capability BLOCKED - it does not smuggle one
+        # in here. (`AGENT_HUB_REGISTRY_FILE` is a DEV override; a release build ignores it.)
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
@@ -93,58 +118,25 @@ class Hub:
         return self
 
     def install_plugins(self):
-        """Install every requested plugin through /v1, AUTHORIZED BY THE HUB'S OWN REGISTRY.
+        """The hub installs plugins ONLY from its official registry, which is UNPUBLISHED.
 
-        The hub must reconcile a source against ITS registry (docs/issues/20261005-130000), so a
-        test that installs has to give the hub a registry FIRST. `AGENT_HUB_REGISTRY_FILE` points
-        the hub (a DEV build) at the repository's `registry.json`, the hub loads it at boot, and
-        this reads the url+sha256 the hub's own registry lists. The hub then authorizes the
-        install because the source IS a registry release.
-
-        NOTE: this is the honest shape available WITHOUT a contract change. The final shape is
-        that the test names an ID and the hub resolves it (docs/review/
-        20261005-contract-proposal-install-by-registry-id.md); until then the test must supply
-        the registry release's url+sha256, and the hub must agree."""
+        So there is NO honest way for this harness to install a plugin: fabricating a registry
+        (a local file, a mock, a loopback server) would be the TEST acting as the registry and
+        the product not being exercised (owner direction: no mock registry, no local-registry
+        injection, no test-side stand-in). Therefore this does NOT install and does NOT invent a
+        registry. A test that asked for a plugin gets an explicit, loud BLOCKED - the capability
+        is unverified, and must be reported as unverified, never as a pass."""
         if not self._plugin_sources:
             return
-        # Give the hub a registry to reconcile against (dev-only env override).
-        reg_path = os.environ.get("AGENT_HUB_REGISTRY_FILE", os.path.join(REPO, "registry.json"))
-        self.child_env_image = reg_path
-        with open(reg_path, encoding="utf-8") as f:
-            reg = json.load(f)
-        for spec in self._plugin_sources:
-            # A src may be a plugin ID ("pi") or a path to the plugin repo (legacy call sites pass
-            # PI_PLUGIN_DIR); the ID keys the registry either way. A directory is read for its
-            # manifest id, NEVER copied.
-            if isinstance(spec, str) and os.path.isdir(spec):
-                pid = self._plugin_id(spec)
-            else:
-                pid = str(spec)
-            if pid in self._installed:
-                continue
-            entry = next((p for p in reg.get("plugins", []) if p.get("id") == pid), None)
-            if entry is None:
-                raise RuntimeError(f"the registry has no entry for `{pid}`")
-            v = (entry.get("versions") or [None])[0]
-            if not v:
-                raise RuntimeError(f"registry entry `{pid}` names no versions")
-            # The source is a REGISTRY RELEASE (url+sha256 listed in the registry the hub loaded),
-            # so the hub authorizes it. This is not the test acting as the registry: the hub holds
-            # the registry and does the reconcile.
-            artifact = {"url": v["url"], "sha256": v["sha256"], "id": pid,
-                        "pluginType": entry.get("pluginType"), "version": v["version"],
-                        "size": v.get("size")}
-            r = self.post("/v1/plugins", {"source": {"artifact": artifact}}, key="install-" + pid)
-            if isinstance(r.get("json"), dict) and r["json"].get("error"):
-                raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
-            self._await_plugin(pid, "ready")
-            # Materialise the runtime (the zip is adapter-only; the runtime is fetched by the
-            # adapter). A real install ends with a runnable runtime.
-            pr = self.post(f"/v1/plugins/{pid}/prepare")
-            if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
-                raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
-            self._await_runtime(pid)
-            self._installed.add(pid)
+        # The official registry is UNPUBLISHED, so the hub cannot install anything, and this
+        # harness will NOT fabricate a registry (no mock, no local injection, no test-side
+        # stand-in for the product). A test that needs a plugin is BLOCKED, reported separately.
+        import tally as _tally
+        _tally.blocked(
+            "installing a plugin needs the official registry, which is UNPUBLISHED. The harness "
+            "will not fabricate one; the capability is UNVERIFIED "
+            "(docs/tasks/20261005-convergence-report.md)."
+        )
 
     def registry_artifact(self, pid):
         """The {url, sha256, id, pluginType, version} of `pid`'s newest release as the hub's

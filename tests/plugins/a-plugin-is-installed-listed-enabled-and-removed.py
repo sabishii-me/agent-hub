@@ -13,13 +13,14 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-from hub import Hub, hub_sha          # noqa: E402
+from hub import Hub, hub_sha, require_registry_or_blocked          # noqa: E402
 from tally import Tally, combo        # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
 PI_REF = os.environ.get("PI_PLUGIN_REF", "fix/runtime-placement")
 t = Tally("plugins/lifecycle")
 combo(hub_sha())
+require_registry_or_blocked()   # BLOCKED until the official registry is published
 if not t.require(os.path.isdir(PI), "a real plugin source is present", f"no plugin at {PI}"):
     t.done(); sys.exit(1)
 

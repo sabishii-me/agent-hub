@@ -61,4 +61,5 @@ finally:
     hub.cleanup()
     shutil.rmtree(evil, ignore_errors=True)
 
-t.done()
+_ok = t.done()
+sys.exit(0 if _ok else 1)
