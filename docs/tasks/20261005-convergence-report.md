@@ -117,5 +117,13 @@ install, or a cold-start chain - those are BLOCKED.
 ## Five. Readiness for the next phase
 
 Verified without the registry: the contract surface, the refusal gate (no published registry ->
-nothing installs), the registry/refresh error codes, the release binary's fixed address and ignored
-override, and the CRUD surfaces (skills, connections, harness-n
+nothing installs), the registry/refresh error codes, the release binary's fixed address and its
+ignored override, and the CRUD surfaces (skills, connections, harness-not-installed).
+
+To unblock, in order:
+1. Publish the 'registry' release of sabishii-me/agent-hub (the fixed asset name).
+2. Fix the host provider so /models answers 2xx (192.168.31.29:8990).
+
+Then the 33 BLOCKED files can run and the authorized-install + full-chain path can be VERIFIED
+for the first time - against the real registry, not a fabricated one. That publication validates
+the real product chain; it does NOT retroactively bless any earlier green.
