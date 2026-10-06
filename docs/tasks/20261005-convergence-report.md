@@ -20,22 +20,22 @@ BLOCKED row: the official registry release is UNPUBLISHED.
 `python tests/run.py` classifies each file by EXIT CODE and its summary into SEPARATE buckets —
 PASS / PARTIAL / BLOCKED / FAIL / CRASH / EMPTY. There is no "N/N passed".
 
-Full-suite result for commit 0fc8568 (raw output: docs/tasks/20261005-run-output-raw.txt):
+Full-suite result for commit 6d0d394 (raw output: docs/tasks/20261005-run-output-raw.txt):
 ```
 files: 45
-  PASS    : 7      (independent, no registry)
+  PASS    : 8      (independent, no registry)
   PARTIAL : 4      (some checks pass, some BLOCKED)
   BLOCKED : 33     (a real precondition is missing -> UNVERIFIED)
-  FAIL    : 1      (the >=100-concurrent-connections claim: measured peak 4-6, NOT 100)
+  FAIL    : 0
   CRASH   : 0
 ```
-7 + 4 + 33 + 1 = 45. Buckets are DISJOINT. The FAIL is real: one-hundred-connections MEASURES the
-peak simultaneous connections and the hub did NOT hold 100 at once; the old PASS was about
-completion, not concurrency, and is retracted.
+8 + 4 + 33 = 45. Buckets are DISJOINT. No FAIL: the earlier ">=100 concurrent connections" FAIL was
+a MEASUREMENT artefact (the counter ran after urlopen() returned); measured by HOLDING raw sockets
+open, the hub held 120 at once. The judge was wrong, not the hub.
 
 PASS files: contract/status-surface, contract/served-surface, plugins/a-caller-cannot-install-from-an-arbitrary-url,
 plugins/the-release-hub-ignores-the-registry-override, harnesses/an-uninstalled-harness-cannot-be-used,
-skills/crud, connections/crud.
+skills/crud, connections/crud, concurrency/one-hundred-connections.
 
 PARTIAL files: plugins/install-reconciles, plugins/install-refusals, plugins/registry-refresh,
 plugins/the-release-hub-error-surface.
@@ -55,8 +55,8 @@ plugins/the-release-hub-error-surface.
 | an uninstalled harness cannot be used | real hub, no plugins | GET /v1/harnesses, POST /v1/sessions | 404 harness_not_found |
 | an uninstalled harness cannot be used | real hub, no plugins | GET /v1/harnesses, POST /v1/sessions | 404 harness_not_found |
 | skills + connections CRUD | real hub | /v1/skills*, /v1/connections* | 9/9, 10/10 (PATCH read back; delete proven by an authoritative read) |
-| SSE stream opens, does not block a GET | real hub | GET /v1/events held; GET /v1/harnesses | SSE 200 + first byte; GET < 5s |
-| >=100 connections AT ONCE | real hub | 120 requests | **FAIL**: measured peak 4-6; the claim is retracted |
+| SSE stream opens (first byte, still open), does not block a GET | real hub | GET /v1/events held; GET /v1/harnesses | SSE opened + first byte + not ended; GET < 5s |
+| >=100 connections AT ONCE | real hub | 120 raw TCP sockets held open | measured held=120 at once; hub still answers a new GET |
 
 ## Two. UNVERIFIED / BLOCKED — the official registry is unpublished
 
@@ -90,6 +90,19 @@ did NOT verify plugin discovery, install, or a cold-start chain.
 - "the suite is isolated": a test wrote the registry into the repo's registry.json; fixed, restored.
 
 ## Four. Distortions fixed or retracted
+
+### Round three (review of 94fb0fe)
+- plan-mode: checked `plan` (the REQUEST) and called it 'APPLIED'. The contract separates `plan`
+  from `appliedPlan` ('proof'). Now: (A) `plan` records the request; (B) `appliedPlan` is reported;
+  (C) runtime enforcement is an explicit BLOCKED (no contract-pinned observable).
+- one-hundred-connections: the concurrent counter incremented only AFTER urlopen() returned (past the
+  response head), measuring 'response objects unread' - not open connections. Its peak=4-6 was a
+  MEASUREMENT artefact, NOT a product limit: holding 120 raw sockets open, the hub held 120 at once.
+  The judge was wrong; corrected to a real held-socket measurement. (Lesson: a colour change
+  (green->red) is not evidence of anything; the JUDGE must first be right.)
+- contract/status-surface: /v1/models now must be an ARRAY of {id,providerId}.
+- contract/served-surface: keeps the ROUTE-SET claim; a non-501 4xx/5xx on a parameterless GET is
+  recorded as not-verified (BLOCKED), not passed.
 
 ### Round two (review of a592ec3)
 - release-ignores-override: run() did not check the subprocess returncode, so a crashed/missing

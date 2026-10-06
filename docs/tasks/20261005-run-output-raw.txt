@@ -1,7 +1,7 @@
 hub test suite: 45 file(s)
 
 === contract/status-surface-openapi-and-models-answer.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   GET /v1/status answers 200
   ok   status is a non-empty object
   ok   GET /v1/surface answers a body
@@ -9,173 +9,172 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
   ok   the served OpenAPI has a valid shape
   ok   the SERVED openapi equals the committed contract/openapi.json
   ok   GET /v1/models answers 200
-  ok   GET /v1/models returns a models array
+  ok   GET /v1/models returns a models ARRAY (not a bare key)
   [contract/metadata] 8/8 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- contract/status-surface-openapi-and-models-answer.py: PASS (8/8)
 
 === contract/the-events-stream-delivers-plugin-changes.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The test will not fabricate a registry; the capability is UNVERIFIED.
 --- contract/the-events-stream-delivers-plugin-changes.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === contract/the-served-surface-equals-the-contract.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   GET /v1/surface answers 200
   ok   the hub serves no route the contract does not declare
   ok   every declared route is mounted
-  ok   no parameterless GET answers 501 (no stub route)
+  ok   no parameterless GET answers 501 (not_implemented stub)
   [contract/surface] 4/4 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- contract/the-served-surface-equals-the-contract.py: PASS (4/4)
 
 === lifecycle/a-session-closes-reopens-and-forks-without-touching-its-source.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [lifecycle/session] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- lifecycle/a-session-closes-reopens-and-forks-without-touching-its-source.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === lifecycle/the-session-crud-and-read-through-are-real.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [lifecycle/crud] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- lifecycle/the-session-crud-and-read-through-are-real.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The test will not fabricate a registry; the capability is UNVERIFIED.
 --- lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/a-cancelled-turn-releases-the-session.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/a-cancelled-turn-releases-the-session.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/a-killed-hub-recovers-its-sessions.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/kill-recover] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/a-killed-hub-recovers-its-sessions.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/a-provider-that-cannot-be-reached-is-refused-not-faked.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/provider-unreachable] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/a-provider-that-cannot-be-reached-is-refused-not-faked.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/a-provider-that-hangs-does-not-hang-the-turn.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/provider-hangs] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/a-provider-that-hangs-does-not-hang-the-turn.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/cancel-is-idempotent-and-bounded.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/cancel-idempotent] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/cancel-is-idempotent-and-bounded.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/killing-the-adapter-during-a-cancel-settles-the-turn.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/kill-adapter-during-cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/killing-the-adapter-during-a-cancel-settles-the-turn.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/killing-the-adapter-leaves-an-honest-state.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/kill-adapter] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/killing-the-adapter-leaves-an-honest-state.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/kill-adapter-mid-turn] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/killing-the-runtime-process-settles-the-turn.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/kill-runtime] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/killing-the-runtime-process-settles-the-turn.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/killing-the-whole-tree-then-restarting-recovers.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/kill-tree-restart] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/killing-the-whole-tree-then-restarting-recovers.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/send-immediately-after-cancel.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/send-after-cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/send-immediately-after-cancel.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === interrupt/the-network-drops-mid-turn-and-the-turn-settles.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [interrupt/network-drop] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- interrupt/the-network-drops-mid-turn-and-the-turn-settles.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === approvals/an-approval-preset-asks-before-every-tool.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [approvals/preset-gates] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- approvals/an-approval-preset-asks-before-every-tool.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === approvals/denying-an-approval-blocks-the-side-effect.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [approvals/deny-blocks] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- approvals/denying-an-approval-blocks-the-side-effect.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === approvals/review-remains-switchable-after-a-preset.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [approvals/review-toggle] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- approvals/review-remains-switchable-after-a-preset.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === concurrency/a-second-turn-while-one-runs-is-refused.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [concurrency/busy] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- concurrency/a-second-turn-while-one-runs-is-refused.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === concurrency/cancelling-one-session-does-not-disturb-another.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [concurrency/cross-talk] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- concurrency/cancelling-one-session-does-not-disturb-another.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === concurrency/many-sessions-cancel-at-once.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [concurrency/many-cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- concurrency/many-sessions-cancel-at-once.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === concurrency/many-sessions-of-one-harness.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [concurrency/many-sessions] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- concurrency/many-sessions-of-one-harness.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === concurrency/one-hundred-connections-do-not-time-out.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
-  ok   all 120 requests completed 200
-  FAIL all N requests complete, but >=100 AT ONCE was NOT observed (not a pass) - peak=6 of 120 - the concurrency fact is unverified
-  BLOCKED the hub holds >=100 connections SIMULTANEOUSLY - measured peak=6; requests complete too fast to hold 100 open
-  ok   the SSE stream actually OPENED (200 + first byte)
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
+  ok   120 connections held OPEN AT ONCE, and the hub still answers a new GET
+  ok   the hub answers a new GET while connections are held
+  ok   the SSE stream OPENED, produced a first byte, and is still open (a held stream)
   ok   a held SSE connection does not block a short GET
-  [concurrency] 3/4 ok, 1 failed, 0 skipped, 1 BLOCKED
---- concurrency/one-hundred-connections-do-not-time-out.py: FAIL (1 failed)
+  [concurrency] 4/4 ok, 0 failed, 0 skipped, 0 BLOCKED
+--- concurrency/one-hundred-connections-do-not-time-out.py: PASS (4/4)
 
 === provider/model-provider-crud-and-types-are-real.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [provider/crud] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- provider/model-provider-crud-and-types-are-real.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === plugins/a-caller-cannot-install-from-an-arbitrary-url.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   an unlisted source is refused with 403 plugin_not_in_registry (the gate, not a download error)
   ok   no `evil` plugin was installed
   ok   the plugins root has no `evil` directory
@@ -183,27 +182,27 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 --- plugins/a-caller-cannot-install-from-an-arbitrary-url.py: PASS (3/3)
 
 === plugins/a-hub-killed-mid-remove-finishes-the-removal.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The test will not fabricate a registry; the capability is UNVERIFIED.
 --- plugins/a-hub-killed-mid-remove-finishes-the-removal.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === plugins/a-plugin-is-installed-listed-enabled-and-removed.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The test will not fabricate a registry; the capability is UNVERIFIED.
 --- plugins/a-plugin-is-installed-listed-enabled-and-removed.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === plugins/concurrent-install-and-remove.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The test will not fabricate a registry; the capability is UNVERIFIED.
 --- plugins/concurrent-install-and-remove.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === plugins/concurrent-mixed-install-remove.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The test will not fabricate a registry; the capability is UNVERIFIED.
 --- plugins/concurrent-mixed-install-remove.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === plugins/install-reconciles-against-the-registry.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   no registry loaded -> even a real release is refused (403 plugin_not_in_registry)
   ok   no registry loaded -> an unlisted url is also refused (403)
   ok   no registry loaded -> a git source is refused (403)
@@ -212,7 +211,7 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 --- plugins/install-reconciles-against-the-registry.py: PARTIAL (3/3 ok, 1 BLOCKED - not fully verified)
 
 === plugins/install-refusals-have-honest-codes.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   B6: a source with no url/artifact is 400
   ok   B6: code is validation_failed
   ok   B6: the message names the two source shapes
@@ -226,7 +225,7 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 --- plugins/install-refusals-have-honest-codes.py: PARTIAL (8/8 ok, 1 BLOCKED - not fully verified)
 
 === plugins/registry-refresh-updates-the-local-registry.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   no override: the hub uses its compiled-in address, never a 'not configured' error
   ok   unreachable address: is 502
   ok   unreachable address: code is registry_unavailable
@@ -245,7 +244,7 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 --- plugins/registry-refresh-updates-the-local-registry.py: PARTIAL (13/13 ok, 1 BLOCKED - not fully verified)
 
 === plugins/the-release-hub-error-surface.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 profile=release
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 profile=release
   ok   no `source` field -> 400 validation_failed (not 422 axum text)
   ok   source with no url/artifact -> 400 validation_failed
   ok   GET a missing plugin -> 404 not_found
@@ -259,7 +258,7 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 profile=release
 --- plugins/the-release-hub-error-surface.py: PARTIAL (8/8 ok, 1 BLOCKED - not fully verified)
 
 === plugins/the-release-hub-ignores-the-registry-override.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 debug  : {'hits': 1, 'status': 200, 'ids': ['OVERRIDE-WAS-USED'], 'rc': 0, 'stderr': ''}
 release: {'hits': 0, 'status': 502, 'ids': [], 'rc': 0, 'stderr': ''}
   ok   the DEBUG hub started and answered the refresh (the probe is meaningful)
@@ -271,7 +270,7 @@ release: {'hits': 0, 'status': 502, 'ids': [], 'rc': 0, 'stderr': ''}
 --- plugins/the-release-hub-ignores-the-registry-override.py: PASS (5/5)
 
 === harnesses/an-uninstalled-harness-cannot-be-used.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   no plugin is installed
   ok   no harness is listed (a harness comes from an installed plugin)
   ok   POST /v1/sessions for an uninstalled harness is refused (404)
@@ -282,37 +281,37 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 --- harnesses/an-uninstalled-harness-cannot-be-used.py: PASS (6/6)
 
 === harnesses/harness-discovery-and-its-capability-gated-routes.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [harnesses/routes] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- harnesses/harness-discovery-and-its-capability-gated-routes.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === presets/a-preset-is-listed-and-applied.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [presets/apply] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- presets/a-preset-is-listed-and-applied.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === presets/plan-mode-is-applied-and-reports.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [presets/plan] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- presets/plan-mode-is-applied-and-reports.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === tools/the-model-really-runs-a-tool.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [tools/real-call] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- tools/the-model-really-runs-a-tool.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === model/a-real-model-answers-with-a-confirmed-identity.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0 plugin=pi@0.1.10 runtime=@earendil-works/pi-coding-agent@1.0.0
 BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registry release asset does not exist (HTTP 404)). The harness will not fabricate one; the capability is UNVERIFIED.
   [model/identity] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED
 --- model/a-real-model-answers-with-a-confirmed-identity.py: BLOCKED (a real precondition is missing; UNVERIFIED)
 
 === skills/skills-crud-over-the-real-surface.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   write a skill file
   ok   write a nested skill file
   ok   read the file back
@@ -326,7 +325,7 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 --- skills/skills-crud-over-the-real-surface.py: PASS (9/9)
 
 === connections/connections-are-crud-and-delete-is-real.py ===
-combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
+combo: hub=6d0d394 platform=Windows-11-10.0.26200-SP0
   ok   create a connection
   ok   the token value is never echoed
   ok   the connection is listed
@@ -342,8 +341,8 @@ combo: hub=0fc8568 platform=Windows-11-10.0.26200-SP0
 
 ============================================================
 files: 45
-  PASS    : 7
-  FAIL    : 1
+  PASS    : 8
+  FAIL    : 0
   BLOCKED : 33  (a real precondition is missing -> UNVERIFIED)
   PARTIAL : 4  (some checks passed, some BLOCKED -> not fully verified)
   CRASH   : 0
@@ -383,7 +382,4 @@ BLOCKED (NOT verified, NOT a pass):
   - tools/the-model-really-runs-a-tool.py
   - model/a-real-model-answers-with-a-confirmed-identity.py
 
-FAIL:
-  - concurrency/one-hundred-connections-do-not-time-out.py
-
-No 'all green': 7 passed, 1 failed, 33 blocked, 0 crashed/unverified.
+No 'all green': 8 passed, 0 failed, 33 blocked, 0 crashed/unverified.
