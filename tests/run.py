@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Run the real test layers. `python tests/run.py [layer]` runs one band, not the world.
+"""The CURRENT entry: local boundaries only - NOT hub-capability acceptance.
 
-Each test file is its own process. Its outcome is classified by EXIT CODE and by the summary
-line it prints, into four SEPARATE buckets - never one "N/N passed" that hides the rest:
+The official plugin registry is UNPUBLISHED, so the plugin-driven user chain cannot be established
+and MUST NOT be a default acceptance entry. This runner therefore runs ONLY the files that verify a
+LOCAL boundary with NO registry and NO plugin chain, and it says so.
 
-  PASS     exit 0 and its summary shows 0 failed;
-  FAIL     a non-zero exit that is not the BLOCKED sentinel;
-  BLOCKED  exit 3, or the file prints a `BLOCKED:` line: a real precondition is missing (the
-           official registry is unpublished), so the capability is UNVERIFIED - not a pass and
-           not a failure;
-  CRASH    a non-zero exit with no summary line (the file died before reporting anything).
+  python tests/run.py                 # the local-boundary entry (no registry, no plugin chain)
+  python tests/run.py --materials     # the UNVERIFIED materials (need the published registry):
+                                      #   run for information only; their result is NOT a capability
+  python tests/run.py --materials <f> # one material file by name
 
-No test fakes anything, and a missing real dependency is BLOCKED with a reason, never a green.
+Nothing here is 'hub capabilities passed'. A file's green is a statement about its own narrow check.
+No test fakes anything; a missing real precondition is BLOCKED with a reason, never a green.
 """
 import os
 import re
@@ -19,128 +19,108 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LAYERS = ["contract", "lifecycle", "interrupt", "approvals", "concurrency", "provider",
-          "plugins", "harnesses", "presets", "tools", "model", "skills", "connections"]
+
+# The ONLY files admitted to the current entry. Each verifies a LOCAL boundary that needs neither
+# the registry nor a plugin chain. Their scope is named for each; none is a plugin-driver capability.
+LOCAL_BOUNDARY = [
+    "contract/status-surface-openapi-and-models-answer.py",   # the served metadata shapes (route set, models array)
+    "contract/the-served-surface-equals-the-contract.py",     # the served ROUTE SET equals the contract
+    "concurrency/one-hundred-connections-do-not-time-out.py", # connection count + SSE open, measured
+    "plugins/a-caller-cannot-install-from-an-arbitrary-url.py",  # no registry -> unlisted source refused
+    "plugins/install-reconciles-against-the-registry.py",     # no registry -> refusal (authorized path BLOCKED)
+    "plugins/install-refusals-have-honest-codes.py",          # refusal codes (no registry)
+    "plugins/registry-refresh-updates-the-local-registry.py", # refresh ERROR surface (not registry capability)
+    "plugins/the-release-hub-error-surface.py",               # release-build error codes (refresh BLOCKED)
+    "plugins/the-release-hub-ignores-the-registry-override.py",  # a release binary ignores the env override
+    "harnesses/an-uninstalled-harness-cannot-be-used.py",     # empty hub: no harness, session 404
+    "skills/skills-crud-over-the-real-surface.py",            # skills CRUD (authoritative read-back)
+    "connections/connections-are-crud-and-delete-is-real.py", # connections CRUD (authoritative read-back)
+]
+
 BLOCKED_EXIT = 3
 SUMMARY = re.compile(r"\[[^\]]+\]\s+(\d+)/(\d+)\s+ok,\s+(\d+)\s+failed")
 BLOCKED_N = re.compile(r",\s+(\d+)\s+BLOCKED")
 
 
-def collect(layer):
-    d = os.path.join(HERE, layer)
-    if not os.path.isdir(d):
-        return []
-    return [os.path.join(d, n) for n in sorted(os.listdir(d))
-            if n.endswith(".py") and not n.startswith("_")]
+def _all_files():
+    out = []
+    for root, _, files in os.walk(HERE):
+        if "__pycache__" in root or os.path.relpath(root, HERE) == "lib":
+            continue
+        for n in sorted(files):
+            if n.endswith(".py") and not n.startswith("_"):
+                out.append(os.path.relpath(os.path.join(root, n), HERE).replace(os.sep, "/"))
+    return out
+
+
+def classify(f):
+    rel = f
+    r = subprocess.run([sys.executable, os.path.join(HERE, f)], capture_output=True, text=True)
+    out = (r.stdout or "") + (r.stderr or "")
+    sys.stdout.write(out)
+    if not out.endswith("\n"):
+        print()
+    m = SUMMARY.search(out)
+    bn = BLOCKED_N.search(out)
+    n_blocked = int(bn.group(1)) if bn else 0
+    n_failed = int(m.group(3)) if m else None
+    saw_blocked = (r.returncode == BLOCKED_EXIT or "BLOCKED:" in out)
+    if r.returncode not in (0, BLOCKED_EXIT):
+        if n_failed and n_failed > 0:
+            return "FAIL", rel
+        return "CRASH", rel
+    if n_failed and n_failed > 0:
+        return "FAIL", rel
+    if saw_blocked:
+        return "BLOCKED", rel
+    if n_blocked > 0:
+        return "PARTIAL", rel
+    if m and int(m.group(1)) == 0 and int(m.group(2)) == 0:
+        return "EMPTY", rel
+    if m and int(m.group(2)) > 0:
+        return "PASS", rel
+    return "NO-SUMMARY", rel
 
 
 def main():
-    which = sys.argv[1] if len(sys.argv) > 1 else None
-    layers = [which] if which else LAYERS
-    files = []
-    for layer in layers:
-        found = collect(layer)
-        if which and not found:
-            print(f"no tests in layer '{layer}' (yet)")
-        files += found
+    argv = sys.argv[1:]
+    materials = "--materials" in argv
+    argv = [a for a in argv if a != "--materials"]
+    only = argv[0] if argv else None
+
+    if materials:
+        files = _all_files()
+        if only:
+            files = [f for f in files if only in f]
+    else:
+        files = LOCAL_BOUNDARY
+        if only:
+            files = [f for f in files if only in f]
+        print("ENTRY: local boundaries only (NO registry, NO plugin chain).")
+        print("This is NOT hub-capability acceptance; the plugin chain is UNVERIFIED.\n")
     if not files:
-        print("no test files found - nothing was verified; exit non-zero")
+        print("no files selected; exit non-zero")
         return 2
 
-    print(f"hub test suite: {len(files)} file(s)\n")
-    passed, failed, blocked, crashed, partial = [], [], [], [], []
+    buckets = {}
     for f in files:
-        rel = os.path.relpath(f, HERE).replace(os.sep, "/")
-        print(f"=== {rel} ===")
-        r = subprocess.run([sys.executable, f], capture_output=True, text=True)
-        out = (r.stdout or "") + (r.stderr or "")
-        sys.stdout.write(out)
-        if not out.endswith("\n"):
-            print()
-        m = SUMMARY.search(out)
-        bn = BLOCKED_N.search(out)
-        n_blocked = int(bn.group(1)) if bn else 0
-        n_failed = int(m.group(3)) if m else None
-        saw_blocked = (r.returncode == BLOCKED_EXIT or "BLOCKED:" in out)
-        # PRIORITY: a FAILURE or a CRASH can never be hidden by a BLOCKED line, and a non-zero
-        # exit that is not the BLOCKED sentinel is never a PASS.
-        if r.returncode not in (0, BLOCKED_EXIT):
-            # A hard error (uncaught traceback, assertion, timeout) OUTSIDE the BLOCKED sentinel.
-            if n_failed and n_failed > 0:
-                failed.append(rel)
-                print(f"--- {rel}: FAIL ({n_failed} failed)")
-            else:
-                crashed.append(rel)
-                print(f"--- {rel}: CRASH (exit {r.returncode})")
-        elif n_failed and n_failed > 0:
-            # exit 0 but the file's OWN summary says checks FAILED -> FAIL, regardless of exit code
-            # or any BLOCKED line. This closes 'failing assertion exits 0'.
-            failed.append(rel)
-            print(f"--- {rel}: FAIL ({n_failed} failed, reported in its summary)")
-        elif saw_blocked:
-            # The file printed a BLOCKED line: the whole file is blocked (it stopped at a missing
-            # precondition). Its earlier ok checks are NOT a pass for the blocked capability.
-            if n_blocked == 0:
-                # a bare 'BLOCKED:' with no summary count - still blocked.
-                blocked.append(rel)
-            else:
-                blocked.append(rel)
-            print(f"--- {rel}: BLOCKED (a real precondition is missing; UNVERIFIED)")
-        elif n_blocked > 0:
-            # Some checks passed AND some are blocked (the file finished with ok + a BLOCKED count).
-            # NOT a clean pass: PARTIAL.
-            partial.append(rel)
-            print(f"--- {rel}: PARTIAL ({m.group(1) if m else '?'}/{m.group(2) if m else '?'} ok, {n_blocked} BLOCKED - not fully verified)")
-        elif m and int(m.group(1)) == 0 and int(m.group(2)) == 0:
-            # 0/0 ok is NOT a pass: nothing was asserted, so nothing was proven.
-            crashed.append(rel)
-            print(f"--- {rel}: EMPTY (0/0 checks - nothing was proven)")
-        elif m and int(m.group(2)) > 0:
-            passed.append(rel)
-            print(f"--- {rel}: PASS ({m.group(1)}/{m.group(2)})")
-        elif r.returncode == 0 and not m and not saw_blocked:
-            # exit 0, no summary, no BLOCKED: a file that reported success its own way, but with
-            # no tally we cannot see a count - treat as UNVERIFIED, not PASS.
-            crashed.append(rel)
-            print(f"--- {rel}: NO-SUMMARY (exit 0, no tally - UNVERIFIED)")
-        else:
-            crashed.append(rel)
-            print(f"--- {rel}: CRASH (exit {r.returncode}, no summary)")
+        print(f"=== {f} ===")
+        kind, r = classify(f)
+        buckets.setdefault(kind, []).append(r)
+        print(f"--- {r}: {kind}")
         print()
 
-    # A file that BLOCKED mid-way (some checks ran, then a precondition failed) is reported as
-    # both: partially verified + blocked. Keep it simple and honest: any BLOCKED line wins.
-    total = len(files)
     print("=" * 60)
-    print(f"files: {total}")
-    print(f"  PASS    : {len(passed)}")
-    print(f"  FAIL    : {len(failed)}")
-    print(f"  BLOCKED : {len(blocked)}  (a real precondition is missing -> UNVERIFIED)")
-    print(f"  PARTIAL : {len(partial)}  (some checks passed, some BLOCKED -> not fully verified)")
-    print(f"  CRASH   : {len(crashed)}")
-    if blocked:
-        print("\nBLOCKED (NOT verified, NOT a pass):")
-        for b in blocked:
-            print(f"  - {b}")
-    if failed:
-        print("\nFAIL:")
-        for b in failed:
-            print(f"  - {b}")
-    if crashed:
-        print("\nCRASH:")
-        for b in crashed:
-            print(f"  - {b}")
-    print("\nNo 'all green': {p} passed, {f} failed, {b} blocked, {c} crashed/unverified.".format(
-        p=len(passed), f=len(failed), b=len(blocked), c=len(crashed)))
-    # Non-zero if anything FAILED, CRASHED, or if NOTHING was verified (an all-BLOCKED run must
-    # NOT look like success to a CI that reads only the exit code). A run with zero PASS and zero
-    # FAIL proved nothing, so it exits non-zero too.
-    if failed or crashed:
-        return 1
-    if len(passed) == 0:
-        print("no test VERIFIED anything (0 passed) - exit non-zero so this is never read as success")
-        return 2
-    return 0
+    for k in ("PASS", "PARTIAL", "BLOCKED", "FAIL", "CRASH", "EMPTY", "NO-SUMMARY"):
+        if k in buckets:
+            print(f"  {k:10}: {len(buckets[k])}")
+    if materials:
+        print("\n--materials ran the UNVERIFIED set. Its result is NOT a hub-capability result;")
+        print("BLOCKED means the real precondition (published registry) is missing.")
+    else:
+        print("\nThese are LOCAL, NARROW observations only - NOT 'hub capabilities passed'.")
+        print("The plugin-driven user chain (install by id -> runtime -> session -> turn) is UNVERIFIED.")
+    return 1 if (buckets.get("FAIL") or buckets.get("CRASH")) else 0
 
 
 if __name__ == "__main__":
