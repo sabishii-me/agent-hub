@@ -20,21 +20,20 @@ BLOCKED row: the official registry release is UNPUBLISHED.
 `python tests/run.py` classifies each file by EXIT CODE and its summary into SEPARATE buckets —
 PASS / PARTIAL / BLOCKED / FAIL / CRASH / EMPTY. There is no "N/N passed".
 
-Full-suite result for commit 5bd6fe3 (raw output: docs/tasks/20261005-run-output-raw.txt):
+Full-suite result for commit 0fc8568 (raw output: docs/tasks/20261005-run-output-raw.txt):
 ```
 files: 45
-  PASS    : 8      (independent, no registry)
+  PASS    : 7      (independent, no registry)
   PARTIAL : 4      (some checks pass, some BLOCKED)
   BLOCKED : 33     (a real precondition is missing -> UNVERIFIED)
-  FAIL    : 0
+  FAIL    : 1      (the >=100-concurrent-connections claim: measured peak 4-6, NOT 100)
   CRASH   : 0
 ```
-8 + 4 + 33 = 45. The buckets are DISJOINT: each file is exactly one of PASS/PARTIAL/BLOCKED/FAIL/
-CRASH (a PARTIAL file is counted once, not also in BLOCKED). The per-file verdicts and every
-summary line are in the raw output.
+7 + 4 + 33 + 1 = 45. Buckets are DISJOINT. The FAIL is real: one-hundred-connections MEASURES the
+peak simultaneous connections and the hub did NOT hold 100 at once; the old PASS was about
+completion, not concurrency, and is retracted.
 
-PASS files (all verifiable without the registry): contract/status-surface, contract/served-surface,
-concurrency/one-hundred-connections, plugins/a-caller-cannot-install-from-an-arbitrary-url,
+PASS files: contract/status-surface, contract/served-surface, plugins/a-caller-cannot-install-from-an-arbitrary-url,
 plugins/the-release-hub-ignores-the-registry-override, harnesses/an-uninstalled-harness-cannot-be-used,
 skills/crud, connections/crud.
 
@@ -54,8 +53,10 @@ plugins/the-release-hub-error-surface.
 | registry refresh ERROR surface | real hub | refresh at dead/500/non-JSON/no-array | 502 registry_unavailable naming the case |
 | release build error codes | RELEASE binary | bad body / missing / unlisted source | 400 validation_failed; 404 not_found; 403 |
 | an uninstalled harness cannot be used | real hub, no plugins | GET /v1/harnesses, POST /v1/sessions | 404 harness_not_found |
-| 100 loopback connections | real hub | 100 idle conns | no timeout |
-| skills + connections CRUD | real hub | /v1/skills*, /v1/connections* | 7/7, 8/8 |
+| an uninstalled harness cannot be used | real hub, no plugins | GET /v1/harnesses, POST /v1/sessions | 404 harness_not_found |
+| skills + connections CRUD | real hub | /v1/skills*, /v1/connections* | 9/9, 10/10 (PATCH read back; delete proven by an authoritative read) |
+| SSE stream opens, does not block a GET | real hub | GET /v1/events held; GET /v1/harnesses | SSE 200 + first byte; GET < 5s |
+| >=100 connections AT ONCE | real hub | 120 requests | **FAIL**: measured peak 4-6; the claim is retracted |
 
 ## Two. UNVERIFIED / BLOCKED — the official registry is unpublished
 
