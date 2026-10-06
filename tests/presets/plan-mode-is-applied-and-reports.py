@@ -1,12 +1,17 @@
-# `plan` is a session policy knob (PATCH /v1/sessions/{id} {plan:true|false}); the hub
-# forwards it to the adapter's plan extension and follows the harness's own plan state
-# (the contract's plan.changed). A PATCH to true must be APPLIED (the session reports
-# plan true, or the change is refused with a reason) - never silently ignored. Exposes the
-# case where the plan knob does nothing. Real adapter; no model call needed to toggle.
+# `plan` is a session policy knob (PATCH /v1/sessions/{id} {plan:true|false}). The contract
+# distinguishes TWO fields: `plan` (the REQUESTED state) and `appliedPlan` (what the ADAPTER
+# actually applied - "proof"). This file tests both, separately, and does NOT claim runtime
+# behaviour:
+#  (A)  the hub RECORDS the requested plan        -> `plan`
+#  (B)  the adapter's APPLIED plan is reported    -> `appliedPlan`
+#  (B2) switch OFF: both fields read false
+#  (C)  plan actually CONSTRAINS runtime behaviour -> UNVERIFIED (BLOCKED; no contract-pinned
+#       observable, and it is not inferred from the fields above)
 #
-# FACT:    PATCH plan:true is APPLIED (the session reports plan true), and plan:false is accepted
-# SOURCE:  ARCHITECTURE s23; contract/v1.json PATCH session policy plan
-# EXPOSES: a plan knob that silently does nothing
+# FACT:    PATCH plan sets `plan` (request) and the adapter reports `appliedPlan` (applied);
+#          runtime behavioural enforcement is NOT claimed
+# SOURCE:  ARCHITECTURE s23; contract/v1.json session `plan` vs `appliedPlan`
+# EXPOSES: a plan knob whose request is stored but never applied (A passes, B fails)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
@@ -34,33 +39,37 @@ try:
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")
 
-    # Turn plan ON.
+    # (A) CONFIG READ/WRITE: the hub records the REQUESTED plan (`plan`). This proves storage, not
+    # application.
     p = hub.patch(f"/v1/sessions/{sid}", {"plan": True})
     t.check(p["status"] < 300, "PATCH plan:true is accepted", f"status={p['status']} {p['text'][:160]}")
-    body = p["json"] or {}
-    sess = body.get("session", body)
-    # pi SHIPS the plan extension, so plan:true must be genuinely APPLIED: the session
-    # reports `plan == True`. The contract's warning path is for a harness that CANNOT
-    # apply it; accepting a warning here was a fake that passed even when plan did
-    # nothing (the very failure this file exists to expose).
-    reported = sess.get("plan")
-    # The bool is the contract's APPLIED read-back; it is a CLAIM. The behavioural proof that plan
-    # is really in effect (below) is what makes it non-fake: under plan a write tool must NOT run.
-    # The contract's rule for a policy field is 'applied fields must confirm ACTUAL state'. The
-    # confirmation for plan is the session's read-back of the plan state the HARNESS holds - not a
-    # side-effect guess. A 'write did not happen' is NOT the product's contract (a provider error or
-    # a non-executing model would also produce it) and was therefore retracted; a turn that writes
-    # under plan would be a harness bug we would see as plan_off/plan_changed arriving instead.
-    t.check(reported is True,
-            "plan:true is APPLIED and CONFIRMED by the session's read-back (the contract's confirmation)",
-            f"plan={reported} warning={body.get('warning') or sess.get('warning')}")
+    sess = (p["json"] or {}).get("session", (p["json"] or {}))
+    t.check(sess.get("plan") is True,
+            "(A) the hub RECORDS the requested plan:true (`plan` - a stored request, not application)",
+            f"plan={sess.get('plan')}")
 
-    # Plan is switchable: turn it OFF and confirm the harness now holds false.
+    # (B) APPLIED REPORT: the contract's field for what the ADAPTER applied is `appliedPlan` ("proof"),
+    # distinct from `plan` ("the request"). Assert the APPLIED field, not the request field.
+    sess2 = (hub.get(f"/v1/sessions/{sid}")["json"] or {}).get("session", {})
+    applied = sess2.get("appliedPlan")
+    t.check(applied is True,
+            "(B) the adapter's APPLIED plan is reported true (`appliedPlan` - the contract's proof field)",
+            f"appliedPlan={applied} plan={sess2.get('plan')} err={sess2.get('startError')}")
+
+    # (C) ACTUAL RUNTIME BEHAVIOUR under plan (e.g. a write is refused/hidden). This needs a
+    # behaviour the contract makes observable; we do NOT infer it from `plan`/`appliedPlan` and do
+    # NOT fabricate it. UNVERIFIED here.
+    t.blocked_check(
+        "(C) plan ACTUALLY constrains runtime behaviour (a write under plan is refused/hidden)",
+        "no contract-pinned observable for it; not inferred from the plan/appliedPlan FIELDS")
+
+    # (B2) Switch OFF and confirm the adapter reports appliedPlan false.
     p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False}, key="plan-off")
     t.check(p2["status"] < 300, "PATCH plan:false is accepted", f"status={p2['status']} {p2['text'][:160]}")
-    sess2 = (hub.get(f"/v1/sessions/{sid}")["json"] or {}).get("session", {})
-    t.check(sess2.get("plan") is False, "plan:false is CONFIRMED by the read-back (it really switched)",
-            f"plan={sess2.get('plan')}")
+    sess3 = (hub.get(f"/v1/sessions/{sid}")["json"] or {}).get("session", {})
+    t.check(sess3.get("plan") is False and sess3.get("appliedPlan") is False,
+            "(B2) plan:false is recorded AND the adapter reports appliedPlan false",
+            f"plan={sess3.get('plan')} appliedPlan={sess3.get('appliedPlan')}")
 finally:
     ok = t.done()
     hub.cleanup()

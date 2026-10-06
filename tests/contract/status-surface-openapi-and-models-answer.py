@@ -40,7 +40,15 @@ try:
 
     m = hub.get("/v1/models")
     t.check(m["status"] == 200, "GET /v1/models answers 200", f"status={m['status']}")
-    t.check("models" in (m["json"] or {}), "GET /v1/models returns a models array", f"keys={list((m['json'] or {}).keys())}")
+    # The value must be an ARRAY of model objects, not merely the presence of the key ({"models":
+    # "not-an-array"} must fail). Each entry must carry an id/providerId per the contract.
+    arr = (m["json"] or {}).get("models")
+    t.check(isinstance(arr, list), "GET /v1/models returns a models ARRAY (not a bare key)",
+            f"type={type(arr).__name__} body={m['text'][:160]}")
+    if isinstance(arr, list) and arr:
+        sample = arr[0]
+        t.check(isinstance(sample, dict) and ("id" in sample) and ("providerId" in sample),
+                "each model entry carries the contract's id + providerId", f"sample={sample}")
 finally:
     ok = t.done()
     hub.cleanup()

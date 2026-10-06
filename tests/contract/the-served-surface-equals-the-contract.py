@@ -2,7 +2,8 @@
 # no declared route left unmounted. A route that answers `not_implemented` is a stub, which
 # is not a capability; this file proves the SHAPE, not the behaviour (other layers do that).
 #
-# FACT:    the hub serves EXACTLY the contract's routes: none extra, none missing, no stub
+# FACT:    the hub serves EXACTLY the contract's routes (none extra, none missing); no
+#          parameterless GET answers `not_implemented` (501). Per-route CAPABILITY is NOT proven here.
 # SOURCE:  contract/v1.json endpoints (74)
 # EXPOSES: an undeclared route, a missing route, or a parameterless GET answering 501
 # (A test that would pass whatever happens is not a test: this block names the fact it
@@ -38,11 +39,12 @@ try:
     t.check(not extra, "the hub serves no route the contract does not declare", f"extra={extra}")
     t.check(not missing, "every declared route is mounted", f"missing={missing}")
 
-    # A stub is a route that answers `not_implemented` for a plain GET. Probe the
-    # parameterless GETs; a 501 is a stub. SSE (/v1/events) is a STREAM, not a
-    # request/response, so it is excluded (probing it would block). A short timeout
-    # keeps any single probe from hanging.
+    # SCOPE: this file proves the ROUTE SET (mounted == declared). It ALSO flags a parameterless GET
+    # that answers `not_implemented` (501) as a STUB. It does NOT prove each route provides its
+    # capability: a route answering 404/500 is a per-route contract matter, NOT a 'stub' here, and
+    # is recorded separately (not asserted away). SSE is excluded (a stream).
     stubs = []
+    other_nonok = []
     for e in contract["endpoints"]:
         if e["method"].upper() != "GET" or "{" in e["path"]:
             continue
@@ -55,7 +57,14 @@ try:
             continue
         if g["status"] == 501:
             stubs.append(e["path"])
-    t.check(not stubs, "no parameterless GET answers 501 (no stub route)", f"stubs={stubs}")
+        elif g["status"] >= 300:
+            other_nonok.append(f"{e['path']}={g['status']}")
+    t.check(not stubs, "no parameterless GET answers 501 (not_implemented stub)", f"stubs={stubs}")
+    if other_nonok:
+        # Honest: a mounted route that answers 4xx/5xx on a parameterless GET is NOT proven capable
+        # by this file. Reported, and the 'capability' claim is narrowed - not silently passed.
+        t.blocked_check("every parameterless GET is CAPABLE (not just mounted)",
+                        f"these answered non-2xx: {other_nonok} - per-route capability NOT verified here")
 finally:
     ok = t.done()
     hub.cleanup()
