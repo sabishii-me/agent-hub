@@ -27,6 +27,10 @@ pub struct RuntimeSpec {
     pub package: Option<String>,
     pub version: Option<String>,
     pub target: Option<String>,
+    /// The harness argv (`["node","runtime/dist/cli.js"]`). Its non-absolute parts
+    /// resolve against the plugin dir; the SCRIPT existing is what `runtimeReady`
+    /// means (contract GET /v1/plugins).
+    pub command: Option<Vec<String>>,
 }
 
 impl Manifest {

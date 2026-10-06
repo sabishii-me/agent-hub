@@ -304,10 +304,15 @@ impl Plugins {
                 .and_then(|m| m.runtime.as_ref())
                 .map(|r| {
                     serde_json::json!({
-                        "package": r.package, "version": r.version, "target": r.target
+                        "package": r.package, "version": r.version,
+                        "target": r.target.clone().or_else(|| runtime_script(&target, manifest.as_ref()))
                     })
                 }),
-            runtime_ready: false,
+            // The contract: `runtimeReady` is a FACT about the filesystem - the
+            // manifest's command exists under the plugin dir - not a claim about the
+            // harness working. It was hardcoded `false`, so a SUCCESSFUL prepare read
+            // as not-ready (docs/issues/20261005-090000).
+            runtime_ready: runtime_command_present(&target, manifest.as_ref()),
             state: self.state_of(id),
             prepare: None,
             invalid,
@@ -561,4 +566,47 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+
+/// Whether the manifest's declared runtime command exists on disk, relative to the
+/// plugin directory (the contract's `runtimeReady`: "the manifest's command exists").
+fn runtime_command_present(plugin_dir: &std::path::Path, manifest: Option<&Manifest>) -> bool {
+    let Some(m) = manifest else { return false };
+    let Some(rt) = m.runtime.as_ref() else { return false };
+    // The runtime command is `[program, script, ...]`; the SCRIPT (a relative path) is
+    // what must exist. Prefer the last arg that looks like a relative path.
+    let argv = match rt.command.as_ref() {
+        Some(c) if !c.is_empty() => c,
+        _ => return false,
+    };
+    for arg in argv.iter().rev() {
+        if arg.starts_with('-') {
+            continue;
+        }
+        let p = std::path::Path::new(arg);
+        let full = if p.is_absolute() { p.to_path_buf() } else { plugin_dir.join(p) };
+        if full.is_file() {
+            return true;
+        }
+    }
+    false
+}
+
+
+/// The absolute path of the manifest's runtime script (the last non-flag arg),
+/// resolved against the plugin dir. `None` when the manifest declares no command.
+fn runtime_script(plugin_dir: &std::path::Path, manifest: Option<&Manifest>) -> Option<String> {
+    let argv = manifest?.runtime.as_ref()?.command.as_ref()?;
+    for arg in argv.iter().rev() {
+        if arg.starts_with('-') {
+            continue;
+        }
+        let p = std::path::Path::new(arg);
+        let full = if p.is_absolute() { p.to_path_buf() } else { plugin_dir.join(p) };
+        if full.is_file() {
+            return Some(full.to_string_lossy().to_string());
+        }
+    }
+    None
 }

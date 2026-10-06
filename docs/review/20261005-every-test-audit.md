@@ -1,7 +1,9 @@
 # EVERY test, EVERY plugin, EVERY line — real vs mock (2026-10-05)
 
-Finding: the whole session-driving suite uses `Hub(plugins_src=<local path>)`, which
-**copies the plugin directory into the plugins root** (a MOCK). No test runs the REAL
+UPDATE (2026-10-05): the `plugins_src` COPY mock is GONE from `tests/lib/hub.py`; it now installs
+the REAL registry artifact (url+sha256+size) and runs `prepare`. Found and fixed a real bug in the
+process (runtimeReady hardcoded false, 20261005-090000). The table below records the state BEFORE
+this change (the finding). No test runs the REAL
 install path (a git URL, or a verified release artifact + `prepare`), and NONE calls
 `prepare` — so the runtime is never materialised the way the hub actually does it.
 A REAL artifact install of pi reaches `ready` but a session FAILS:

@@ -41,3 +41,9 @@ now. Trace `crates/plugins` `view`/`row_for_dir` and `runtimeReady` before chang
 ## Status
 
 recorded, NOT fixed.
+
+_STATUS: FIXED. `plugins::manifest::RuntimeSpec` did not parse `command`, so `runtimeReady`
+was hardcoded false. Now the view computes `runtimeReady` and `runtime.target` from the manifest's
+command on disk. Verified: before prepare false, after prepare TRUE with the resolved target. The
+suite's `hub.py` now installs the REAL registry artifact + prepares, so session tests run against a
+real install (lifecycle/crud 19/19)._
