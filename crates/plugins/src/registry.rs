@@ -18,10 +18,12 @@
 
 /// The one official registry the shipped hub will ever contact. Fixed at build time.
 ///
-/// PROPOSED value (owner to confirm): the first-party `registry.json` at the repo root,
-/// published on `main` of the official repository (git remote: sabishii-me/agent-hub).
+/// It is the `registry` release asset of the hub's OWN repository - a fixed artifact name on
+/// a fixed tag (`registry`), so the address never moves when the catalog changes. The release
+/// is published only by the maintainer; the hub never takes a registry address from a caller or
+/// the environment (docs/issues/20261005-130000).
 pub const OFFICIAL_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/sabishii-me/agent-hub/main/registry.json";
+    "https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json";
 
 /// The address the hub fetches the registry from.
 ///
