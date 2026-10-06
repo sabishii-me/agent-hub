@@ -1,16 +1,15 @@
 # C1: several sessions each start a turn, then ALL are cancelled together. Every turn must
 # reach a terminal state; none may wedge another; every session must stay usable.
 #
-# SCOPE (honest): this proves that N sessions can each be ADMITTED a turn and that cancelling
-# them all releases every one. It does NOT prove the N turns were CONCURRENTLY IN FLIGHT at the
-# moment of cancellation (a short turn can finish before it is sampled), nor that cancellation
-# interleaved concurrently - the cancels are issued in a loop. Concurrent-in-flight cancellation
-# is therefore UNVERIFIED and marked BLOCKED below, not claimed.
+# SCOPE (honest, RETRACTED claims): this file proves that N sessions can each be ADMITTED a turn,
+# that every cancel request is accepted, and that EVERY turn then settles and stays readable. It
+# does NOT prove the N turns were concurrently in flight, NOR that the CANCELS caused the ends
+# (turns may finish on their own). Those two are explicit BLOCKEDs below, not claimed.
 #
-# FACT:    N sessions each get a turn admitted and, when cancelled together, ALL settle and stay
-#          readable (a stop of one does not block another's settle)
+# FACT:    N sessions each get a turn admitted; every cancel is accepted; all turns settle and stay
+#          readable
 # SOURCE:  ARCHITECTURE s12; contract/v1.json cancel + turns
-# EXPOSES: a wedged turn after a batch cancel
+# EXPOSES: a wedged turn after a batch cancel (a turn that never settles)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
@@ -52,9 +51,13 @@ try:
     # turned into a weak `>= 1` check to look green. The settling check below is the
     # load-bearing one.
 
-    # Cancel ALL at once (no waiting between).
+    # Cancel ALL (in a loop - the cancels are NOT concurrent; see the BLOCKED below).
+    cancel_codes = []
     for sid in sids:
-        hub.post(f"/v1/sessions/{sid}/cancel")
+        cr = hub.post(f"/v1/sessions/{sid}/cancel")
+        cancel_codes.append(cr["status"])
+    t.check(all(c < 300 or c == 409 for c in cancel_codes),
+            "every cancel request is ACCEPTED (2xx) or reports already-idle (409)", f"codes={cancel_codes}")
 
     # EVERY turn settles to a terminal. Assert per turn, with a bound.
     settled = 0
@@ -70,6 +73,10 @@ try:
     # settle and stay readable. What is NOT proven - and is marked BLOCKED, not claimed - is that the
     # N turns were CONCURRENTLY IN FLIGHT when cancelled. A poll across N turns is racy (a short
     # turn can finish before it is sampled), so it cannot be asserted; this is the honest gap.
+    t.blocked_check(
+        "the cancels CAUSED the turns to end (vs the turns ending on their own)",
+        "no reliable in-flight signal: a turn may finish before its cancel lands, so 'ended after "
+        "cancel' does not attribute the end to the cancel. Retracted from the capability claim.")
     t.blocked_check(
         "N turns were concurrently IN FLIGHT at the moment of cancellation",
         "not assertable without a reliable in-flight signal; a poll across N turns is racy")

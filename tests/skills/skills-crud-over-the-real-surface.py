@@ -35,8 +35,14 @@ try:
 
     d = hub.delete("/v1/skills/demo")
     t.check(d["status"] < 300, "delete the skill", f"status={d['status']}")
+    # Authoritative: the deleted skill's file must GET as 404 (a 500 read as 'gone' is not proof).
+    rf = hub.get("/v1/skills/demo/files/SKILL.md")
+    t.check(rf["status"] == 404, "the deleted skill's file GETs as 404 (authoritative)",
+            f"status={rf['status']} {rf['text'][:120]}")
     l2 = hub.get("/v1/skills")
-    t.check(not any(s.get("id") == "demo" for s in (l2["json"] or {}).get("skills", [])), "the skill is gone", "")
+    t.check(l2["status"] == 200, "the skills list answers 200 after the delete", f"status={l2['status']}")
+    t.check(not any(s.get("id") == "demo" for s in (l2["json"] or {}).get("skills", [])),
+            "the skill is gone from the list", f"body={l2['text'][:120]}")
 finally:
     ok = t.done()
     hub.cleanup()

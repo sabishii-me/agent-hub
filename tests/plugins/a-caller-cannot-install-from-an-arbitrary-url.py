@@ -1,17 +1,13 @@
-# SECURITY: a caller must NOT be able to make the hub install code the registry does not
-# list. The registry is the trust anchor: install names an id, the hub resolves it from
-# ITS registry. A caller-supplied url is an arbitrary-code-execution hole (anyone who can
-# reach POST /v1/plugins makes the hub download and run a virus AS ITSELF, then blame the
-# hub). This test builds a plugin that is in NO registry and proves it cannot be installed.
+# SECURITY (narrow claim): with NO registry loaded, a caller-supplied url/artifact must be REFUSED
+# with the specific registry-authorization code, and nothing may land. This proves the NO-REGISTRY
+# refusal, NOT that a real registry would reject a foreign-but-listed source. The broader claim
+# ('a caller can never inject, even with a published registry') is BLOCKED (needs the real registry).
 #
-# FACT:    POST /v1/plugins with a caller-supplied url/artifact for an id the registry does
-#          not list is REFUSED (a named code), and no such plugin appears under the plugins
-#          root. Installing is by registry id ONLY.
-# SOURCE:  docs/issues/20261005-130000; docs/review/20261005-plugin-system-security-design.md;
-#          docs/review/20261005-contract-proposal-install-by-registry-id.md;
-#          contract/openapi.json POST /v1/plugins.
-# EXPOSES: the hub running code a caller chose - the whole point of a registry. A green here
-#          means a caller cannot inject; a red means it can.
+# FACT:    with no registry, POST /v1/plugins with a caller source answers 403 plugin_not_in_registry
+#          and no plugin directory lands
+# SOURCE:  docs/issues/20261005-130000; contract/errors.json plugin_not_in_registry
+# EXPOSES: a hub that accepts an unlisted source (installs it), or refuses with an unrelated code
+#          (a download failure) so the refusal is not attributable to the authorization gate
 import os
 import shutil
 import subprocess
@@ -41,15 +37,13 @@ for c in (["git", "init", "-q"], ["git", "config", "user.email", "a@a"],
 hub = Hub()
 try:
     hub.start()
-    # The attack: name a url the registry never listed.
+    # The attack: name a url the registry never listed. The refusal must be the SPECIFIC
+    # authorization code, not a generic '>=400' (a 502 download failure would also satisfy that).
     r = hub.post("/v1/plugins", {"source": {"url": evil, "ref": "HEAD"}}, key="evil", timeout=30)
     code = (r["json"] or {}).get("error")
-    t.check(r["status"] >= 400 and r["status"] != 500,
-            "a caller-supplied url for an unlisted id is REFUSED (not accepted, not a 500)",
+    t.check(r["status"] == 403 and code == "plugin_not_in_registry",
+            "an unlisted source is refused with 403 plugin_not_in_registry (the gate, not a download error)",
             f"status={r['status']} code={code} {r['text'][:180]}")
-    # Do not name the code here (the owner chooses it); require that it IS a named code,
-    # i.e. a refusal the caller can act on - not a silent 202.
-    t.check(bool(code), "the refusal carries a contract error code", f"code={code} {r['text'][:180]}")
 
     # The plugin must NOT appear (no code landed).
     time.sleep(1.0)

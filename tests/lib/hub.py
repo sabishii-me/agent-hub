@@ -27,29 +27,47 @@ EXE = os.path.join(REPO, "target", _PROFILE, "agent-hub" + _SUFFIX)
 
 
 def registry_published():
-    """Whether the official hub registry release asset is REACHABLE right now. A test that must
-    install a plugin calls this to decide PASS-path vs BLOCKED: it does NOT fabricate a registry.
-    Returns (ok, reason)."""
+    """Classify the official registry release asset. Returns one of:
+      ('published', url)      - HTTP 200: it exists and can be used.
+      ('unpublished', why)    - HTTP 404: the release/asset does not exist (BLOCKED on publication).
+      ('unreachable', why)    - DNS/TLS/timeout/other 5xx: we do NOT know it is unpublished; the
+                                environment or upstream failed. This is NOT 'confirmed unpublished'.
+    A probe must not call everything 'unpublished': unreachable is its own, weaker fact."""
     import urllib.request
+    import urllib.error
     url = "https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json"
     try:
         req = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(req, timeout=10) as r:
-            return (r.status == 200, f"registry asset answered {r.status}")
+            if r.status == 200:
+                return ("published", url)
+            return ("unreachable", f"the registry asset answered {r.status}")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return ("unpublished", "the official registry release asset does not exist (HTTP 404)")
+        return ("unreachable", f"the registry asset answered HTTP {e.code}")
     except Exception as e:
-        return (False, f"the official registry release is not reachable: {e}")
+        # DNS / TLS / timeout: the registry may exist; we simply could not reach it.
+        return ("unreachable", f"the official registry could not be reached: {type(e).__name__}: {e}")
 
 
 def require_registry_or_blocked():
     """A test that installs a plugin needs the OFFICIAL registry (it must NOT fabricate one).
-    If it is unpublished, raise BLOCKED (exit 3), so the capability is reported UNVERIFIED."""
+    If it is UNPUBLISHED, raise BLOCKED (exit 3) - UNVERIFIED. If it is UNREACHABLE, also BLOCKED
+    but with the weaker reason ('could not reach', not 'confirmed unpublished')."""
     import tally as _tally
-    ok, why = registry_published()
-    if not ok:
+    state, why = registry_published()
+    if state == "published":
+        return
+    if state == "unpublished":
         _tally.blocked(
             "installing a plugin needs the official registry, which is UNPUBLISHED "
             f"({why}). The test will not fabricate a registry; the capability is UNVERIFIED."
         )
+    _tally.blocked(
+        "installing a plugin needs the official registry, which could NOT BE REACHED "
+        f"({why}). This is NOT 'confirmed unpublished'; the capability is UNVERIFIED."
+    )
 
 
 def hub_sha():
@@ -138,11 +156,16 @@ class Hub:
         if not self._plugin_sources:
             return
         import tally as _tally
-        ok, why = registry_published()
-        if not ok:
+        state, why = registry_published()
+        if state == "unpublished":
             _tally.blocked(
                 "installing a plugin needs the official registry, which is UNPUBLISHED "
                 f"({why}). The harness will not fabricate one; the capability is UNVERIFIED."
+            )
+        if state == "unreachable":
+            _tally.blocked(
+                "installing a plugin needs the official registry, which could NOT BE REACHED "
+                f"({why}). NOT 'confirmed unpublished'; the capability is UNVERIFIED."
             )
         # Published: the hub pulls its registry (the official address), then we install the release
         # IT lists. The registry IS published, so a refresh failure here is a PRODUCT failure (or a
@@ -187,15 +210,17 @@ class Hub:
             self._installed.add(pid)
 
     def registry_artifact(self, pid):
-        """The {url, sha256, id, pluginType, version} of `pid`'s newest release as the HUB'S OWN
-        catalog lists it (GET /v1/plugins/catalog) - never a file the test reads. This is how a
-        test installs without acting as the registry: the hub's registry supplies the release, and
-        the hub then reconciles the source against that same registry. Requires a PUBLISHED
-        registry (the hub's catalog must be non-empty)."""
+        """The {url, sha256, id, pluginType, version} of `pid`'s newest release, taken from the
+        HUB'S OWN catalog after the hub REFRESHES its registry from the official address - the real
+        user operation (refresh -> catalog -> install), not a file the test reads and not a HEAD
+        probe standing in for the hub's own preparation."""
+        rr = self.post("/v1/plugins/registry/refresh", timeout=60)
+        if rr["status"] >= 300:
+            raise RuntimeError(f"the hub could not refresh its registry: {rr['status']} {rr['text'][:160]}")
         cat = self.get("/v1/plugins/catalog")
         entry = next((p for p in ((cat["json"] or {}).get("plugins") or []) if p.get("id") == pid), None)
         if entry is None:
-            raise RuntimeError(f"the hub's catalog lists no `{pid}` (registry unpublished or missing)")
+            raise RuntimeError(f"the hub's catalog lists no `{pid}` after refresh (the real registry does not list it)")
         v = (entry.get("versions") or [None])[0]
         if not v:
             raise RuntimeError(f"the catalog entry `{pid}` names no versions")

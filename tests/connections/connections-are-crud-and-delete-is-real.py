@@ -31,15 +31,27 @@ try:
     rows = (l["json"] or {}).get("connections", [])
     t.check(l["status"] == 200 and any(r.get("id") == "c1" for r in rows), "the connection is listed", f"rows={rows}")
 
+    # PATCH must actually CHANGE the stored value: read the authoritative row back by GET (a
+    # no-op PATCH must fail), not merely check the status code.
     p = hub.patch("/v1/connections/c1", {"name": "Slack prod"})
     t.check(p["status"] < 300, "patch the connection", f"status={p['status']} {p['text'][:120]}")
     t.check("xoxb-secret" not in p["text"], "patch never echoes the token")
+    pg = hub.get("/v1/connections")
+    prows = (pg["json"] or {}).get("connections", [])
+    pj = next((r for r in prows if r.get("id") == "c1"), {})
+    t.check(pg["status"] == 200 and pj.get("name") == "Slack prod",
+            "the PATCH actually changed the stored name (read back from the list)",
+            f"status={pg['status']} name={pj.get('name')} body={pg['text'][:120]}")
 
     d = hub.delete("/v1/connections/c1")
     t.check(d["status"] < 300, "delete the connection", f"status={d['status']} {d['text'][:120]}")
     l2 = hub.get("/v1/connections")
+    # The delete is proven by an AUTHORITATIVE 200 read: a 500 (which also yields no rows) must NOT
+    # be read as 'the row is gone'.
+    t.check(l2["status"] == 200, "the list answers 200 after the delete (not a 500 read as gone)",
+            f"status={l2['status']} {l2['text'][:120]}")
     rows2 = (l2["json"] or {}).get("connections", [])
-    t.check(not any(r.get("id") == "c1" for r in rows2), "the connection is gone after delete", f"rows={rows2}")
+    t.check(not any(r.get("id") == "c1" for r in rows2), "the connection is gone from the list", f"rows={rows2}")
 
     d2 = hub.delete("/v1/connections/c1")
     t.check(d2["status"] in (200, 204, 404), "delete is idempotent / reports not-found", f"status={d2['status']}")
