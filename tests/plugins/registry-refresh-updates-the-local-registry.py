@@ -1,7 +1,8 @@
-# The registry IS the env var AGENT_HUB_REGISTRY_URL. Every "no registry / bad registry"
-# case must fail with its TRUE contract code; a correct registry must succeed and be what
-# GET /v1/plugins/catalog reads. There is no checked-in registry: the tests serve the
-# registry themselves over real HTTP.
+# The registry ADDRESS is compiled into the hub (crates/plugins/src/registry.rs): a RELEASE
+# build always contacts the official URL and has NO env override; a DEV build lets
+# AGENT_HUB_REGISTRY_URL override it (so these tests can point at loopback). Every
+# "cannot reach the registry / bad registry" case must fail with its TRUE contract code; a
+# reachable, valid registry must succeed and be what GET /v1/plugins/catalog reads.
 #
 # FACT:    POST /v1/plugins/registry/refresh with no URL, an unreachable address, a non-2xx
 #          answer, a non-JSON body, or JSON without a plugins array fails 502 with code
@@ -78,8 +79,22 @@ def refresh_case(env, name, want_detail_contains):
         hub.stop()
 
 
-# --- Case 1: no AGENT_HUB_REGISTRY_URL.
-refresh_case({}, "no url", "registry_url" if True else "")
+# --- Case 1 (changed): with NO override the hub uses the COMPILED-IN official address, so
+#     "no env" is NOT an error. The error case for "cannot reach the registry" is an
+#     unreachable override (Case 2). Here we only assert the hub does not report a missing
+#     URL when an override is absent - it has an official address to use.
+hub0 = Hub()
+try:
+    hub0.start()
+    # No override: refresh must NOT fail with "not set"; it must contact the official address
+    # (its outcome is 2xx if reachable, or a fetch failure - never a "not configured" error).
+    r0 = hub0.post("/v1/plugins/registry/refresh", timeout=40)
+    code0 = (r0["json"] or {}).get("error")
+    t.check(code0 != "registry_unavailable" or "not set" not in ((r0["json"] or {}).get("detail") or "").lower(),
+            "no override: the hub uses its compiled-in official address (not a 'not set' error)",
+            f"status={r0['status']} body={r0['text'][:180]}")
+finally:
+    hub0.cleanup()
 
 # --- Case 2: an address that does not answer (closed port).
 s = socket.socket(); s.bind(("127.0.0.1", 0)); dead = s.getsockname()[1]; s.close()

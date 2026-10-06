@@ -232,8 +232,20 @@ impl InstallSource {
 async fn install(
     State(s): State<PluginsState>,
     headers: HeaderMap,
-    Json(body): Json<InstallBody>,
+    body: Result<Json<InstallBody>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
+    // A body that does not match the shape is a CLIENT error, and the contract demands a
+    // CODE, not axum's own 422 text: every route failure carries {"error": CODE, "detail"}
+    // (docs/issues/20261005-141000).
+    let Json(body) = match body {
+        Ok(b) => b,
+        Err(rej) => {
+            return s.errors.render(&DomainError::new(
+                "validation_failed",
+                format!("the request body did not match the expected shape: {rej}"),
+            ))
+        }
+    };
     let command_id = command_id(&headers);
     let Some(source) = body.source.into_source() else {
         return s.errors.render(&agent_hub_transport::DomainError::new(

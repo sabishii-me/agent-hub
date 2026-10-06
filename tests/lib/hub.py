@@ -18,7 +18,12 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
-EXE = os.path.join(REPO, "target", "debug", "agent-hub.exe" if os.name == "nt" else "agent-hub")
+_SUFFIX = ".exe" if os.name == "nt" else ""
+# The binary to run. Default = the DEV build (tests set it, or the suite runs as before).
+# AGENT_HUB_BIN=release selects the RELEASE build, whose registry address is FIXED at build
+# time (no env override exists) - that is what the release-build tests must exercise.
+_PROFILE = os.environ.get("AGENT_HUB_PROFILE", "debug").strip() or "debug"
+EXE = os.path.join(REPO, "target", _PROFILE, "agent-hub" + _SUFFIX)
 
 
 def hub_sha():

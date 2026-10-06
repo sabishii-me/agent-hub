@@ -1,0 +1,97 @@
+# ERROR CODES against the RELEASE build of the hub. A release binary's registry address is
+# FIXED at build time (no env override exists), so this is what a USER actually runs. Every
+# failure must answer a CONTRACT code - {"error": CODE, "detail": ...} with the HTTP status
+# contract/errors.json pins - never axum's own text, never a lie in the detail.
+#
+# FACT:    on a release hub, each of these failures answers its contract code and status:
+#            POST /v1/plugins {}            -> 400 validation_failed (body shape)
+#            POST /v1/plugins {source:{}}   -> 400 validation_failed (no url/artifact)
+#            GET  /v1/plugins/{missing}     -> 404 not_found
+#            DELETE /v1/plugins/{missing}   -> 404 not_found (NOT "a deployment directory")
+#            POST /v1/plugins/{missing}/prepare -> 404 not_found
+#            artifact with a wrong sha256   -> 502 artifact_digest_mismatch
+#            artifact with an unreachable url -> 502 artifact_download_failed
+#          and the registry override env var is IGNORED by the release binary.
+# SOURCE:  contract/errors.json + contract/openapi.json; crates/plugins/src/routes.rs (install
+#          rejection -> validation_failed); service.rs (begin_remove: NotFound vs NotInstalledByHub);
+#          crates/plugins/src/registry.rs (address fixed at build time).
+# EXPOSES: a failure that returns 422/axum text; a removed-but-nonexistent id described as a
+#          deployment directory (a false detail); or a release binary honouring the dev override.
+import os
+import sys
+
+# This file is the RELEASE build's error surface: select the release binary for the harness.
+os.environ["AGENT_HUB_PROFILE"] = "release"
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+from hub import Hub, hub_sha, EXE      # noqa: E402
+from tally import Tally, combo         # noqa: E402
+
+t = Tally("plugins/release-error-surface")
+combo(hub_sha(), f"profile=release")
+t.require(os.path.exists(EXE), "the RELEASE binary exists (cargo build --release)", f"missing {EXE}")
+if not t.require(os.path.exists(EXE), "release binary present", f"no {EXE}"):
+    t.done(); sys.exit(1)
+
+
+def code_of(r):
+    return (r["json"] or {}).get("error")
+
+
+hub = Hub(env={"AGENT_HUB_REGISTRY_URL": "http://127.0.0.1:59999/registry.json"})  # must be IGNORED
+try:
+    hub.start()
+
+    r = hub.post("/v1/plugins", {})
+    t.check(r["status"] == 400 and code_of(r) == "validation_failed",
+            "no `source` field -> 400 validation_failed (not 422 axum text)",
+            f"status={r['status']} code={code_of(r)} {r['text'][:140]}")
+
+    r = hub.post("/v1/plugins", {"source": {}})
+    t.check(r["status"] == 400 and code_of(r) == "validation_failed",
+            "source with no url/artifact -> 400 validation_failed",
+            f"status={r['status']} code={code_of(r)} {r['text'][:140]}")
+
+    r = hub.get("/v1/plugins/nope")
+    t.check(r["status"] == 404 and code_of(r) == "not_found",
+            "GET a missing plugin -> 404 not_found", f"status={r['status']} code={code_of(r)}")
+
+    r = hub.delete("/v1/plugins/nope")
+    detail = (r["json"] or {}).get("detail") or ""
+    t.check(r["status"] == 404 and code_of(r) == "not_found",
+            "DELETE a missing plugin -> 404 not_found", f"status={r['status']} code={code_of(r)}")
+    t.check("deployment" not in detail.lower(),
+            "a missing plugin is NOT described as a deployment directory",
+            f"detail={detail!r}")
+
+    r = hub.post("/v1/plugins/nope/prepare")
+    t.check(r["status"] == 404 and code_of(r) == "not_found",
+            "prepare a missing plugin -> 404 not_found", f"status={r['status']} code={code_of(r)}")
+
+    r = hub.post("/v1/plugins", {"source": {"artifact": {
+        "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/harness-adapter-pi-0.1.8.zip",
+        "sha256": "1" * 64, "id": "pi", "pluginType": "harness-adapter", "version": "0.1.8"}}},
+        key="rel-sha", timeout=40)
+    t.check(r["status"] == 502 and code_of(r) == "artifact_digest_mismatch",
+            "artifact with a wrong sha256 -> 502 artifact_digest_mismatch",
+            f"status={r['status']} code={code_of(r)}")
+
+    r = hub.post("/v1/plugins", {"source": {"artifact": {
+        "url": "https://example.invalid/x.zip", "sha256": "0" * 64, "id": "pi",
+        "pluginType": "harness-adapter", "version": "0.1.8"}}}, key="rel-dl", timeout=30)
+    t.check(r["status"] == 502 and code_of(r) == "artifact_download_failed",
+            "artifact with an unreachable url -> 502 artifact_download_failed",
+            f"status={r['status']} code={code_of(r)}")
+
+    # The release binary must IGNORE AGENT_HUB_REGISTRY_URL (compiled out): the refresh goes
+    # to the build-time address and succeeds (6 first-party plugins), never to the override.
+    r = hub.post("/v1/plugins/registry/refresh", timeout=40)
+    src = (r["json"] or {}).get("source", "")
+    n = (r["json"] or {}).get("plugins")
+    t.check(r["status"] < 300 and isinstance(n, int) and n > 0,
+            "the release hub refreshes from its BUILT-IN address (not the dev override)",
+            f"status={r['status']} source={src} plugins={n}")
+finally:
+    hub.cleanup()
+
+t.done()

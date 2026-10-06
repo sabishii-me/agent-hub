@@ -43,3 +43,5 @@ A status is FIXED only with a real run as evidence. `OPEN` = not fixed.
 | 20261005-110000 | HUB | registry error surface is false (plugin_install_failed) + detail discarded the payload | A FIXED / B OPEN | B needs a contract code (registry_unavailable) -> OWNER review |
 | 20261005-120000 | HUB | POST /v1/plugins HANGS for an id owned by a deployment dir | OPEN | needs 409 conflict; exact blocking call not yet located |
 | 20261005-130000 | HUB(security) | install accepts a caller-supplied url -> the hub runs arbitrary code | OPEN | registry = trust anchor; needs contract change (see docs/review/20261005-contract-proposal-install-by-registry-id.md) |
+| 20261005-140000 | HUB | DELETE a nonexistent id says it "is a deployment directory" (a false detail) | FIXED | begin_remove: no row + no dir -> 404 not_found; release test |
+| 20261005-141000 | HUB | a body missing `source` returned 422 axum text, not a contract code | FIXED | install catches JsonRejection -> 400 validation_failed; release test |

@@ -515,10 +515,20 @@ impl Plugins {
             .op_lock
             .try_lock()
             .map_err(|_| PluginError::Conflict("another install/remove is in progress".into()))?;
-        let row = self
-            .db
-            .plugin(id)?
-            .ok_or_else(|| PluginError::NotInstalledByHub(id.into()))?;
+        // Distinguish THREE cases, so the message never lies (docs/issues/20261005-140000):
+        //  - a hub-installed plugin (a row with installed_at) -> allowed;
+        //  - a DEPLOYMENT directory (no row, but a directory with a manifest exists) ->
+        //    NotInstalledByHub (409 `conflict`), naming it a deployment directory;
+        //  - NOTHING here (no row, no directory) -> NotFound (404 `not_found`).
+        let row = match self.db.plugin(id)? {
+            Some(row) => row,
+            None => {
+                if self.has_dir(id) {
+                    return Err(PluginError::NotInstalledByHub(id.into()));
+                }
+                return Err(PluginError::NotFound(id.into()));
+            }
+        };
         if row.installed_at.is_none() {
             return Err(PluginError::NotInstalledByHub(id.into()));
         }
