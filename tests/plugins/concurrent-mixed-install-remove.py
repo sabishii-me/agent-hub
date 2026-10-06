@@ -79,7 +79,12 @@ try:
             d = {}
         if d.get("id"):
             ids.add(d["id"])
-    t.check(ids <= {"pi", "deepseek"}, "every change names one of the two plugin ids (no foreign id)", f"ids={ids}")
+    # Every change names one of the two plugin ids, AND both ids must actually appear: an EMPTY
+    # event set satisfies `ids <= {..}` trivially, so require the seen set to EQUAL the expected
+    # set - an empty (or single-id) stream FAILS.
+    t.check(ids == {"pi", "deepseek"},
+            "the change stream named EXACTLY the two plugin ids (both seen, no foreign id)",
+            f"ids={ids}")
     # Each plugin's own states, read through the resource, are self-consistent.
     for p in ("pi", "deepseek"):
         g = hub.get(f"/v1/plugins/{p}")

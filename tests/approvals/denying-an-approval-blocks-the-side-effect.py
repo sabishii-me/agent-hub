@@ -31,8 +31,11 @@ try:
     r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL, "presetId": "heavy-review"}, key="dn-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
-    cwd = s.get("cwd")
-    target = os.path.join(cwd, "must-not-exist.txt") if cwd else None
+    t.require(cwd is not None, "the session reports a cwd (so the write target is a real path)",
+              "no cwd on the session; cannot test a side effect without a target path")
+    target = os.path.join(cwd, "must-not-exist.txt")
+    if os.path.exists(target):
+        t.check(False, "the target file does not pre-exist", f"target={target} already exists")
 
     tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": f"Use the write tool to create the file {target} containing the single word DENIED, then reply done."}], "idempotencyKey": "dn-t1"}, key="dn-t1")
     tid = tr["json"]["turn"]["id"]
@@ -51,8 +54,8 @@ try:
         aid = approval.get("id")
         hub.post(f"/v1/sessions/{sid}/approvals/{aid}", {"decision": "deny"})
         wait_turn(hub, sid, tid, {"ended"}, tries=240)
-        t.check(target is None or not os.path.exists(target),
-                "the DENIED write did NOT happen (no side effect)", f"target={target} exists={target and os.path.exists(target)}")
+        t.check(not os.path.exists(target),
+                "the DENIED write did NOT happen (no side effect)", f"target={target} exists={os.path.exists(target)}")
     else:
         wait_turn(hub, sid, tid, {"ended"}, tries=120)
 finally:

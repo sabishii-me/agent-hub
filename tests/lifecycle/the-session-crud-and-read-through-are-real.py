@@ -60,9 +60,11 @@ try:
     res = hub.get(f"/v1/sessions/{sid}/resources")
     t.check(res["status"] == 200 and isinstance((res["json"] or {}).get("resources"), list), "GET .../resources returns a catalogue", f"status={res['status']}")
 
-    # compact: the harness compacts its own conversation
+    # compact: the harness compacts its own conversation. A 2xx is the only success; ANY other
+    # status (a 500, or 501 stub) is a failure. 'not 501' let a 500 pass.
     cp = hub.post(f"/v1/sessions/{sid}/compact", {})
-    t.check(cp["status"] != 501, "compact is not a stub", f"status={cp['status']} {cp['text'][:100]}")
+    t.check(cp["status"] < 300, "compact really ran (2xx), not a 500 or a 501 stub",
+            f"status={cp['status']} {cp['text'][:100]}")
 
     # repair PREVIEW never changes state
     rp = hub.post(f"/v1/sessions/{sid}/repair", {"preview": True})

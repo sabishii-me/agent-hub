@@ -87,17 +87,29 @@ try:
             "release hub with no registry: an unreachable url is refused 403 at the gate",
             f"status={r['status']} code={code_of(r)} {r['text'][:120]}")
 
-    # The built-in address is the maintainer's 'registry' release asset, which is NOT PUBLISHED
-    # yet (404). So the refresh cannot succeed: this capability is BLOCKED on publication, not
-    # passed and not failed.
+    # The built-in address is the maintainer's 'registry' release asset. TWO distinct outcomes:
+    #   - the refresh reports it cannot REACH the registry (the asset is unpublished, HTTP 404 in
+    #     the detail) -> BLOCKED on publication; this is environment, not a product defect;
+    #   - ANY other non-success (a 500, a malformed response, a wrong code) -> a PRODUCT failure
+    #     and must FAIL. An unpublished asset must not swallow a real product bug.
     r = hub.post("/v1/plugins/registry/refresh", timeout=40)
+    code = code_of(r)
+    detail = (r["json"] or {}).get("detail") or ""
     if r["status"] < 300:
         n = (r["json"] or {}).get("plugins")
         t.check(isinstance(n, int) and n > 0,
-                "the release hub refreshed from its built-in address", f"status={r['status']} body={r['text'][:120]}")
-    else:
+                "the release hub refreshed from its built-in address (registry is published)",
+                f"status={r['status']} body={r['text'][:120]}")
+    elif code == "registry_unavailable" and "404" in detail:
+        # The built-in asset is not published: an expected, environment-caused block.
         t.blocked_check("the release hub refreshes from its built-in registry address",
-                  f"the 'registry' release asset is UNPUBLISHED; refresh answered {r['status']} {r['text'][:100]}")
+                        f"the 'registry' release asset is UNPUBLISHED (404); refresh said: {detail[:100]}")
+    else:
+        # A non-success that is NOT 'the asset is unpublished' is a PRODUCT failure, not a block.
+        t.check(False,
+                "the release hub's refresh fails ONLY because the asset is unpublished; any other "
+                "failure is a product bug",
+                f"status={r['status']} code={code} detail={detail[:100]}")
 finally:
     hub.cleanup()
 

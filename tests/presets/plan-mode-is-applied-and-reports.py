@@ -13,7 +13,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-from hub import Hub, hub_sha, register_provider      # noqa: E402
+from hub import Hub, hub_sha, register_provider, wait_turn      # noqa: E402
 from tally import Tally, combo, kind_of              # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
@@ -44,9 +44,29 @@ try:
     # apply it; accepting a warning here was a fake that passed even when plan did
     # nothing (the very failure this file exists to expose).
     reported = sess.get("plan")
+    # The bool is the contract's APPLIED read-back; it is a CLAIM. The behavioural proof that plan
+    # is really in effect (below) is what makes it non-fake: under plan a write tool must NOT run.
     t.check(reported is True,
             "plan:true is APPLIED (the session reports plan true)",
             f"plan={reported} warning={body.get('warning') or sess.get('warning')}")
+
+    # BEHAVIOURAL proof that plan is in effect: under plan, a turn that asks for a WRITE must not
+    # produce the file (plan mode is read-only). A field alone is not execution.
+    cwd = sess.get("cwd")
+    if cwd:
+        plan_target = os.path.join(cwd, "plan-must-not-write.txt")
+        tr = hub.post(f"/v1/sessions/{sid}/turns", {
+            "content": [{"type": "text", "text": f"Use the write tool to create {plan_target} with the word PLAN."}],
+            "idempotencyKey": "plan-write"}, key="plan-write")
+        if (tr["json"] or {}).get("turn"):
+            wait_turn(hub, sid, tr["json"]["turn"]["id"], {"ended"}, tries=240)
+            t.check(not os.path.exists(plan_target),
+                    "under plan, a requested WRITE did not happen (plan is really in effect)",
+                    f"target={plan_target} exists={os.path.exists(plan_target)}")
+        else:
+            t.check(False, "the plan-mode write turn was accepted", f"status={tr['status']} {tr['text'][:120]}")
+    else:
+        t.check(False, "the session reports a cwd (to test plan's read-only effect)", "no cwd")
 
     # Turn plan OFF again (a preset that does not ask must be switchable away).
     p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False})

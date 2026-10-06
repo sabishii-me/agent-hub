@@ -1,8 +1,11 @@
 # 20261005-160000 — the Python suite could report PASS while checks FAILED (exit code discarded; a stale release binary)
 
 ## Status
-FIXED (the mechanism); the suite's numbers are now trustworthy again. Recorded because the
-previous "green" numbers were not.
+PARTIALLY FIXED. The exit-code hole and the stale-binary measurement are fixed. The suite's
+numbers are NOT yet fully trustworthy: the runner's PASS/FAIL/BLOCKED classification itself had
+holes (fixed in a later commit), several test designs were falsified (listed in the convergence
+report's item four), and most capabilities are BLOCKED. Do not read the numbers as 'trustworthy';
+read them as 'no longer silently wrong in these specific ways'.
 
 ## Two distortions found while converging (owner's item 4)
 1. **A failing assertion still exited 0.** Five files ended with a bare `t.done()` whose return

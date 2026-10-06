@@ -55,10 +55,10 @@ try:
 finally:
     hub.cleanup()
 
-# --- B7 (UPDATED for the registry reconcile, docs/issues/20261005-130000): a GIT source is not
-# a registry release, so it is refused at the AUTHORIZE gate with 403 plugin_not_in_registry,
-# BEFORE any clone - and no half tree is left. (Before the reconcile, a git source reached the
-# manifest/archive check; now it cannot, because the registry is consulted first.)
+# --- B7: with NO registry, a git source is refused 403. NOTE what this does and does NOT prove:
+# the hub has no registry here, so EVERY source is refused for lack of a registry - this is NOT
+# evidence that git sources are specifically rejected by a sha256 rule. It is the no-registry
+# refusal, which is all that is verifiable without the official registry.
 repo = tempfile.mkdtemp(prefix="nomanifest-")
 shutil.rmtree(repo, ignore_errors=True)
 os.makedirs(repo)
@@ -72,18 +72,20 @@ try:
     hub.start()
     r = hub.post("/v1/plugins", {"source": {"url": repo, "ref": "HEAD"}}, key="b7", timeout=30)
     code, detail = code_and_detail(r)
-    t.check(r["status"] == 403, "B7: a git source is refused 403 at the registry gate", f"status={r['status']} {r['text'][:160]}")
-    t.check(code == "plugin_not_in_registry", "B7: code is plugin_not_in_registry", f"code={code} {r['text'][:160]}")
-    t.check("registry" in detail.lower(), "B7: the message names the registry", f"detail={detail!r}")
+    t.check(r["status"] == 403 and code == "plugin_not_in_registry",
+            "no registry: a git source is refused 403 plugin_not_in_registry",
+            f"status={r['status']} code={code} {r['text'][:160]}")
+    t.check("registry" in detail.lower(), "the message names the registry", f"detail={detail!r}")
     left = plugin_dirs(hub.plugins)
-    t.check(left == [], "B7: a refused install leaves NO plugin directory (only .stage)", f"left={left}")
+    t.check(left == [], "a refused install leaves NO plugin directory (only .stage)", f"left={left}")
 finally:
     hub.cleanup()
     shutil.rmtree(repo, ignore_errors=True)
 
-# --- B8 (UPDATED): an artifact whose sha256 does NOT match the registry entry is refused at the
-# AUTHORIZE gate with 403 plugin_not_in_registry, BEFORE any download. (The old expectation - a
-# download that then fails the digest check - is unreachable: an unlisted digest never downloads.)
+# --- B8: with NO registry, an artifact is refused 403. This does NOT prove the sha256 is checked:
+# there is no registry to compare the sha256 against, so the refusal is the no-registry refusal,
+# not a digest-mismatch. Calling it "the listed url with a wrong sha256" would be unfounded. The
+# digest-mismatch path is BLOCKED (needs the official registry to be 'listed' at all).
 hub = Hub()
 try:
     hub.start()
@@ -92,21 +94,16 @@ try:
         "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/harness-adapter-pi-0.1.8.zip",
         "sha256": bad, "id": "pi", "pluginType": "harness-adapter", "version": "0.1.8"}}}, key="b8", timeout=40)
     code, detail = code_and_detail(r)
-    t.check(r["status"] == 403, "B8: the listed url with a wrong sha256 is 403", f"status={r['status']} code={code} {r['text'][:160]}")
-    t.check(code == "plugin_not_in_registry", "B8: code is plugin_not_in_registry", f"code={code} {r['text'][:160]}")
-    t.check("pi" not in plugin_dirs(hub.plugins), "B8: a refused artifact left no `pi` directory",
+    t.check(r["status"] == 403 and code == "plugin_not_in_registry",
+            "no registry: an artifact is refused 403 plugin_not_in_registry",
+            f"status={r['status']} code={code} {r['text'][:160]}")
+    t.check("pi" not in plugin_dirs(hub.plugins), "a refused artifact left no `pi` directory",
             f"left={plugin_dirs(hub.plugins)}")
+    t.blocked_check(
+        "an artifact whose sha256 differs from a REGISTRY entry is refused for THAT reason",
+        "needs the official registry to be a 'listed' url at all (UNPUBLISHED)")
 finally:
     hub.cleanup()
-
-# --- B1: an id that lives in a DEPLOYMENT directory -> 409 conflict, tree untouched.
-# BLOCKED: reaching the deployment-dir guard requires a source that FIRST passes the registry
-# reconcile, which needs the official registry (UNPUBLISHED). This test will not fabricate a
-# registry to get there. The guard itself is covered by 20261005-120000's fix; its end-to-end
-# verification is BLOCKED until the registry is published.
-t.blocked_check(
-    "B1: installing an id owned by a deployment dir is 409 conflict, tree untouched",
-    "needs the official registry (UNPUBLISHED) to authorize a source first; not fabricated")
 
 _ok = t.done()
 sys.exit(0 if _ok else 1)

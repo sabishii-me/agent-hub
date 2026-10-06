@@ -1,8 +1,8 @@
-# The registry ADDRESS is compiled into the hub (crates/plugins/src/registry.rs): a RELEASE
-# build always contacts the official URL and has NO env override; a DEV build lets
-# AGENT_HUB_REGISTRY_URL override it (so these tests can point at loopback). Every
-# "cannot reach the registry / bad registry" case must fail with its TRUE contract code; a
-# reachable, valid registry must succeed and be what GET /v1/plugins/catalog reads.
+# The registry ADDRESS is compiled into the hub. A DEV build lets AGENT_HUB_REGISTRY_URL override
+# it, which is how these tests point refresh at a bad source to exercise its ERROR handling. This
+# file tests ONLY the error surface. It does NOT fabricate a WORKING registry and treat a
+# self-invented id appearing in the catalog as success - the authorized/success path needs the
+# OFFICIAL registry and is BLOCKED (owner direction: no mock registry).
 #
 # FACT:    POST /v1/plugins/registry/refresh with no URL, an unreachable address, a non-2xx
 #          answer, a non-JSON body, or JSON without a plugins array fails 502 with code
@@ -89,9 +89,11 @@ try:
     # No override: refresh must NOT fail with "not set"; it must contact the official address
     # (its outcome is 2xx if reachable, or a fetch failure - never a "not configured" error).
     r0 = hub0.post("/v1/plugins/registry/refresh", timeout=40)
-    code0 = (r0["json"] or {}).get("error")
-    t.check(code0 != "registry_unavailable" or "not set" not in ((r0["json"] or {}).get("detail") or "").lower(),
-            "no override: the hub uses its compiled-in official address (not a 'not set' error)",
+    detail0 = ((r0["json"] or {}).get("detail") or "").lower()
+    # With no override the hub contacts the COMPILED-IN address. Whether that answers 2xx or fails,
+    # the failure must NOT be "no URL configured": the hub always has an address.
+    t.check("not set" not in detail0 and "no registry url" not in detail0,
+            "no override: the hub uses its compiled-in address, never a 'not configured' error",
             f"status={r0['status']} body={r0['text'][:180]}")
 finally:
     hub0.cleanup()
@@ -122,21 +124,13 @@ try:
 finally:
     srv5.shutdown()
 
-# --- Case 6: a CORRECT registry -> succeed, and the catalog reads exactly it.
-srv6, url6 = serve("ok")
-hub = Hub(env={"AGENT_HUB_REGISTRY_URL": url6})
-try:
-    hub.start()
-    r = hub.post("/v1/plugins/registry/refresh")
-    t.check(r["status"] < 300, "correct registry: refresh succeeds", f"status={r['status']} {r['text'][:180]}")
-    c = hub.get("/v1/plugins/catalog")
-    ids = [p.get("id") for p in ((c["json"] or {}).get("plugins") or [])]
-    t.check("src-only" in ids,
-            "correct registry: the catalog restates exactly what was refreshed",
-            f"ids={ids} body={c['text'][:180]}")
-finally:
-    hub.stop()
-    srv6.shutdown()
+# --- Case 6: a CORRECT, REACHABLE registry whose content becomes the catalog. This needs a real
+# registry to be meaningful; a loopback server here would be the test fabricating the registry and
+# proving only that the hub can read bytes it was handed. BLOCKED until the official one is
+# published (owner direction: no mock registry).
+t.blocked_check(
+    "a reachable, valid registry: refresh succeeds and the catalog restates it",
+    "needs the official registry (UNPUBLISHED); not tested by fabricating one")
 
 _ok = t.done()
 sys.exit(0 if _ok else 1)

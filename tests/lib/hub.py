@@ -118,47 +118,78 @@ class Hub:
         return self
 
     def install_plugins(self):
-        """The hub installs plugins ONLY from its official registry, which is UNPUBLISHED.
+        """Install a requested plugin through the hub's OWN registry - the real product path.
 
-        So there is NO honest way for this harness to install a plugin: fabricating a registry
-        (a local file, a mock, a loopback server) would be the TEST acting as the registry and
-        the product not being exercised (owner direction: no mock registry, no local-registry
-        injection, no test-side stand-in). Therefore this does NOT install and does NOT invent a
-        registry. A test that asked for a plugin gets an explicit, loud BLOCKED - the capability
-        is unverified, and must be reported as unverified, never as a pass."""
+        The hub resolves a plugin from the official registry (compiled-in address), NOT from
+        anything the test supplies. So this:
+          - if the official registry is PUBLISHED: tells the hub to refresh, reads the release the
+            hub's OWN catalog lists for the id, and posts THAT as source.artifact (the hub then
+            authorizes it because the same registry lists it) -> a REAL install;
+          - if the official registry is UNPUBLISHED: raises BLOCKED. It NEVER fabricates a registry
+            (no mock, no local injection, no test-side stand-in - owner direction).
+        If the published registry no longer lists a requested id, that is a FAILURE (a real
+        dependency of the test is gone), not a block."""
         if not self._plugin_sources:
             return
-        # The official registry is UNPUBLISHED, so the hub cannot install anything, and this
-        # harness will NOT fabricate a registry (no mock, no local injection, no test-side
-        # stand-in for the product). A test that needs a plugin is BLOCKED, reported separately.
         import tally as _tally
-        _tally.blocked(
-            "installing a plugin needs the official registry, which is UNPUBLISHED. The harness "
-            "will not fabricate one; the capability is UNVERIFIED "
-            "(docs/tasks/20261005-convergence-report.md)."
-        )
+        ok, why = registry_published()
+        if not ok:
+            _tally.blocked(
+                "installing a plugin needs the official registry, which is UNPUBLISHED "
+                f"({why}). The harness will not fabricate one; the capability is UNVERIFIED."
+            )
+        # Published: the hub pulls its registry, then we install the release IT lists.
+        rr = self.post("/v1/plugins/registry/refresh", timeout=60)
+        if rr["status"] >= 300:
+            _tally.blocked(f"the hub could not load the published registry: {rr['status']} {rr['text'][:120]}")
+        for spec in self._plugin_sources:
+            if isinstance(spec, str) and os.path.isdir(spec):
+                pid = self._plugin_id(spec)
+            else:
+                pid = str(spec)
+            if pid in self._installed:
+                continue
+            cat = self.get("/v1/plugins/catalog")
+            entry = next((p for p in ((cat["json"] or {}).get("plugins") or [])
+                          if p.get("id") == pid), None)
+            if entry is None:
+                raise RuntimeError(f"the published registry lists no `{pid}` (a real dependency is gone)")
+            v = (entry.get("versions") or [None])[0]
+            if not v:
+                raise RuntimeError(f"the registry entry `{pid}` names no versions")
+            artifact = {"url": v["url"], "sha256": v["sha256"], "id": pid,
+                        "pluginType": entry.get("pluginType"), "version": v["version"],
+                        "size": v.get("size")}
+            r = self.post("/v1/plugins", {"source": {"artifact": artifact}}, key="install-" + pid)
+            if isinstance(r.get("json"), dict) and r["json"].get("error"):
+                raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
+            self._await_plugin(pid, "ready")
+            pr = self.post(f"/v1/plugins/{pid}/prepare")
+            if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
+                raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
+            self._await_runtime(pid)
+            self._installed.add(pid)
 
     def registry_artifact(self, pid):
-        """The {url, sha256, id, pluginType, version} of `pid`'s newest release as the hub's
-        registry lists it. A test installs by posting this as `source.artifact`; the hub
-        reconciles it against the SAME registry and authorizes it (docs/issues/20261005-130000).
-        This is how a test installs a plugin WITHOUT acting as the registry: the registry the hub
-        loaded supplies the release."""
-        reg = self._registry()
-        entry = next((p for p in reg.get("plugins", []) if p.get("id") == pid), None)
+        """The {url, sha256, id, pluginType, version} of `pid`'s newest release as the HUB'S OWN
+        catalog lists it (GET /v1/plugins/catalog) - never a file the test reads. This is how a
+        test installs without acting as the registry: the hub's registry supplies the release, and
+        the hub then reconciles the source against that same registry. Requires a PUBLISHED
+        registry (the hub's catalog must be non-empty)."""
+        cat = self.get("/v1/plugins/catalog")
+        entry = next((p for p in ((cat["json"] or {}).get("plugins") or []) if p.get("id") == pid), None)
         if entry is None:
-            raise RuntimeError(f"the registry has no entry for `{pid}`")
+            raise RuntimeError(f"the hub's catalog lists no `{pid}` (registry unpublished or missing)")
         v = (entry.get("versions") or [None])[0]
         if not v:
-            raise RuntimeError(f"registry entry `{pid}` names no versions")
+            raise RuntimeError(f"the catalog entry `{pid}` names no versions")
         return {"url": v["url"], "sha256": v["sha256"], "id": pid,
                 "pluginType": entry.get("pluginType"), "version": v["version"],
                 "size": v.get("size")}
 
     def install_artifact(self, pid):
-        """Install `pid` through /v1 using its registered RELEASE (url+sha256). Wait for
-        `ready`; prepare the runtime. The hub authorizes it because the registry lists it.
-        Returns the install response."""
+        """Install `pid` via the HUB'S OWN catalog release (url+sha256). The hub authorizes it
+        because its registry lists it. Requires the official registry to be published."""
         art = self.registry_artifact(pid)
         r = self.post("/v1/plugins", {"source": {"artifact": art}}, key="install-" + pid)
         if isinstance(r.get("json"), dict) and r["json"].get("error"):
@@ -171,10 +202,9 @@ class Hub:
         self._installed.add(pid)
         return r
 
-    def _registry(self):
-        path = os.environ.get("AGENT_HUB_REGISTRY_FILE", os.path.join(REPO, "registry.json"))
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+    # NOTE: there is deliberately NO _registry() here. The test must never read a registry FILE to
+    # supply a plugin: that makes the TEST the registry and hides that the hub owns no source of
+    # truth. The hub's own catalog (GET /v1/plugins/catalog) is the only source a test reads.
 
     def _await_plugin(self, pid, want):
         for _ in range(1920):
