@@ -65,7 +65,7 @@ decided by the owner, not invented. Status: `tested` / `TODO`.
 | E2 | events: `hub.plugins.changed {id,state}` per change, in order, with ids | id matches the plugin; installing before ready | v1 /v1/events | tested (basic) |
 | E3 | MIXED A/B: does A's change ever carry B's id? | never | ? | TODO |
 | E4 | SSE DISCONNECT during changes, reconnect with Last-Event-ID | Replay the missed frames, or Resync; never silent loss | v1 /v1/events | tested (basic) |
-| E5 | hub KILLED mid-remove | on restart it FINISHES the removal (no half state) | old `interruption/removal.mjs` | TODO |
+| E5 | hub KILLED mid-remove | on restart the RECORD and the DIR agree (no silent half); a started remove is finished | old `interruption/removal.mjs`; ARCHITECTURE s10 | tested (tests/plugins/a-hub-killed-mid-remove-finishes-the-removal.py 3/3) |
 | E6 | hub KILLED mid-install (`installing` on disk) | on restart the state is honest+consistent | old adversarial intent | TODO |
 | E7 | restart: state agrees with disk (`/v1/plugins`, `/v1/harnesses`) | no lie after restart | ? | TODO |
 | E8 | a failed INSTALL after an old copy: restart keeps the old, usable | old still works | v1 POST | TODO |
