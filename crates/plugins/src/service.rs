@@ -24,6 +24,10 @@ pub enum PluginError {
     InvalidManifest(String),
     #[error("idempotency conflict for `{0}`")]
     Conflict(String),
+    /// The source is not in the official registry (docs/issues/20261005-130000): the trust
+    /// anchor does not list it, so it is refused before anything is fetched.
+    #[error("the source is not in the official registry: {0}")]
+    NotInRegistry(String),
     #[error("install failed: {0}")]
     InstallFailed(String),
     #[error(transparent)]
@@ -54,6 +58,7 @@ impl PluginError {
             PluginError::Busy(_, _) => "plugin_dir_busy",
             PluginError::InvalidManifest(_) => "plugin_archive_invalid",
             PluginError::Conflict(_) => "idempotency_conflict",
+            PluginError::NotInRegistry(_) => "plugin_not_in_registry",
             PluginError::InstallFailed(_) => "plugin_install_failed",
             PluginError::Source(e) => e.code(),
             // A registry failure is NOT an install failure: nothing was installed, the
@@ -87,6 +92,11 @@ pub struct Plugins {
     /// ONE at a time; a second concurrent call is refused 409, never a 500
     /// (docs/issues/20261005-070000).
     op_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    /// The loaded official registry (docs/issues/20261005-130000). Loaded once at construction
+    /// and replaced by a refresh; the INSTALL path reconciles a caller's source against this, so
+    /// a source the registry does not list is refused before anything is fetched. `None` = not
+    /// loaded (no registry available): then NO install is authorized.
+    registry: std::sync::Mutex<Option<crate::registry::Registry>>,
 }
 
 impl Plugins {
@@ -183,6 +193,10 @@ impl Plugins {
             .ok_or_else(|| PluginError::RegistryUrlMissing("registry has no plugins array".into()))?;
         let file = self.registry_file();
         std::fs::write(&file, &text)?;
+        // Make the fetched registry the one installs reconcile against.
+        if let Ok(reg) = crate::registry::Registry::parse(&text) {
+            *self.registry.lock().expect("registry mutex") = Some(reg);
+        }
         Ok(serde_json::json!({ "source": file.to_string_lossy(), "plugins": count }))
     }
 
@@ -194,6 +208,48 @@ impl Plugins {
             ids: CommandIds::new(4096),
             ops: std::sync::Mutex::new(std::collections::HashMap::new()),
             op_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            registry: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Load the registry from the hub's FIXED address into memory, so the install path can
+    /// reconcile against it. Called at boot and by `registry/refresh`. A missing/unreadable
+    /// registry leaves the in-memory registry `None`, and an install is then refused (no
+    /// registry = nothing is authorized).
+    pub fn load_registry_from_file(&self) {
+        let file = self.registry_file();
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            if let Ok(reg) = crate::registry::Registry::parse(&text) {
+                *self.registry.lock().expect("registry mutex") = Some(reg);
+            }
+        }
+    }
+
+    /// Reconcile a caller's source against the loaded registry. Returns Ok(()) when the source
+    /// is authorized (an artifact whose url AND sha256 match a registry release), or an error
+    /// naming why it is not. A git source carries no sha256, so it cannot match a release-zip
+    /// registry -> refused (docs/issues/20261005-130000).
+    fn authorized(&self, source: &crate::source::Source) -> Result<(), PluginError> {
+        let guard = self.registry.lock().expect("registry mutex");
+        let Some(reg) = guard.as_ref() else {
+            return Err(PluginError::NotInRegistry(
+                "no registry is loaded, so no source is authorized".into(),
+            ));
+        };
+        match source {
+            crate::source::Source::Artifact(spec) => {
+                if reg.authorizes(&spec.url, &spec.sha256) {
+                    Ok(())
+                } else {
+                    Err(PluginError::NotInRegistry(format!(
+                        "url `{}` with sha256 `{}` is not a release the registry lists",
+                        spec.url, spec.sha256
+                    )))
+                }
+            }
+            crate::source::Source::Git { url, .. } => Err(PluginError::NotInRegistry(format!(
+                "a git source (`{url}`) is not a registered release: the registry publishes release zips with a pinned sha256"
+            ))),
         }
     }
 
@@ -346,6 +402,10 @@ impl Plugins {
         command_id: &str,
         source: &crate::source::Source,
     ) -> Result<InstallIntent, PluginError> {
+        // AUTHORIZATION FIRST (docs/issues/20261005-130000): a source must be listed by the
+        // official registry (url AND sha256) before ANY work - no clone, no download, no
+        // staging. This is what stops a caller installing code the registry never approved.
+        self.authorized(source)?;
         // ONE install at a time per root: the staging dir is shared, so two installs
         // landing at once trample it (os error 5). A concurrent install is refused
         // 409, never a 500 (docs/issues/20261005-070000). The guard is held for the

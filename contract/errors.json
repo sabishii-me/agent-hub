@@ -233,6 +233,11 @@
       "retryable": false,
       "message": "the plugin registry could not be read or written: no AGENT_HUB_REGISTRY_URL is set, the address did not answer, the answer was not 2xx, or the body is not a registry (not JSON, or no plugins array). The detail names which."
     },
+    "plugin_not_in_registry": {
+      "http": 403,
+      "retryable": false,
+      "message": "this source is not in the official registry: the registry is the trust anchor, so an unlisted source is refused (url AND sha256 must match a registry release). A deployment may allow unlisted sources explicitly; not implemented yet."
+    },
     "history_unavailable": {
       "http": 502,
       "retryable": false,
