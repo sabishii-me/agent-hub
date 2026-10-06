@@ -40,19 +40,12 @@ try:
         t.check(tr["status"] == 202, f"turn {i} is accepted", f"status={tr['status']}")
         tids.append(tr["json"]["turn"]["id"])
 
-    # Wait until they are running. The point of this test is N turns AT ONCE, so the
-    # property is that ALL N are observed in-flight (a turn that ends before we look is
-    # not "running", so `ended` is NOT counted as started). `started >= 1` was a fake:
-    # it passed with a single session, proving nothing about concurrency.
-    started = 0
-    for sid, tid in zip(sids, tids):
-        row = wait_turn(hub, sid, tid, {"running", "awaiting_approval", "awaiting_question", "ended"}, tries=160)
-        if row.get("state") in ("running", "awaiting_approval", "awaiting_question"):
-            started += 1
-    # "Observed running at once" is inherently racy across a slow poll (a short turn
-    # can finish before it is sampled), so it is recorded, not required. The REQUIRED
-    # fact is that every turn was admitted and every turn settles (checked below).
-    t.check(started >= 1, f"at least one of {N} turns was observed in flight", f"started={started}/{N}")
+    # The REQUIRED facts of "N at once" are already asserted above: every session
+    # reached `active` and every turn was ADMITTED (202), for all N - not one. We do
+    # NOT assert "observed running at once": a poll across N turns is racy (a short
+    # turn can finish before it is sampled), so it proves nothing and must not be
+    # turned into a weak `>= 1` check to look green. The settling check below is the
+    # load-bearing one.
 
     # Cancel ALL at once (no waiting between).
     for sid in sids:
