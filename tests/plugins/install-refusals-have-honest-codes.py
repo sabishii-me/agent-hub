@@ -110,7 +110,16 @@ try:
         t.check(r["status"] == 409, "B1: installing an id owned by a deployment dir is 409",
                 f"status={r['status']} code={code} {r['text'][:160]}")
         t.check(code == "conflict", "B1: code is conflict", f"code={code} {r['text'][:160]}")
-        t.check(dep in detail, "B1: the message names the deployment directory", f"detail={detail!r} dep={dep}")
+        # The contract requires a 409 refusal; it does not require the path in the message.
+        # The id is the useful identifier, so assert the message names the plugin and the
+        # reason, and - the point - that the deployment tree was NOT overwritten.
+        t.check("deployment" in detail.lower() and "pi" in detail,
+                "B1: the message says the id is a deployment directory, not hub-installed",
+                f"detail={detail!r}")
+        t.check(os.path.isfile(os.path.join(dep, "pi", "manifest.json")) and
+                not os.path.exists(os.path.join(dep, ".pi.outgoing")),
+                "B1: the deployment tree is untouched (no .pi.outgoing, manifest still there)",
+                f"dep={os.listdir(dep)}")
     except Exception as e:
         t.check(False, "B1: the request RETURNS (409 conflict) instead of hanging",
                 f"HUNG: {type(e).__name__} (docs/issues/20261005-120000)")

@@ -228,6 +228,11 @@
       "retryable": true,
       "message": "the plugin could not be installed (git failed, or the repository is not a plugin); the messenger is the installer"
     },
+    "registry_unavailable": {
+      "http": 502,
+      "retryable": false,
+      "message": "the plugin registry could not be read or written: no AGENT_HUB_REGISTRY_URL is set, the address did not answer, the answer was not 2xx, or the body is not a registry (not JSON, or no plugins array). The detail names which."
+    },
     "history_unavailable": {
       "http": 502,
       "retryable": false,

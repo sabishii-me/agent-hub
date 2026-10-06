@@ -82,7 +82,7 @@ try:
     c = hub.post(f"/v1/sessions/{sid}/close")
     t.check(c["status"] in (200, 202), "the session closes", f"status={c['status']}")
     d = hub.delete("/v1/plugins/pi", key="chain-remove")
-    t.check(d["status"] in (200, 202, 409), "remove the plugin is accepted (or 409 while a session holds it)",
+    t.check(d["status"] in (200, 202), "remove the plugin is accepted after the session is closed",
             f"status={d['status']} {d['text'][:140]}")
     if d["status"] in (200, 202):
         gone = False

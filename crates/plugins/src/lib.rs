@@ -7,6 +7,7 @@
 
 pub mod identity;
 pub mod manifest;
+pub mod registry;
 pub mod routes;
 pub mod service;
 pub mod source;

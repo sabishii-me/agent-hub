@@ -56,7 +56,10 @@ impl PluginError {
             PluginError::Conflict(_) => "idempotency_conflict",
             PluginError::InstallFailed(_) => "plugin_install_failed",
             PluginError::Source(e) => e.code(),
-            PluginError::RegistryUrlMissing(_) => "plugin_install_failed",
+            // A registry failure is NOT an install failure: nothing was installed, the
+            // registry could not be read. A false, retryable code here would make a
+            // client retry a request that can never succeed (docs/issues/20261005-110000).
+            PluginError::RegistryUrlMissing(_) => "registry_unavailable",
             PluginError::Db(_) | PluginError::Io(_) => "internal_error",
         }
     }
@@ -87,17 +90,23 @@ pub struct Plugins {
 }
 
 impl Plugins {
-    /// The registry file the hub reads: `AGENT_HUB_REGISTRY_FILE`, else
-    /// `<DATA_DIR>/registry.json` (beside the plugin root's parent).
+    /// The registry file the hub reads: `<DATA_DIR>/registry.json` (beside the plugin root's
+    /// parent). The path is FIXED - a caller must not be able to point the hub at an arbitrary
+    /// local file as its registry. In a dev build only, `AGENT_HUB_REGISTRY_FILE` may override it
+    /// so tests can supply a registry; that override is compiled out of a release binary.
     fn registry_file(&self) -> PathBuf {
-        std::env::var("AGENT_HUB_REGISTRY_FILE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                self.root
-                    .parent()
-                    .map(|p| p.join("registry.json"))
-                    .unwrap_or_else(|| PathBuf::from("registry.json"))
-            })
+        #[cfg(debug_assertions)]
+        {
+            if let Ok(p) = std::env::var("AGENT_HUB_REGISTRY_FILE") {
+                if !p.trim().is_empty() {
+                    return PathBuf::from(p);
+                }
+            }
+        }
+        self.root
+            .parent()
+            .map(|p| p.join("registry.json"))
+            .unwrap_or_else(|| PathBuf::from("registry.json"))
     }
 
     /// The plugin catalog: the registry file restated VERBATIM (the hub does not
@@ -145,12 +154,11 @@ impl Plugins {
         }
     }
 
-    /// Refresh the catalog: read `AGENT_HUB_REGISTRY_URL` and write it where the hub
-    /// reads the catalog. This is the ONLY way the URL is contacted - never at
-    /// startup, never silently.
+    /// Refresh the catalog: fetch the registry from the hub's FIXED address (see
+    /// `registry.rs`: the official URL in a release build; `AGENT_HUB_REGISTRY_URL` may
+    /// only override it in a dev build) and write it where the hub reads the catalog.
     pub async fn refresh_registry(&self) -> Result<serde_json::Value, PluginError> {
-        let url = std::env::var("AGENT_HUB_REGISTRY_URL")
-            .map_err(|_| PluginError::RegistryUrlMissing("AGENT_HUB_REGISTRY_URL is not set".into()))?;
+        let url = crate::registry::source_url();
         let resp = reqwest::Client::new()
             .get(&url)
             .send()
@@ -397,6 +405,25 @@ impl Plugins {
             .id
             .clone()
             .ok_or_else(|| PluginError::InvalidManifest("manifest declares no id".into()))?;
+
+        // A DEPLOYMENT directory is READ-ONLY to the hub: if a directory for this id
+        // already exists under the hub's own root but the hub has no row installing it,
+        // it belongs to a deployment. Refuse it 409 `conflict` (never touch the tree) -
+        // the exact twin of the `begin_remove` guard. Without this, `db::install` treats
+        // the deployment dir as "the old copy", renames it to `.outgoing` and overwrites
+        // it (docs/issues/20261005-120000).
+        {
+            let target = Layout::for_plugin(&self.root, &id).target;
+            let owns = self
+                .db
+                .plugin(&id)?
+                .map(|r| r.installed_at.is_some())
+                .unwrap_or(false);
+            if !owns && target.join("manifest.json").exists() {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(PluginError::NotInstalledByHub(id.clone()));
+            }
+        }
 
         // Same identity + same request (install of this id) is a retry.
         match self.ids.present(command_id, &format!("install:{id}")) {
