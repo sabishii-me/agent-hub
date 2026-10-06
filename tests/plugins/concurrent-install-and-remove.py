@@ -36,8 +36,15 @@ try:
     N = 6
     with cf.ThreadPoolExecutor(max_workers=N) as ex:
         codes = list(ex.map(install, range(N)))
-    # Each call is accepted (202) or an idempotent replay (200/202); never a 5xx.
-    t.check(all(c < 500 for c in codes), f"{N} concurrent installs of one id never 5xx", f"codes={codes}")
+    # The SAME plugin cannot be installed concurrently: exactly one proceeds (202) and
+    # every other concurrent call is REFUSED 409 conflict - never a 500 (the owner's
+    # rule; a 500 internal_error is the bug this test exists to catch).
+    accepted = sum(1 for c in codes if c == 202)
+    conflicts = sum(1 for c in codes if c == 409)
+    t.check(accepted >= 1, f"one install of the id proceeds (202)", f"codes={codes}")
+    t.check(all(c in (202, 409) for c in codes),
+            f"every concurrent install of one id is 202 or 409 (never 5xx)", f"codes={codes}")
+    t.check(conflicts >= 1, f"a concurrent install of the same id is REFUSED 409", f"codes={codes}")
 
     # It converges to EXACTLY ONE plugin, `ready`, with a valid manifest on disk.
     ready = False

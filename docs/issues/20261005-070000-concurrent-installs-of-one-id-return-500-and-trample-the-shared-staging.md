@@ -33,3 +33,6 @@ the only fix - the op set must still serialize (the staging is one by design).
 ## Status
 
 recorded, NOT fixed. The concurrency test is the record (it goes red on the 500s).
+
+_STATUS: FIXED. `Plugins` takes an op lock; a concurrent install/remove is refused 409
+conflict (`begin_install`/`begin_remove` try_lock). Real: concurrent-install test 6/6 (was 5x 500)._

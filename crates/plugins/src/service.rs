@@ -74,6 +74,12 @@ pub struct Plugins {
     ids: CommandIds,
     /// Per-plugin in-flight operations (the one verdict).
     ops: std::sync::Mutex<std::collections::HashMap<String, Ops>>,
+    /// Serializes install/remove: the staging dir is ONE per root (the comment on
+    /// `staging_dir` says "one at a time per root"), so two installs landing at once
+    /// trample it and fail with os error 5. Holding this lock makes install/remove
+    /// ONE at a time; a second concurrent call is refused 409, never a 500
+    /// (docs/issues/20261005-070000).
+    op_lock: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 impl Plugins {
@@ -175,6 +181,7 @@ impl Plugins {
             bus,
             ids: CommandIds::new(4096),
             ops: std::sync::Mutex::new(std::collections::HashMap::new()),
+            op_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
         }
     }
 
@@ -322,6 +329,15 @@ impl Plugins {
         command_id: &str,
         source: &crate::source::Source,
     ) -> Result<InstallIntent, PluginError> {
+        // ONE install at a time per root: the staging dir is shared, so two installs
+        // landing at once trample it (os error 5). A concurrent install is refused
+        // 409, never a 500 (docs/issues/20261005-070000). The guard is held for the
+        // synchronous staging below; the detached finish works on the per-id target,
+        // which the `ops` map already serializes per id.
+        let _op = self
+            .op_lock
+            .try_lock()
+            .map_err(|_| PluginError::Conflict("another install/remove is in progress".into()))?;
         let staging = self.staging_dir();
         if let Some(parent) = staging.parent() {
             std::fs::create_dir_all(parent)?;
@@ -458,6 +474,11 @@ impl Plugins {
     /// Validate a remove **before any work**: the plugin must be one the hub
     /// installed (a deployment directory is refused). Registers the identity.
     pub fn begin_remove(&self, command_id: &str, id: &str) -> Result<RemoveIntent, PluginError> {
+        // Same one-at-a-time rule as install (the staging/root is shared).
+        let _op = self
+            .op_lock
+            .try_lock()
+            .map_err(|_| PluginError::Conflict("another install/remove is in progress".into()))?;
         let row = self
             .db
             .plugin(id)?
