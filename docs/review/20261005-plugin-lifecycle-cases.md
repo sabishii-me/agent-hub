@@ -61,9 +61,9 @@ decided by the owner, not invented. Status: `tested` / `TODO`.
 
 | # | case | expected | src | status |
 |---|---|---|---|---|
-| E1 | install A, install B, remove A, remove B (interleaved) | each plugin's state is independent and correct; no cross-talk in the state | ? | TODO |
+| E1 | mixed install/remove on >=2 plugins, concurrent | each plugin's state independent + CONVERGES | s10 | **RED 20261005-080000** (stuck `installing`, intermittent) |
 | E2 | events: `hub.plugins.changed {id,state}` per change, in order, with ids | id matches the plugin; installing before ready | v1 /v1/events | tested (basic) |
-| E3 | MIXED A/B: does A's change ever carry B's id? | never | ? | TODO |
+| E3 | MIXED A/B: does A's change ever carry B's id? | never | ? | tested (no foreign id seen) |
 | E4 | SSE DISCONNECT during changes, reconnect with Last-Event-ID | Replay the missed frames, or Resync; never silent loss | v1 /v1/events | tested (basic) |
 | E5 | hub KILLED mid-remove | on restart the RECORD and the DIR agree (no silent half); a started remove is finished | old `interruption/removal.mjs`; ARCHITECTURE s10 | tested (tests/plugins/a-hub-killed-mid-remove-finishes-the-removal.py 3/3) |
 | E6 | hub KILLED mid-install (`installing` on disk) | on restart the state is honest+consistent | old adversarial intent | TODO |
