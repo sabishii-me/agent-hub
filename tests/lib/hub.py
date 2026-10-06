@@ -80,6 +80,12 @@ class Hub:
             "AGENT_HUB_ADDR": "127.0.0.1:0",
             "AGENT_HUB_CONTRACT_DIR": os.path.join(REPO, "contract"),
         })
+        # Give the hub a registry to reconcile installs against (docs/issues/20261005-130000),
+        # unless the caller set one explicitly. This is the DEV override (compiled out of a
+        # release build); it points the hub at the repository's own registry.json. A test that
+        # wants NO registry passes AGENT_HUB_REGISTRY_FILE="" in `env` to clear it.
+        if "AGENT_HUB_REGISTRY_FILE" not in self.extra_env:
+            env["AGENT_HUB_REGISTRY_FILE"] = os.path.join(REPO, "registry.json")
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
@@ -87,20 +93,29 @@ class Hub:
         return self
 
     def install_plugins(self):
-        """Install every requested plugin THROUGH /v1 as a REAL ARTIFACT: the published
-        release zip named in the repository's `registry.json` (url + sha256 + size), and
-        then `prepare` so its runtime is materialised the way the hub really does it.
+        """Install every requested plugin through /v1, AUTHORIZED BY THE HUB'S OWN REGISTRY.
 
-        There is NO copy-the-dir shortcut any more. A `plugins_src` value is a plugin ID
-        (e.g. "pi"); the artifact comes from registry.json, NOT from a local path. This is
-        the only install path a real deployment has."""
+        The hub must reconcile a source against ITS registry (docs/issues/20261005-130000), so a
+        test that installs has to give the hub a registry FIRST. `AGENT_HUB_REGISTRY_FILE` points
+        the hub (a DEV build) at the repository's `registry.json`, the hub loads it at boot, and
+        this reads the url+sha256 the hub's own registry lists. The hub then authorizes the
+        install because the source IS a registry release.
+
+        NOTE: this is the honest shape available WITHOUT a contract change. The final shape is
+        that the test names an ID and the hub resolves it (docs/review/
+        20261005-contract-proposal-install-by-registry-id.md); until then the test must supply
+        the registry release's url+sha256, and the hub must agree."""
         if not self._plugin_sources:
             return
-        reg = self._registry()
+        # Give the hub a registry to reconcile against (dev-only env override).
+        reg_path = os.environ.get("AGENT_HUB_REGISTRY_FILE", os.path.join(REPO, "registry.json"))
+        self.child_env_image = reg_path
+        with open(reg_path, encoding="utf-8") as f:
+            reg = json.load(f)
         for spec in self._plugin_sources:
-            # A source may be a plugin ID ("pi") or a path to the plugin repo (legacy
-            # call sites pass PI_PLUGIN_DIR). Either way the ID is what the registry is
-            # keyed by; a directory is read for its manifest id, NEVER copied.
+            # A src may be a plugin ID ("pi") or a path to the plugin repo (legacy call sites pass
+            # PI_PLUGIN_DIR); the ID keys the registry either way. A directory is read for its
+            # manifest id, NEVER copied.
             if isinstance(spec, str) and os.path.isdir(spec):
                 pid = self._plugin_id(spec)
             else:
@@ -109,10 +124,13 @@ class Hub:
                 continue
             entry = next((p for p in reg.get("plugins", []) if p.get("id") == pid), None)
             if entry is None:
-                raise RuntimeError(f"no registry entry for plugin `{pid}`")
+                raise RuntimeError(f"the registry has no entry for `{pid}`")
             v = (entry.get("versions") or [None])[0]
             if not v:
                 raise RuntimeError(f"registry entry `{pid}` names no versions")
+            # The source is a REGISTRY RELEASE (url+sha256 listed in the registry the hub loaded),
+            # so the hub authorizes it. This is not the test acting as the registry: the hub holds
+            # the registry and does the reconcile.
             artifact = {"url": v["url"], "sha256": v["sha256"], "id": pid,
                         "pluginType": entry.get("pluginType"), "version": v["version"],
                         "size": v.get("size")}
@@ -120,13 +138,46 @@ class Hub:
             if isinstance(r.get("json"), dict) and r["json"].get("error"):
                 raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
             self._await_plugin(pid, "ready")
-            # Materialise the runtime (the zip is adapter-only; the runtime is fetched by
-            # the adapter). A real install ends with a runnable runtime.
+            # Materialise the runtime (the zip is adapter-only; the runtime is fetched by the
+            # adapter). A real install ends with a runnable runtime.
             pr = self.post(f"/v1/plugins/{pid}/prepare")
             if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
                 raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
             self._await_runtime(pid)
             self._installed.add(pid)
+
+    def registry_artifact(self, pid):
+        """The {url, sha256, id, pluginType, version} of `pid`'s newest release as the hub's
+        registry lists it. A test installs by posting this as `source.artifact`; the hub
+        reconciles it against the SAME registry and authorizes it (docs/issues/20261005-130000).
+        This is how a test installs a plugin WITHOUT acting as the registry: the registry the hub
+        loaded supplies the release."""
+        reg = self._registry()
+        entry = next((p for p in reg.get("plugins", []) if p.get("id") == pid), None)
+        if entry is None:
+            raise RuntimeError(f"the registry has no entry for `{pid}`")
+        v = (entry.get("versions") or [None])[0]
+        if not v:
+            raise RuntimeError(f"registry entry `{pid}` names no versions")
+        return {"url": v["url"], "sha256": v["sha256"], "id": pid,
+                "pluginType": entry.get("pluginType"), "version": v["version"],
+                "size": v.get("size")}
+
+    def install_artifact(self, pid):
+        """Install `pid` through /v1 using its registered RELEASE (url+sha256). Wait for
+        `ready`; prepare the runtime. The hub authorizes it because the registry lists it.
+        Returns the install response."""
+        art = self.registry_artifact(pid)
+        r = self.post("/v1/plugins", {"source": {"artifact": art}}, key="install-" + pid)
+        if isinstance(r.get("json"), dict) and r["json"].get("error"):
+            raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
+        self._await_plugin(pid, "ready")
+        pr = self.post(f"/v1/plugins/{pid}/prepare")
+        if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
+            raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
+        self._await_runtime(pid)
+        self._installed.add(pid)
+        return r
 
     def _registry(self):
         path = os.environ.get("AGENT_HUB_REGISTRY_FILE", os.path.join(REPO, "registry.json"))

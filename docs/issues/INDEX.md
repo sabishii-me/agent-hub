@@ -45,3 +45,4 @@ A status is FIXED only with a real run as evidence. `OPEN` = not fixed.
 | **20261005-130000** | **HUB T0** | **install never consults the registry: with NO registry at all, any plugin still installs (reproduced)** | OPEN | url+sha256 must reconcile against the official registry; needs contract+product change |
 | 20261005-140000 | HUB | DELETE a nonexistent id says it "is a deployment directory" (a false detail) | FIXED | begin_remove: no row + no dir -> 404 not_found; release test |
 | 20261005-141000 | HUB | a body missing `source` returned 422 axum text, not a contract code | FIXED | install catches JsonRejection -> 400 validation_failed; release test |
+| 20261005-150000 | HOST(env) | the host provider returns 400 -> session tests blocked | OPEN | environment fault, not the hub |

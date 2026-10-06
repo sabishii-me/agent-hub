@@ -35,7 +35,7 @@ try:
             "no plugin is present before the install", f"rows={(l0['json'] or {}).get('plugins')}")
 
     # INSTALL through /v1, from a git source (a local path + ref).
-    ins = hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key="install-1")
+    ins = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="install-1")
     t.check(ins["status"] == 202, "install is accepted (202 + Location)", f"status={ins['status']} {ins['text'][:160]}")
     t.check((ins["json"] or {}).get("pluginId"),
             "the install names the plugin id", f"body={ins['text'][:160]}")

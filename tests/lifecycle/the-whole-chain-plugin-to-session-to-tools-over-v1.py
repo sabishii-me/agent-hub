@@ -35,7 +35,7 @@ try:
             "the hub starts with an EMPTY plugins root", "")
 
     # 1. INSTALL the plugin through /v1.
-    ins = hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key="chain-install")
+    ins = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="chain-install")
     t.check(ins["status"] == 202, "install the plugin (202)", f"status={ins['status']} {ins['text'][:140]}")
     ready = False
     for _ in range(240):

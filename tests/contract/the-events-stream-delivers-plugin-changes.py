@@ -38,7 +38,7 @@ try:
             "the handshake carries NO id (a subscription is not a change)", f"first={sse.events[0] if sse.events else None}")
 
     # Install a plugin; a hub.plugins.changed frame must arrive, with an id + state.
-    hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key="ev-install")
+    hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="ev-install")
     got = sse.wait(2, timeout=60)   # install + ready
     changes = [e for e in sse.events if e.get("event") == "hub.plugins.changed"]
     t.check(len(changes) >= 1, "installing a plugin delivers hub.plugins.changed", f"changes={changes}")

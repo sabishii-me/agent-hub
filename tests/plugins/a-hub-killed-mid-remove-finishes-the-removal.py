@@ -28,7 +28,7 @@ hub = Hub()
 hub2 = None
 try:
     hub.start()
-    hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key="k-install")
+    hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="k-install")
     ready = False
     for _ in range(240):
         g = hub.get("/v1/plugins/pi")
@@ -84,7 +84,7 @@ try:
         t.check(not listed, "a finished removal leaves neither the record nor the directory", f"listed={listed}")
 
     # The hub still works: a fresh install of the same plugin succeeds.
-    r = hub2.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key="k-again")
+    r = hub2.post("/v1/plugins", {"source": {"artifact": hub2.registry_artifact("pi")}}, key="k-again")
     t.check(r["status"] in (200, 202), "the restarted hub can install again afterwards", f"status={r['status']} {r['text'][:140]}")
 finally:
     if hub2 is not None:

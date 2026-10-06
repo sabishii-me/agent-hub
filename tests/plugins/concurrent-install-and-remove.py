@@ -29,7 +29,7 @@ try:
     hub.start()
 
     def install(i):
-        r = hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key=f"ci-{i}")
+        r = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key=f"ci-{i}")
         return r["status"]
 
     # N concurrent installs of the SAME id.
@@ -65,7 +65,7 @@ try:
     # operation finishes; the final state is a real, readable one (ready or absent).
     def churn(i):
         if i % 2 == 0:
-            hub.post("/v1/plugins", {"source": {"url": PI, "ref": PI_REF}}, key=f"ch-i{i}")
+            hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key=f"ch-i{i}")
         else:
             hub.delete("/v1/plugins/pi", key=f"ch-d{i}")
     with cf.ThreadPoolExecutor(max_workers=4) as ex:

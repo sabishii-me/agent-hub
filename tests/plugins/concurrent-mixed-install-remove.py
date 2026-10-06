@@ -44,7 +44,7 @@ try:
     def run(op):
         kind, pid = op
         if kind == "post":
-            return hub.post("/v1/plugins", {"source": {"url": PI if pid == "pi" else DEEP, "ref": PI_REF}}, key=f"mx-{pid}-i-{time.time()}")["status"]
+            return hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact(pid)}}, key=f"mx-{pid}-i-{time.time()}")["status"]
         return hub.delete(f"/v1/plugins/{pid}", key=f"mx-{pid}-d-{time.time()}")["status"]
 
     with cf.ThreadPoolExecutor(max_workers=len(ops)) as ex:
