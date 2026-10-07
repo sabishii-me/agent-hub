@@ -18,6 +18,7 @@ import http.server
 import json
 import os
 import threading
+import time
 
 
 def _zip_bytes(path):
@@ -34,8 +35,9 @@ class MockRegistry:
 
     EXCLUDED = {".git", ".github", "node_modules", "runtime", ".venv", "__pycache__", ".cache", ".DS_Store"}
 
-    def __init__(self, token=None):
+    def __init__(self, token=None, delay=0.0):
         self.token = token
+        self.delay = delay          # seconds to stall each response - makes `installing` observable
         self.entries = {}          # id -> entry
         self._zips = {}            # filename -> bytes
         self.hits = []             # every path GETed, in order (proves a real HTTP fetch)
@@ -116,7 +118,10 @@ class MockRegistry:
                 self.send_response(200)
                 self.send_header("content-type", ctype)
                 self.send_header("content-length", str(len(body)))
-                self.end_headers(); self.wfile.write(body)
+                self.end_headers()
+                if outer.delay:
+                    time.sleep(outer.delay)
+                self.wfile.write(body)
 
             def log_message(self, *a):
                 pass

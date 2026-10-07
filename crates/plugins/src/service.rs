@@ -351,7 +351,7 @@ impl Plugins {
         // Rows the hub installed.
         for row in self.db.list_plugins()? {
             let id = row.id.clone();
-            views.push(self.view(&id, row));
+            views.push(self.view(&id, Some(row)));
         }
         // Directories a deployment placed on the search path (read-only to us).
         if self.root.exists() {
@@ -365,7 +365,7 @@ impl Plugins {
                     continue;
                 }
                 if entry.path().join("manifest.json").exists() {
-                    views.push(self.view(&name, self.row_for_dir(&name)));
+                    views.push(self.view(&name, Some(self.row_for_dir(&name))));
                 }
             }
         }
@@ -375,10 +375,15 @@ impl Plugins {
 
     /// Read one plugin (the resource a `202 Location` names).
     pub fn get(&self, id: &str) -> Result<PluginView, PluginError> {
-        // A hub-installed plugin has a row; a deployment directory does not.
+        // A hub-installed plugin has a row; a deployment directory does not. But an operation in
+        // flight (docs/issues/20261007-183000) means the resource is REAL before the bytes land:
+        // a 202 Location names it and a client must be able to read it, as `installing`, WHILE it
+        // fetches. Without this the resource was 404 during the whole download and then jumped to
+        // `ready` - the state machine lied.
         match self.db.plugin(id)? {
-            Some(row) => Ok(self.view(id, row)),
-            None if self.has_dir(id) => Ok(self.view(id, self.row_for_dir(id))),
+            Some(row) => Ok(self.view(id, Some(row))),
+            None if self.has_dir(id) => Ok(self.view(id, Some(self.row_for_dir(id)))),
+            None if self.busy(id) => Ok(self.view(id, None)),
             None => Err(PluginError::NotFound(id.into())),
         }
     }
@@ -399,7 +404,12 @@ impl Plugins {
         }
     }
 
-    fn view(&self, id: &str, row: PluginRow) -> PluginView {
+    fn view(&self, id: &str, row: Option<PluginRow>) -> PluginView {
+        let row = row.unwrap_or_else(|| PluginRow {
+            id: id.to_string(), name: None, summary: None, plugin_type: None, source: None,
+            reference: None, commit: None, state: PluginState::Installing, installed_at: None,
+            detail: None, artifact: None,
+        });
         let target = Layout::for_plugin(&self.root, id).target;
         let manifest = std::fs::read_to_string(target.join("manifest.json"))
             .ok()
@@ -464,9 +474,10 @@ impl Plugins {
         // official registry (url AND sha256) before ANY work - no clone, no download, no
         // staging. This is what stops a caller installing code the registry never approved.
         self.authorized(source)?;
-        // The plugin id FIRST (artifact spec, or the git dir's manifest): the lock and the staging
-        // dir are PER-ID, so DIFFERENT plugins install CONCURRENTLY and only the SAME id conflicts.
-        let op_id: String = match source {
+        // The plugin id FIRST. For an artifact it is in the spec; for a git source we read the
+        // source manifest (git is refused by the registry anyway). The lock and staging dir are
+        // PER-ID, so DIFFERENT plugins install CONCURRENTLY and only the SAME id conflicts.
+        let id: String = match source {
             crate::source::Source::Artifact(spec) => spec.id.clone(),
             crate::source::Source::Git { url, .. } => {
                 let p = PathBuf::from(url);
@@ -478,22 +489,36 @@ impl Plugins {
                     .ok_or_else(|| PluginError::InvalidManifest("the source manifest has no id".into()))?
             }
         };
-        let id_lock = self.id_lock(&op_id);
         // A conflicting command on the SAME plugin is refused 409 (contract): an in-flight install
-        // owns its id, so neither a second install nor a remove may proceed. Checked BEFORE the
-        // lock so the answer is a clean 409, not a 502 from a staging collision.
-        if self.busy(&op_id) {
-            return Err(PluginError::InProgress(op_id.clone()));
+        // owns its id, so neither a second install nor a remove may proceed.
+        if self.busy(&id) {
+            return Err(PluginError::InProgress(id.clone()));
         }
-        let _op = id_lock
-            .try_lock()
-            .map_err(|_| PluginError::Conflict("another install/remove of this plugin is in progress".into()))?;
-        let staging = self.staging_dir(&op_id);
-        if let Some(parent) = staging.parent() {
-            std::fs::create_dir_all(parent)?;
+        // A DEPLOYMENT directory is READ-ONLY to the hub: if a directory for this id already exists
+        // under the hub's own root but the hub has no row installing it, it belongs to a deployment.
+        // Refuse it 409 `conflict` (never touch the tree) - the exact twin of `begin_remove`.
+        {
+            let target = Layout::for_plugin(&self.root, &id).target;
+            let owns = self
+                .db
+                .plugin(&id)?
+                .map(|r| r.installed_at.is_some())
+                .unwrap_or(false);
+            if !owns && target.join("manifest.json").exists() {
+                return Err(PluginError::NotInstalledByHub(id.clone()));
+            }
         }
-        let _ = std::fs::remove_dir_all(&staging);
-        std::fs::create_dir_all(&staging)?;
+        // Same identity + same request (install of this id) is a retry.
+        match self.ids.present(command_id, &format!("install:{id}")) {
+            Idempotency::Replay => {
+                let row = self.row_for_dir(&id);
+                return Ok(InstallIntent::Replay(self.view(&id, Some(row))));
+            }
+            Idempotency::Conflict => {
+                return Err(PluginError::Conflict(command_id.into()));
+            }
+            Idempotency::New => {}
+        }
         let artifact_json = match source {
             crate::source::Source::Artifact(spec) => serde_json::to_string(&serde_json::json!({
                 "id": spec.id, "version": spec.version, "url": spec.url,
@@ -503,84 +528,13 @@ impl Plugins {
             .ok(),
             crate::source::Source::Git { .. } => None,
         };
-        let staged: Result<(), crate::source::SourceError> = match source {
-            crate::source::Source::Git { url, .. } => {
-                let p = PathBuf::from(url);
-                if p.is_dir() && p.join("manifest.json").is_file() {
-                    copy_dir(&p, &staging).map_err(crate::source::SourceError::Io)
-                } else {
-                    crate::source::resolve(source, &staging).map(|_| ())
-                }
-            }
-            crate::source::Source::Artifact(_) => {
-                crate::source::resolve(source, &staging).map(|_| ())
-            }
-        };
-        if let Err(e) = staged {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(PluginError::Source(e));
-        }
-        let raw = std::fs::read_to_string(staging.join("manifest.json"))
-            .map_err(|_| PluginError::InvalidManifest("no manifest.json".into()))?;
-        let manifest = Manifest::parse(&raw).map_err(PluginError::InvalidManifest)?;
-        if let Some(reason) = manifest.invalid_reason() {
-            return Err(PluginError::InvalidManifest(reason));
-        }
-        // The minimum-host gate (ADR-0008): a plugin that needs a newer hub is
-        // REFUSED here, before it lands, with a named reason. There is no
-        // activation of a plugin the host cannot support.
-        if let Some(reason) = agent_hub_adapter::version::refusal(manifest.min_hub_version.as_deref())
-        {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(PluginError::InvalidManifest(reason));
-        }
-        let id = manifest
-            .id
-            .clone()
-            .ok_or_else(|| PluginError::InvalidManifest("manifest declares no id".into()))?;
-
-        // A DEPLOYMENT directory is READ-ONLY to the hub: if a directory for this id
-        // already exists under the hub's own root but the hub has no row installing it,
-        // it belongs to a deployment. Refuse it 409 `conflict` (never touch the tree) -
-        // the exact twin of the `begin_remove` guard. Without this, `db::install` treats
-        // the deployment dir as "the old copy", renames it to `.outgoing` and overwrites
-        // it (docs/issues/20261005-120000).
-        {
-            let target = Layout::for_plugin(&self.root, &id).target;
-            let owns = self
-                .db
-                .plugin(&id)?
-                .map(|r| r.installed_at.is_some())
-                .unwrap_or(false);
-            if !owns && target.join("manifest.json").exists() {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(PluginError::NotInstalledByHub(id.clone()));
-            }
-        }
-
-        // Same identity + same request (install of this id) is a retry.
-        match self.ids.present(command_id, &format!("install:{id}")) {
-            Idempotency::Replay => {
-                let _ = std::fs::remove_dir_all(&staging);
-                let row = self.row_for_dir(&id);
-                return Ok(InstallIntent::Replay(self.view(&id, row)));
-            }
-            Idempotency::Conflict => {
-                let _ = std::fs::remove_dir_all(&staging);
-                return Err(PluginError::Conflict(command_id.into()));
-            }
-            Idempotency::New => {}
-        }
-
-        // A conflicting command on the same plugin is refused while one runs.
-        if let Some(op) = self.current_op(&id) {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(PluginError::Busy(id.clone(), op.as_str().into()));
-        }
-
+        // ENTER `installing` and ANNOUNCE **BEFORE the download** (docs/issues/20261007-183000):
+        // the contract says a 202 Location names a resource readable, in `installing`, WHILE it
+        // fetches. The download runs in the detached `finish_install`, so `installing` is a real,
+        // visible duration instead of a ~0ms blip announced only after the bytes had landed.
         self.enter(&id, Op::Installing);
         self.announce(&id);
-        Ok(InstallIntent::Proceed { id, artifact_json })
+        Ok(InstallIntent::Proceed { id, source: source.clone(), artifact_json })
     }
 
     /// The staging directory for the next install (one at a time per root).
@@ -603,9 +557,62 @@ impl Plugins {
     pub fn finish_install(
         &self,
         id: &str,
+        source: &crate::source::Source,
         artifact_json: Option<String>,
     ) -> Result<(), PluginError> {
+        // DOWNLOAD + STAGE here, in the detached task, so the route could already answer
+        // 202 + `installing` (docs/issues/20261007-183000). The per-id lock guards the staging.
         let source_dir = self.staging_dir(id);
+        let id_lock = self.id_lock(id);
+        let _op = id_lock.lock().expect("id lock");
+        if let Some(parent) = source_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _ = std::fs::remove_dir_all(&source_dir);
+        std::fs::create_dir_all(&source_dir)?;
+        let staged: Result<(), crate::source::SourceError> = match source {
+            crate::source::Source::Git { url, .. } => {
+                let p = PathBuf::from(url);
+                if p.is_dir() && p.join("manifest.json").is_file() {
+                    copy_dir(&p, &source_dir).map_err(crate::source::SourceError::Io)
+                } else {
+                    crate::source::resolve(source, &source_dir).map(|_| ())
+                }
+            }
+            crate::source::Source::Artifact(_) => {
+                crate::source::resolve(source, &source_dir).map(|_| ())
+            }
+        };
+        if let Err(e) = staged {
+            let _ = std::fs::remove_dir_all(&source_dir);
+            self.leave(id, Op::Installing);
+            self.enter(id, Op::Failed);
+            self.announce(id);
+            return Err(PluginError::Source(e));
+        }
+        // The manifest checks move here too (they need the download). A failure marks the plugin
+        // `failed` and announces, so the state is never a silent lie.
+        let checked: Result<(), PluginError> = (|| {
+            let raw = std::fs::read_to_string(source_dir.join("manifest.json"))
+                .map_err(|_| PluginError::InvalidManifest("no manifest.json".into()))?;
+            let manifest = Manifest::parse(&raw).map_err(PluginError::InvalidManifest)?;
+            if let Some(reason) = manifest.invalid_reason() {
+                return Err(PluginError::InvalidManifest(reason));
+            }
+            if let Some(reason) =
+                agent_hub_adapter::version::refusal(manifest.min_hub_version.as_deref())
+            {
+                return Err(PluginError::InvalidManifest(reason));
+            }
+            Ok(())
+        })();
+        if let Err(e) = checked {
+            let _ = std::fs::remove_dir_all(&source_dir);
+            self.leave(id, Op::Installing);
+            self.enter(id, Op::Failed);
+            self.announce(id);
+            return Err(e);
+        }
         let record_artifact = artifact_json.clone();
         let manifest = std::fs::read_to_string(source_dir.join("manifest.json"))
             .ok()
@@ -731,8 +738,8 @@ impl Plugins {
 pub enum InstallIntent {
     /// A retry: return the original result, run nothing.
     Replay(PluginView),
-    /// First time: run the install detached for this id, landing the staged tree.
-    Proceed { id: String, artifact_json: Option<String> },
+    /// First time: run the install detached for this id - download, stage and land.
+    Proceed { id: String, source: crate::source::Source, artifact_json: Option<String> },
 }
 
 /// What `begin_remove` decided.

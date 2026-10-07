@@ -266,7 +266,7 @@ async fn install(
         Ok(Ok(crate::service::InstallIntent::Replay(view))) => {
             Json(serde_json::json!({ "plugin": view, "updated": false })).into_response_ok()
         }
-        Ok(Ok(crate::service::InstallIntent::Proceed { id, artifact_json })) => {
+        Ok(Ok(crate::service::InstallIntent::Proceed { id, source, artifact_json })) => {
             let plugins = s.plugins.clone();
             let adapters = s.adapters.clone();
             let location = format!("/v1/plugins/{id}");
@@ -278,7 +278,7 @@ async fn install(
                 async move {
                     let id2 = id.clone();
                     let outcome = tokio::task::spawn_blocking(move || {
-                        plugins.finish_install(&id2, artifact_json)
+                        plugins.finish_install(&id2, &source, artifact_json)
                     })
                     .await;
                     match outcome {
