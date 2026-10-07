@@ -46,8 +46,9 @@ P5. **No "how to add a plugin" runbook** in one place. The rules exist as commen
 Keep `{schema, note, plugins:[...]}`. Tighten it so a BUILDER can reject a bad entry and a READER can
 trust it:
 - `schema: 2`.
-- every entry: required `id`, `pluginType`, `versions` (non-empty), and `versions[*]` required
-  `version`, `url` (https), `sha256` (64 hex), `size`.
+- every entry: required `id`, `pluginType`, `name`, `versions` (non-empty); `versions[*]` required
+  `version`, `url` (https), `sha256` (64 hex), `size`. `summary`/`capabilities`/`icon` optional (two
+  official providers publish no icon). The entry does NOT carry `runtime`.
 - `(id, pluginType)` unique; within an entry, `version` unique; `sha256` unique across versions.
 - `url` must start `https://`; the digest is the anchor (already how install reconciles).
 - the hub's reader is unchanged in shape (`plugins` array) — schema 2 is additive; the hub keeps

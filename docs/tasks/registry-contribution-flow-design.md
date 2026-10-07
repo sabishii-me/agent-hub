@@ -49,11 +49,15 @@ is a review of the ENTRY + the BYTES it points at, not of the author's source tr
      conflict (a published version is never silently rewritten);
    - **the URL is downloaded and its bytes hash to the stated sha256** - the artifact exists and is
      what the entry claims (this is the whole point: we verify the DIGEST, not the source);
-   - the downloaded zip's `manifest.json` AGREES with the entry (same id, pluginType, version) - so
-     the entry cannot claim one thing and ship another;
+   - the downloaded zip's `manifest.json` AGREES with the entry (same id, pluginType; the version is
+     the manifest's `version` OR its `package.json.version` - the same fallback the builder uses,
+     because the three official model-providers declare no `version`) - so the entry cannot claim one
+     thing and ship another;
    - the zip contains NO `runtime/` (the runtime is a DECLARATION fetched at install time, per the
      existing rule) and no path escapes;
-   - the icon URLs resolve (no silent missing icon);
+   - IF an `icon` is stated, both light and dark resolve to an image (the icon is OPTIONAL: two
+     official providers publish none); a declared-but-unresolvable icon is an error (closes the
+     silent-drop bug the pack tooling already hit);
    - the artifact is immutable-addressable (the URL is a release asset that will not be overwritten
      - a moving URL with a pinned digest is a trap; if it is a moving URL, reject).
 4. **A human REVIEWER approves.** For entries under our org, CODEOWNERS + an org `registry-review`
@@ -62,10 +66,15 @@ is a review of the ENTRY + the BYTES it points at, not of the author's source tr
    The review is bounded by ADR-0007: we check the declared shape and the bytes' digest, NOT their
    source (ordinary isolation is the decided posture).
 
-5. **On merge to `main`, OUR workflow COMPILES the fragments**: `registry.d/plugins/*.json` ->
-   `registry.json` (sorted by pluginType,id; older versions kept; deterministic) -> published as the
-   single `registry` release asset, overwritten in place (URL never moves). `registry.json` becomes
-   a BUILD OUTPUT, not a hand-edited source.
+5. **On merge to `main`, OUR workflow COMPILES the fragments**: each fragment is ONE version;
+   compilation GROUPS fragments by `(pluginType, id)` and MERGES each version into that entry,
+   KEEPING any older version already in `registry.json` that is not superseded (the official registry
+   keeps 5 adapter versions / 3 provider versions, which no longer appear in any manifest - so the
+   compiled registry is NOT a pure function of the current manifests). Result sorted by pluginType,id
+   and deterministic -> published as the single `registry` release asset, overwritten in place (URL
+   never moves). `registry.json` becomes a BUILD OUTPUT, not a hand-edited source. The registry entry
+   does NOT carry `runtime` (the runtime declaration lives inside the artifact's manifest, read at
+   install time) - see the review doc.
 
 6. The hub/desktop pick it up on the next `registry/refresh`. No hub release needed.
 
