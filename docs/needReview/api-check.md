@@ -6,6 +6,11 @@ Source of truth: `contract/v1.json` (74 endpoints). Mounted routes read from eac
 (the code is ahead of what a doc claims). Every row below is from the code this pass read; it is
 NOT yet runtime-verified — that is Pass 2's acceptance step.
 
+## Runtime-test marking (do not over-read)
+Only an endpoint DRIVEN through `/v1` with an observed result is marked `tested`. A route that is
+mounted but never driven is `untested`. **Reaching `ready` on an install is NOT "usable"** — it
+tests the install path only (download + verify + land), not that the plugin runs or a session works.
+
 ## Counts
 - contract endpoints: **74**
 - mounted: **74** (the two `skills/{id}/files/{file...}` routes ARE mounted via `get_as`/`put_as`
@@ -56,6 +61,24 @@ list/post/get/delete/prepare/enable/disable, catalog, registry/refresh, icon.
 All mounted and real per §18.
 CONTRADICTION to confirm: `tasks/plugin-lifecycle.md` says the catalog/refresh/icon are "not
 built"; §18 says they are real. (`plugin-lifecycle.md` is STALE.)
+
+**Runtime-tested (install chain A2, `tests/plugins/install-from-the-registry-fixture.py`, 6/6):**
+| endpoint | tested? | what was observed |
+|---|---|---|
+| `GET /v1/plugins/catalog` | YES | restates the loaded registry; lists the fixture plugin |
+| `POST /v1/plugins` | YES | listed source -> 202 + state `installing`; unlisted artifact -> 403 `plugin_not_in_registry`; git source -> 403 (with and without a registry) |
+| `GET /v1/plugins/{id}` | YES | polled until state `ready` |
+| `GET /v1/plugins` | no | (not called by that test) |
+| `DELETE /v1/plugins/{id}` | no | |
+| `POST /v1/plugins/{id}/prepare` | no | |
+| `POST /v1/plugins/{id}/enable` / `disable` | no | |
+| `POST /v1/plugins/registry/refresh` | no | |
+| `GET /v1/plugins/{id}/icon/{variant}` | no | |
+
+**INSTALL is NOT USE.** `POST /v1/plugins` reaching `ready` means the artifact was downloaded,
+verified (size+sha256) and landed — it does NOT mean the plugin is USABLE: no session was started
+on it, no adapter process ran, no turn happened. Marking install "tested" must not be read as
+"this plugin works". Usability is the A3 chain (session+turn), which is NOT tested.
 
 ### connections (4) / models (1) / skills (4)
 connections CRUD — mounted, real. `GET /v1/models` — mounted, real.
