@@ -97,6 +97,12 @@ pub struct Plugins {
     /// a source the registry does not list is refused before anything is fetched. `None` = not
     /// loaded (no registry available): then NO install is authorized.
     registry: std::sync::Mutex<Option<crate::registry::Registry>>,
+    /// Why the registry could not be loaded, when that is the reason an install is refused.
+    /// `None` = no fault recorded (a registry may simply not be configured yet). `Some(reason)` =
+    /// the registry EXISTS but could not be read/parsed, or a refresh failed: an install is then
+    /// refused with `registry_unavailable` (the REGISTRY is the problem), NOT
+    /// `plugin_not_in_registry` (the SOURCE is not listed) - a different fact, a different code.
+    registry_fault: std::sync::Mutex<Option<String>>,
 }
 
 impl Plugins {
@@ -173,31 +179,38 @@ impl Plugins {
             .get(&url)
             .send()
             .await
-            .map_err(|e| PluginError::RegistryUrlMissing(format!("registry fetch failed: {e}")))?;
+            .map_err(|e| self.fail_refresh(format!("registry fetch failed: {e}")))?;
         if !resp.status().is_success() {
-            return Err(PluginError::RegistryUrlMissing(format!(
-                "registry fetch failed: HTTP {}",
-                resp.status()
-            )));
+            return Err(self.fail_refresh(format!("registry fetch failed: HTTP {}", resp.status())));
         }
         let text = resp
             .text()
             .await
-            .map_err(|e| PluginError::RegistryUrlMissing(format!("registry read failed: {e}")))?;
+            .map_err(|e| self.fail_refresh(format!("registry read failed: {e}")))?;
         let parsed: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| PluginError::RegistryUrlMissing(format!("registry is not JSON: {e}")))?;
+            .map_err(|e| self.fail_refresh(format!("registry is not JSON: {e}")))?;
         let count = parsed
             .get("plugins")
             .and_then(|v| v.as_array())
             .map(|a| a.len())
-            .ok_or_else(|| PluginError::RegistryUrlMissing("registry has no plugins array".into()))?;
+            .ok_or_else(|| self.fail_refresh("registry has no plugins array".into()))?;
         let file = self.registry_file();
         std::fs::write(&file, &text)?;
-        // Make the fetched registry the one installs reconcile against.
+        // Make the fetched registry the one installs reconcile against, and clear any fault.
         if let Ok(reg) = crate::registry::Registry::parse(&text) {
             *self.registry.lock().expect("registry mutex") = Some(reg);
+            *self.registry_fault.lock().expect("registry fault mutex") = None;
         }
         Ok(serde_json::json!({ "source": file.to_string_lossy(), "plugins": count }))
+    }
+
+    /// Record a refresh failure as the current registry fault, and return it as a
+    /// `registry_unavailable` error. A failed refresh means the REGISTRY is unavailable, so a
+    /// later install is refused with `registry_unavailable` (not `plugin_not_in_registry`).
+    fn fail_refresh(&self, reason: String) -> PluginError {
+        *self.registry.lock().expect("registry mutex") = None;
+        *self.registry_fault.lock().expect("registry fault mutex") = Some(reason.clone());
+        PluginError::RegistryUrlMissing(reason)
     }
 
     pub fn new(db: Db, root: impl Into<PathBuf>, bus: Bus) -> Self {
@@ -209,18 +222,40 @@ impl Plugins {
             ops: std::sync::Mutex::new(std::collections::HashMap::new()),
             op_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
             registry: std::sync::Mutex::new(None),
+            registry_fault: std::sync::Mutex::new(None),
         }
     }
 
-    /// Load the registry from the hub's FIXED address into memory, so the install path can
-    /// reconcile against it. Called at boot and by `registry/refresh`. A missing/unreadable
-    /// registry leaves the in-memory registry `None`, and an install is then refused (no
-    /// registry = nothing is authorized).
+    /// Load the registry into memory from `registry_file()` (at boot, and after a refresh wrote
+    /// it). In a DEV build `registry_file()` honours `AGENT_HUB_REGISTRY_FILE` (how a test injects
+    /// a registry); in a RELEASE build there is no override and the file is `<DATA_DIR>/registry.json`.
+    /// A missing or unparseable file loads NOTHING, so every install is refused.
     pub fn load_registry_from_file(&self) {
         let file = self.registry_file();
-        if let Ok(text) = std::fs::read_to_string(&file) {
-            if let Ok(reg) = crate::registry::Registry::parse(&text) {
+        if !file.exists() {
+            // No registry configured: not a fault, just nothing to reconcile against.
+            *self.registry.lock().expect("registry mutex") = None;
+            *self.registry_fault.lock().expect("registry fault mutex") = None;
+            return;
+        }
+        let text = match std::fs::read_to_string(&file) {
+            Ok(t) => t,
+            Err(e) => {
+                *self.registry.lock().expect("registry mutex") = None;
+                *self.registry_fault.lock().expect("registry fault mutex") =
+                    Some(format!("the registry at {file:?} is not readable: {e}"));
+                return;
+            }
+        };
+        match crate::registry::Registry::parse(&text) {
+            Ok(reg) => {
                 *self.registry.lock().expect("registry mutex") = Some(reg);
+                *self.registry_fault.lock().expect("registry fault mutex") = None;
+            }
+            Err(e) => {
+                *self.registry.lock().expect("registry mutex") = None;
+                *self.registry_fault.lock().expect("registry fault mutex") =
+                    Some(format!("the registry at {file:?} cannot be parsed: {e}"));
             }
         }
     }
@@ -230,6 +265,13 @@ impl Plugins {
     /// naming why it is not. A git source carries no sha256, so it cannot match a release-zip
     /// registry -> refused (docs/issues/20261005-130000).
     fn authorized(&self, source: &crate::source::Source) -> Result<(), PluginError> {
+        // If the registry EXISTS but could not be read/parsed, the problem is the REGISTRY, not
+        // the SOURCE: answer `registry_unavailable` (502), never `plugin_not_in_registry` (403).
+        if self.registry.lock().expect("registry mutex").is_none() {
+            if let Some(reason) = self.registry_fault.lock().expect("registry fault mutex").clone() {
+                return Err(PluginError::RegistryUrlMissing(reason));
+            }
+        }
         let guard = self.registry.lock().expect("registry mutex");
         let Some(reg) = guard.as_ref() else {
             return Err(PluginError::NotInRegistry(

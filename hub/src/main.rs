@@ -137,9 +137,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     adapters.scan();
     let plugins = Plugins::new(db, &plugins_root, bus.clone());
-    // Load the registry once at boot from the hub's fixed local copy, so the INSTALL path can
-    // reconcile against it immediately (docs/issues/20261005-130000). A missing registry leaves
-    // the in-memory registry empty and every install refused until a refresh loads one.
+    // Load the registry once at boot. In a DEV build `AGENT_HUB_REGISTRY_FILE` names it (that is
+    // how a test injects a registry); in a RELEASE build the override does not exist, so the only
+    // source is `<DATA_DIR>/registry.json`, and an ABSENT file loads nothing. When nothing is
+    // loaded every install is refused (no registry = nothing is authorized). `registry/refresh`
+    // replaces it by fetching the hub's fixed official address.
     plugins.load_registry_from_file();
     let plugin_state = PluginsState::new(plugins, transport.clone(), errors.clone(), adapters.clone());
     let harness_state = HarnessesState::new(Harnesses::new(adapters.clone()), errors.clone());
