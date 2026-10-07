@@ -48,3 +48,4 @@ The registry is UNPUBLISHED: plugin-chain capability is UNVERIFIED (docs/tasks/C
 | 20261005-160000 | HUB(test) | a failing check still exited 0; a stale release binary was measured | FIXED | exit-tied results; release rebuilt; BLOCKED state added |
 | 20261005-170000 | DOCS | I called the org an account (queried /users, not /orgs) | RESOLVED | read `type` + /orgs; design corrected |
 | 20261007-010000 | HUB+CONTRACT | `approve-unsafe` (force-install an unlisted source) is settled policy but NOT implemented | OPEN | install chain 6/6 covers listed/unlisted/git; no forced-install case; contract field undecided |
+| 20261008-010000 | HUB | a mixed concurrent install/remove loses ONE plugin's SSE events (reproduced 3/3) | OPEN | mock-concurrent-mixed-install-remove.py; ids={'pi'} or {'deepseek'} every run |
