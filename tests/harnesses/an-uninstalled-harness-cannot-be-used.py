@@ -1,3 +1,4 @@
+# TC-HARNESSES-001
 # A hub with an EMPTY plugins root must NOT be able to open a session on any harness:
 # there is no adapter for a harness that is not installed. This pins the FAILURE path -
 # "it does not exist until it is installed" - which the success-path tests assume.

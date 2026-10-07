@@ -1,0 +1,96 @@
+approvals/an-approval-preset-asks-before-every-tool.py                 prod=[33mBLOCKED[0m
+approvals/denying-an-approval-blocks-the-side-effect.py                prod=[33mBLOCKED[0m
+approvals/review-remains-switchable-after-a-preset.py                  prod=[33mBLOCKED[0m
+concurrency/a-second-turn-while-one-runs-is-refused.py                 prod=[33mBLOCKED[0m
+concurrency/cancelling-one-session-does-not-disturb-another.py         prod=[33mBLOCKED[0m
+concurrency/many-sessions-cancel-at-once.py                            prod=[33mBLOCKED[0m
+concurrency/many-sessions-of-one-harness.py                            prod=[33mBLOCKED[0m
+concurrency/one-hundred-connections-do-not-time-out.py                 prod=[32mGREEN[0m
+connections/connections-are-crud-and-delete-is-real.py                 prod=[32mGREEN[0m
+contract/status-surface-openapi-and-models-answer.py                   prod=[32mGREEN[0m
+contract/the-events-stream-delivers-plugin-changes.py                  prod=[33mBLOCKED[0m
+contract/the-served-surface-equals-the-contract.py                     prod=[32mGREEN[0m
+harnesses/an-uninstalled-harness-cannot-be-used.py                     prod=[32mGREEN[0m
+harnesses/harness-discovery-and-its-capability-gated-routes.py         prod=[33mBLOCKED[0m
+interrupt/a-cancelled-turn-releases-the-session.py                     prod=[33mBLOCKED[0m
+interrupt/a-killed-hub-recovers-its-sessions.py                        prod=[33mBLOCKED[0m
+interrupt/a-provider-that-cannot-be-reached-is-refused-not-faked.py    prod=[33mBLOCKED[0m
+interrupt/a-provider-that-hangs-does-not-hang-the-turn.py              prod=[33mBLOCKED[0m
+interrupt/cancel-is-idempotent-and-bounded.py                          prod=[33mBLOCKED[0m
+interrupt/killing-the-adapter-during-a-cancel-settles-the-turn.py      prod=[33mBLOCKED[0m
+interrupt/killing-the-adapter-leaves-an-honest-state.py                prod=[33mBLOCKED[0m
+interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py       prod=[33mBLOCKED[0m
+interrupt/killing-the-runtime-process-settles-the-turn.py              prod=[33mBLOCKED[0m
+interrupt/killing-the-whole-tree-then-restarting-recovers.py           prod=[33mBLOCKED[0m
+interrupt/send-immediately-after-cancel.py                             prod=[33mBLOCKED[0m
+interrupt/the-network-drops-mid-turn-and-the-turn-settles.py           prod=[33mBLOCKED[0m
+lifecycle/a-session-closes-reopens-and-forks-without-touching-its-source.py prod=[33mBLOCKED[0m
+lifecycle/the-session-crud-and-read-through-are-real.py                prod=[33mBLOCKED[0m
+lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py        prod=[33mBLOCKED[0m
+model/a-real-model-answers-with-a-confirmed-identity.py                prod=[33mBLOCKED[0m
+plugins/a-caller-cannot-install-from-an-arbitrary-url.py               prod=[32mGREEN[0m
+plugins/a-hub-killed-mid-remove-finishes-the-removal.py                prod=[33mBLOCKED[0m
+plugins/a-plugin-is-installed-listed-enabled-and-removed.py            prod=[33mBLOCKED[0m
+plugins/concurrent-install-and-remove.py                               prod=[33mBLOCKED[0m
+plugins/concurrent-mixed-install-remove.py                             prod=[33mBLOCKED[0m
+plugins/install-reconciles-against-the-registry.py                     prod=[32mGREEN[0m
+plugins/install-refusals-have-honest-codes.py                          prod=[32mGREEN[0m
+plugins/registry-refresh-updates-the-local-registry.py                 prod=[31mRED[0m
+plugins/the-release-hub-error-surface.py                               prod=[32mGREEN[0m
+plugins/the-release-hub-ignores-the-registry-override.py               prod=[32mGREEN[0m
+presets/a-preset-is-listed-and-applied.py                              prod=[33mBLOCKED[0m
+presets/plan-mode-is-applied-and-reports.py                            prod=[33mBLOCKED[0m
+provider/model-provider-crud-and-types-are-real.py                     prod=[33mBLOCKED[0m
+skills/skills-crud-over-the-real-surface.py                            prod=[32mGREEN[0m
+tools/the-model-really-runs-a-tool.py                                  prod=[33mBLOCKED[0m
+
+[1m=== STATUS MATRIX ===[0m   columns: ['prod']
+[1mtest                                                                        | prod    [0m
+---------------------------------------------------------------------------------------
+approvals/an-approval-preset-asks-before-every-tool.py                      | [33mBLOCKED[0m      [2mprod:[approvals/preset-gates] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+approvals/denying-an-approval-blocks-the-side-effect.py                     | [33mBLOCKED[0m      [2mprod:[approvals/deny-blocks] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+approvals/review-remains-switchable-after-a-preset.py                       | [33mBLOCKED[0m      [2mprod:[approvals/review-toggle] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+concurrency/a-second-turn-while-one-runs-is-refused.py                      | [33mBLOCKED[0m      [2mprod:[concurrency/busy] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+concurrency/cancelling-one-session-does-not-disturb-another.py              | [33mBLOCKED[0m      [2mprod:[concurrency/cross-talk] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+concurrency/many-sessions-cancel-at-once.py                                 | [33mBLOCKED[0m      [2mprod:[concurrency/many-cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+concurrency/many-sessions-of-one-harness.py                                 | [33mBLOCKED[0m      [2mprod:[concurrency/many-sessions] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+concurrency/one-hundred-connections-do-not-time-out.py                      | [32mGREEN[0m        [2mprod:[concurrency] 4/4 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+connections/connections-are-crud-and-delete-is-real.py                      | [32mGREEN[0m        [2mprod:[connections/crud] 10/10 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+contract/status-surface-openapi-and-models-answer.py                        | [32mGREEN[0m        [2mprod:[contract/metadata] 8/8 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+contract/the-events-stream-delivers-plugin-changes.py                       | [33mBLOCKED[0m      [2mprod:BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registr[0m
+contract/the-served-surface-equals-the-contract.py                          | [32mGREEN[0m        [2mprod:[contract/surface] 4/4 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+harnesses/an-uninstalled-harness-cannot-be-used.py                          | [32mGREEN[0m        [2mprod:[harnesses/uninstalled] 6/6 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+harnesses/harness-discovery-and-its-capability-gated-routes.py              | [33mBLOCKED[0m      [2mprod:[harnesses/routes] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/a-cancelled-turn-releases-the-session.py                          | [33mBLOCKED[0m      [2mprod:[interrupt/cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/a-killed-hub-recovers-its-sessions.py                             | [33mBLOCKED[0m      [2mprod:[interrupt/kill-recover] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/a-provider-that-cannot-be-reached-is-refused-not-faked.py         | [33mBLOCKED[0m      [2mprod:[interrupt/provider-unreachable] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/a-provider-that-hangs-does-not-hang-the-turn.py                   | [33mBLOCKED[0m      [2mprod:[interrupt/provider-hangs] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/cancel-is-idempotent-and-bounded.py                               | [33mBLOCKED[0m      [2mprod:[interrupt/cancel-idempotent] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/killing-the-adapter-during-a-cancel-settles-the-turn.py           | [33mBLOCKED[0m      [2mprod:[interrupt/kill-adapter-during-cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/killing-the-adapter-leaves-an-honest-state.py                     | [33mBLOCKED[0m      [2mprod:[interrupt/kill-adapter] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/killing-the-adapter-mid-turn-does-not-hang-the-turn.py            | [33mBLOCKED[0m      [2mprod:[interrupt/kill-adapter-mid-turn] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/killing-the-runtime-process-settles-the-turn.py                   | [33mBLOCKED[0m      [2mprod:[interrupt/kill-runtime] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/killing-the-whole-tree-then-restarting-recovers.py                | [33mBLOCKED[0m      [2mprod:[interrupt/kill-tree-restart] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/send-immediately-after-cancel.py                                  | [33mBLOCKED[0m      [2mprod:[interrupt/send-after-cancel] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+interrupt/the-network-drops-mid-turn-and-the-turn-settles.py                | [33mBLOCKED[0m      [2mprod:[interrupt/network-drop] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+lifecycle/a-session-closes-reopens-and-forks-without-touching-its-source.py | [33mBLOCKED[0m      [2mprod:[lifecycle/session] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+lifecycle/the-session-crud-and-read-through-are-real.py                     | [33mBLOCKED[0m      [2mprod:[lifecycle/crud] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py             | [33mBLOCKED[0m      [2mprod:BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registr[0m
+model/a-real-model-answers-with-a-confirmed-identity.py                     | [33mBLOCKED[0m      [2mprod:[model/identity] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+plugins/a-caller-cannot-install-from-an-arbitrary-url.py                    | [32mGREEN[0m        [2mprod:[plugins/no-arbitrary-url-install] 3/3 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+plugins/a-hub-killed-mid-remove-finishes-the-removal.py                     | [33mBLOCKED[0m      [2mprod:BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registr[0m
+plugins/a-plugin-is-installed-listed-enabled-and-removed.py                 | [33mBLOCKED[0m      [2mprod:BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registr[0m
+plugins/concurrent-install-and-remove.py                                    | [33mBLOCKED[0m      [2mprod:BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registr[0m
+plugins/concurrent-mixed-install-remove.py                                  | [33mBLOCKED[0m      [2mprod:BLOCKED: installing a plugin needs the official registry, which is UNPUBLISHED (the official registr[0m
+plugins/install-reconciles-against-the-registry.py                          | [32mGREEN[0m        [2mprod:[plugins/install-reconciles] 3/3 ok, 0 failed, 0 skipped, 1 BLOCKED[0m
+plugins/install-refusals-have-honest-codes.py                               | [32mGREEN[0m        [2mprod:[plugins/install-refusals] 8/8 ok, 0 failed, 0 skipped, 1 BLOCKED[0m
+plugins/registry-refresh-updates-the-local-registry.py                      | [31mRED[0m          [2mprod:[plugins/registry-refresh] 10/13 ok, 3 failed, 0 skipped, 1 BLOCKED[0m
+plugins/the-release-hub-error-surface.py                                    | [32mGREEN[0m        [2mprod:[plugins/release-error-surface] 8/8 ok, 0 failed, 0 skipped, 1 BLOCKED[0m
+plugins/the-release-hub-ignores-the-registry-override.py                    | [32mGREEN[0m        [2mprod:[plugins/release-ignores-override] 5/5 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+presets/a-preset-is-listed-and-applied.py                                   | [33mBLOCKED[0m      [2mprod:[presets/apply] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+presets/plan-mode-is-applied-and-reports.py                                 | [33mBLOCKED[0m      [2mprod:[presets/plan] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+provider/model-provider-crud-and-types-are-real.py                          | [33mBLOCKED[0m      [2mprod:[provider/crud] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+skills/skills-crud-over-the-real-surface.py                                 | [32mGREEN[0m        [2mprod:[skills/routes] 9/9 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+tools/the-model-really-runs-a-tool.py                                       | [33mBLOCKED[0m      [2mprod:[tools/real-call] 0/0 ok, 0 failed, 0 skipped, 0 BLOCKED[0m
+[1msummary: [32m11 GREEN[0m, [31m1 RED[0m, [33m33 BLOCKED[0m across 45 files x 1 env
+[2mall-green is NOT correctness. A case GREEN in dev AND GREEN in prod is a T0 issue (the environments are not actually distinguished).[0m

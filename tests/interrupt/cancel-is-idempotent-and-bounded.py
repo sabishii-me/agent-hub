@@ -1,3 +1,4 @@
+# TC-INTERRUPT-005
 # Cancel semantics that need no model:
 #  - cancel on an IDLE session is idempotent and does not error or wedge it;
 #  - repeated cancel is idempotent;

@@ -1,3 +1,4 @@
+# TC-PLUGINS-009
 # The registry ADDRESS is compiled into the hub. A DEV build lets AGENT_HUB_REGISTRY_URL override
 # it, which is how these tests point refresh at a bad source to exercise its ERROR handling. This
 # file tests ONLY the error surface. It does NOT fabricate a WORKING registry and treat a

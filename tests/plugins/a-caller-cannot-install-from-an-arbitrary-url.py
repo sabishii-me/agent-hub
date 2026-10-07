@@ -1,3 +1,4 @@
+# TC-PLUGINS-001
 # SECURITY (narrow claim): with NO registry loaded, a caller-supplied url/artifact must be REFUSED
 # with the specific registry-authorization code, and nothing may land. This proves the NO-REGISTRY
 # refusal, NOT that a real registry would reject a foreign-but-listed source. The broader claim

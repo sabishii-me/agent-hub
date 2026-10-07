@@ -1,4 +1,4 @@
-# ENV: dev   MOCK: yes (a local HTTP MOCK registry; see mock_registry.py)
+# TC-PLUGINS-006
 # Concurrency on the plugin surface must not corrupt it: several installs of the SAME id at
 # once must converge to ONE ready plugin (idempotent, not a torn directory), and an
 # install racing a remove of a different plugin must leave each plugin in a sane state.
@@ -14,9 +14,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"))
 from hub import Hub, hub_sha          # noqa: E402
-from mock_registry import MockRegistry          # noqa: E402
 from tally import Tally, combo        # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
@@ -26,18 +25,12 @@ combo(hub_sha())
 if not t.require(os.path.isdir(PI), "a real plugin source is present", f"no plugin at {PI}"):
     t.done(); sys.exit(1)
 
-mock = MockRegistry()
-mock.add(PI)
-mock.start()
-hub = Hub(env={"AGENT_HUB_REGISTRY_URL": mock.url()})
+hub = Hub()
 try:
     hub.start()
-    # Resolve the registry artifacts ONCE (refresh is not under test here and
-    # racing N refreshes corrupts the catalog read; install/remove is the subject).
-    ARTIFACTS = {'pi': hub.registry_artifact('pi')}
 
     def install(i):
-        r = hub.post("/v1/plugins", {"source": {"artifact": ARTIFACTS["pi"]}}, key=f"ci-{i}")
+        r = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key=f"ci-{i}")
         return r["status"]
 
     # N concurrent installs of the SAME id.
@@ -73,7 +66,7 @@ try:
     # operation finishes; the final state is a real, readable one (ready or absent).
     def churn(i):
         if i % 2 == 0:
-            hub.post("/v1/plugins", {"source": {"artifact": ARTIFACTS["pi"]}}, key=f"ch-i{i}")
+            hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key=f"ch-i{i}")
         else:
             hub.delete("/v1/plugins/pi", key=f"ch-d{i}")
     with cf.ThreadPoolExecutor(max_workers=4) as ex:
@@ -92,5 +85,4 @@ try:
 finally:
     ok = t.done()
     hub.cleanup()
-    mock.stop()
 sys.exit(0 if ok else 1)

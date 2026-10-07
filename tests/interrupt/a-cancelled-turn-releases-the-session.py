@@ -1,3 +1,4 @@
+# TC-INTERRUPT-001
 # A real turn is running (a real model call), then CANCELLED. The turn must reach a terminal
 # state and the session must be usable again - the occupancy is released by a CONFIRMED stop,
 # not a hope. This needs a REAL provider (a turn only runs with one), so it SKIPs without

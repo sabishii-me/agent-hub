@@ -1,3 +1,4 @@
+# TC-LIFECYCLE-001
 # The session lifecycle against a REAL adapter: create -> active, close -> closed, reopen
 # restores it, fork makes an independent session, and compact keeps the conversation usable.
 # No provider is needed (no model turn), so this runs without AUTH.

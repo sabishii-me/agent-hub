@@ -1,3 +1,4 @@
+# TC-MODEL-001
 # A real model turn must produce a real assistant message AND confirm the identity: the model
 # that answered is the one that was requested, and the hub reports it. A second turn continues
 # the SAME conversation. This needs a REAL provider, so it SKIPs without authorization.

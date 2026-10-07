@@ -1,3 +1,4 @@
+# TC-PLUGINS-010
 # ERROR CODES against the RELEASE build of the hub. A release binary's registry address is
 # FIXED at build time (no env override exists), so this is what a USER actually runs. Every
 # failure must answer a CONTRACT code - {"error": CODE, "detail": ...} with the HTTP status

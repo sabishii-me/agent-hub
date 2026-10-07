@@ -1,3 +1,4 @@
+# TC-INTERRUPT-006
 # PASSIVE M3: the adapter is KILLED while a cancel is IN FLIGHT (the abort was delivered,
 # the process dies before it could confirm). The turn must still settle honestly and the
 # session must not be left wedged. Real fault injection: cancel a real turn, kill the real

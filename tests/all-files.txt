@@ -29,12 +29,13 @@ lifecycle/the-session-crud-and-read-through-are-real.py
 lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py
 model/a-real-model-answers-with-a-confirmed-identity.py
 plugins/a-caller-cannot-install-from-an-arbitrary-url.py
-plugins/a-hub-killed-mid-remove-finishes-the-removal.py
-plugins/a-plugin-is-installed-listed-enabled-and-removed.py
-plugins/concurrent-install-and-remove.py
-plugins/concurrent-mixed-install-remove.py
 plugins/install-reconciles-against-the-registry.py
 plugins/install-refusals-have-honest-codes.py
+plugins/mock/a-hub-killed-mid-remove-finishes-the-removal.py
+plugins/mock/a-plugin-is-installed-listed-enabled-and-removed.py
+plugins/mock/concurrent-install-and-remove.py
+plugins/mock/concurrent-mixed-install-remove.py
+plugins/registry-injection-matrix.py
 plugins/registry-refresh-updates-the-local-registry.py
 plugins/the-release-hub-error-surface.py
 plugins/the-release-hub-ignores-the-registry-override.py

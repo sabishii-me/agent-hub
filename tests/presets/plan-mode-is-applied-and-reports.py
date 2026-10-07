@@ -1,3 +1,4 @@
+# TC-PRESETS-002
 # `plan` is a session policy knob (PATCH /v1/sessions/{id} {plan:true|false}). The contract
 # distinguishes TWO fields: `plan` (the REQUESTED state) and `appliedPlan` (what the ADAPTER
 # actually applied - "proof"). This file tests both, separately, and does NOT claim runtime

@@ -1,3 +1,4 @@
+# TC-CONCURRENCY-005
 # ADR-0009: the hub serves concurrent connections. This ATTEMPTS to MEASURE, against the real
 # binary: (a) how many raw TCP sockets can be HELD OPEN AT ONCE, and (b) that a held SSE stream does
 # not block a short GET. If it cannot hold >=100 sockets open, that is a MEASUREMENT that did not

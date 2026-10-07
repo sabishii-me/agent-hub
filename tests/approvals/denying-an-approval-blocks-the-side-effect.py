@@ -1,3 +1,4 @@
+# TC-APPROVALS-002
 # Denying an approval must PREVENT the tool's side effect: the model asks to write a file,
 # the caller denies, and the file must NOT exist afterwards. Real provider, real preset,
 # real approval round-trip. Exposes the case where a preset's gate does not really gate.

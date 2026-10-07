@@ -1,3 +1,4 @@
+# TC-INTERRUPT-008
 # PASSIVE P2/P4: a REAL turn is running (real provider); the adapter child is KILLED
 # mid-turn. The turn must settle honestly (not hang forever, not stay `running` with no
 # process), and the session must not keep claiming `active`. The adapter is the real pi

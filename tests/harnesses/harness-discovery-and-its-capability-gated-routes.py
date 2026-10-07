@@ -1,3 +1,4 @@
+# TC-HARNESSES-002
 # GET /v1/harnesses lists the real plugins, and each capability-gated route answers from the
 # REAL adapter: a harness WITHOUT a capability answers `unsupported` (501) - honestly, never
 # a fabricated empty. pi has models/presets/skills; it has NO providers, so its

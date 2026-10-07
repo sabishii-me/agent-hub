@@ -1,3 +1,4 @@
+# TC-CONNECTIONS-001
 # The hub's own connection store: create -> list -> patch -> delete, over the REAL /v1
 # surface. A connection's token goes to the secret store; the row keeps a reference, never
 # the value. Delete is idempotent.

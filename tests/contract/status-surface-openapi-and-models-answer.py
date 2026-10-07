@@ -1,3 +1,4 @@
+# TC-CONTRACT-001
 # Metadata routes must answer REAL, not 501: the hub's status, its surface, its OpenAPI
 # projection, and the merged model list. Each is read and its SHAPE checked against the
 # contract (a red here is the product's fault).

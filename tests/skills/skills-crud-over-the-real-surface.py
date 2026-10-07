@@ -1,3 +1,4 @@
+# TC-SKILLS-001
 # The /v1/skills routes as they exist today (the directory model). This file proves the ROUTES
 # behave (list/read/write/delete + path refusal); it does NOT claim the model is the approved
 # one - the skills DECISION is open (docs/issues + test-suite.md, timestamped 2026-10-03).

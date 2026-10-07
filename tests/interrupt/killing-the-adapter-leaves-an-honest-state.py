@@ -1,3 +1,4 @@
+# TC-INTERRUPT-007
 # REAL fault injection: the hub's adapter process (its direct child) is KILLED while the
 # session is live. The hub must notice (its pipe to the child closes) and become HONEST:
 # the session must not keep claiming `active` with no process, and a turn must not hang

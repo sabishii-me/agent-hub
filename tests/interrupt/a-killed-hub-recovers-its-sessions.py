@@ -1,3 +1,4 @@
+# TC-INTERRUPT-002
 # A hub KILLED mid-life (a power cut, no cleanup) must come back to a state that makes sense
 # and must not leave a session claiming `active` without a live process. This drives a real
 # binary, kills it with taskkill /T /F, restarts on the SAME data dir, and reads the truth.

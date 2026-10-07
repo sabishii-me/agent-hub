@@ -1,3 +1,4 @@
+# TC-LIFECYCLE-002
 # The session CRUD and every read-through route against a REAL adapter (no model turn, so no
 # auth): list, get, patch (title), turns, messages, stats, skills, artifacts, compact,
 # repair preview, delete. Each is read and its SHAPE checked against the contract.

@@ -1,3 +1,4 @@
+# TC-CONTRACT-003
 # The hub must serve EXACTLY what the contract declares: no route it does not declare, and
 # no declared route left unmounted. A route that answers `not_implemented` is a stub, which
 # is not a capability; this file proves the SHAPE, not the behaviour (other layers do that).

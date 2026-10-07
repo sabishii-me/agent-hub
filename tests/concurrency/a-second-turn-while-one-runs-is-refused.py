@@ -1,3 +1,4 @@
+# TC-CONCURRENCY-001
 # C3: while a turn RUNS on a session, a second turn must be REFUSED (409
 # `session_busy`), never queued and never dispatched. This is the one-at-a-time rule
 # the contract states; a queued second turn would run two prompts on one process and

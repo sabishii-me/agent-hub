@@ -1,3 +1,4 @@
+# TC-PLUGINS-002
 # Install must RECONCILE the caller's source against the registry (docs/issues/20261005-130000):
 # an artifact whose url AND sha256 match a registry release is AUTHORIZED; anything else is
 # refused with 403 plugin_not_in_registry, and NOTHING is fetched or landed. The sha256 is the

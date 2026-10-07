@@ -1,3 +1,4 @@
+# TC-PLUGINS-011
 # Does a RELEASE build honour AGENT_HUB_REGISTRY_URL? It MUST NOT: the registry address is
 # compiled in, so neither an API caller nor the environment can point the hub at a foreign
 # registry (the injection hole, docs/issues/20261005-130000).

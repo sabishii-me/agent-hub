@@ -51,23 +51,37 @@ def registry_published():
         return ("unreachable", f"the official registry could not be reached: {type(e).__name__}: {e}")
 
 
-def require_registry_or_blocked():
-    """A test that installs a plugin needs the OFFICIAL registry (it must NOT fabricate one).
-    If it is UNPUBLISHED, raise BLOCKED (exit 3) - UNVERIFIED. If it is UNREACHABLE, also BLOCKED
-    but with the weaker reason ('could not reach', not 'confirmed unpublished')."""
-    import tally as _tally
-    state, why = registry_published()
-    if state == "published":
-        return
-    if state == "unpublished":
-        _tally.blocked(
-            "installing a plugin needs the official registry, which is UNPUBLISHED "
-            f"({why}). The test will not fabricate a registry; the capability is UNVERIFIED."
-        )
-    _tally.blocked(
-        "installing a plugin needs the official registry, which could NOT BE REACHED "
-        f"({why}). This is NOT 'confirmed unpublished'; the capability is UNVERIFIED."
-    )
+def environment():
+    """The environment this run is in: 'dev' (default), 'prod', or 'staging'.
+
+    ONE test file runs in EVERY environment; only the CONFIGURATION differs. There is no per-test
+    skip and no BLOCK: a test either passes or fails, and a failure prints its reason.
+    """
+    import os as _os
+    return (_os.environ.get("AGENT_HUB_ENV") or "dev").strip().lower()
+
+
+def environment_registry_env():
+    """The registry configuration for the CURRENT environment, and the mock to stop (or None).
+
+    dev  -> start a MOCK registry (real zips, real sha256) and inject its address. This is the ONLY
+            reason dev differs from prod: in dev the hub CAN be given a registry.
+    prod -> inject NOTHING. The hub uses its compiled-in official address; if that is 404, an
+            install is refused and the test FAILS with the real reason (not a BLOCK).
+    staging -> reserved.
+    """
+    import os as _os
+    env = environment()
+    if env == "prod" or env == "staging":
+        return None, {}
+    from mock_registry import MockRegistry
+    mock = MockRegistry()
+    for d in (r"E:/AI/ideas/prts-harness-pi", r"E:/AI/ideas/prts-harness-jouzu",
+              r"E:/AI/ideas/prts-harness-deepseek"):
+        if _os.path.isdir(d):
+            mock.add(d)
+    mock.start()
+    return mock, {"AGENT_HUB_REGISTRY_URL": mock.url()}
 
 
 def hub_sha():
@@ -104,6 +118,7 @@ class Hub:
         # host, not test scratch.
         self._providers = set()
         self._connections = set()
+        self._mock = None
         self._log = open(os.path.join(self.dir, "hub-stdout.log"), "a", encoding="utf-8")
 
     @staticmethod
@@ -124,17 +139,15 @@ class Hub:
             "AGENT_HUB_ADDR": "127.0.0.1:0",
             "AGENT_HUB_CONTRACT_DIR": os.path.join(REPO, "contract"),
         })
-        # The hub has NO registry by default: the official one is unpublished, and a test must not
-        # fabricate one to make an install pass (owner direction: no mock registry, no local
-        # registry injection, no test-side stand-in for the product). A test that needs a registry
-        # says so explicitly via `env` and marks the capability BLOCKED - it does not smuggle one
-        # in here. (`AGENT_HUB_REGISTRY_FILE` is a DEV override; a release build ignores it.)
-        #
-        # CLEAR any registry override inherited from the parent environment, so a test NEVER
-        # accidentally points the hub at a foreign registry: an install must go to the hub's own
-        # official address. A test that needs a specific registry sets it EXPLICITLY via `env`.
+        # ONE test file runs in EVERY environment; only the CONFIGURATION differs. The harness
+        # applies the environment's registry setup: in dev it injects a MOCK registry (real zips,
+        # real sha256) so an install can really succeed; in prod it injects NOTHING, so the hub
+        # uses its compiled-in official address and an install is refused if that is absent.
         env.pop("AGENT_HUB_REGISTRY_URL", None)
         env.pop("AGENT_HUB_REGISTRY_FILE", None)
+        mock, reg_env = environment_registry_env()
+        self._mock = mock
+        env.update(reg_env)
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
@@ -144,25 +157,21 @@ class Hub:
     def install_plugins(self):
         """Install a requested plugin through the hub's OWN registry - the real product path.
 
-        The test supplies only the registry ADDRESS (a dev override) or nothing. It NEVER supplies
-        a url/sha256 to install: it asks the hub to REFRESH (the hub fetches ITS registry), reads
-        the release the hub's OWN catalog lists for the id, and posts THAT as source.artifact (the
-        hub reconciles it against the same registry) -> a REAL install, no test-side artifact.
+        The test supplies only the registry ADDRESS (the environment's config) or nothing. It
+        NEVER supplies a url/sha256 of its own: it asks the hub to REFRESH, reads the release the
+        hub's OWN catalog lists for the id, and posts THAT as source.artifact (the hub reconciles
+        it against the same registry) -> a REAL install.
 
-        If the hub's registry is unreachable, the hub cannot install anything and this is BLOCKED
-        (UNVERIFIED), not a failure. The harness does not fabricate a registry."""
+        There is NO block here. If the hub has no usable registry (prod, official address absent),
+        the refresh/install FAILS and this RAISES with the real reason - the caller's run is RED,
+        not skipped."""
         if not self._plugin_sources:
             return
-        import tally as _tally
-        # The hub refreshes ITS registry (its compiled address, or the dev override).
         rr = self.post("/v1/plugins/registry/refresh", timeout=60)
         if rr["status"] >= 300:
             code = (rr["json"] or {}).get("error")
             detail = (rr["json"] or {}).get("detail") or ""
-            _tally.blocked(
-                "installing a plugin needs the hub's registry, which is not reachable now "
-                f"(refresh {rr['status']} {code}: {detail[:120]}). UNVERIFIED."
-            )
+            raise RuntimeError(f"the hub could not refresh its registry: {rr['status']} {code}: {detail[:160]}")
         for spec in self._plugin_sources:
             if isinstance(spec, str) and os.path.isdir(spec):
                 pid = self._plugin_id(spec)
@@ -390,6 +399,9 @@ class Hub:
             self._log.close()
         except Exception:
             pass
+        if getattr(self, "_mock", None) is not None:
+            try: self._mock.stop()
+            except Exception: pass
         shutil.rmtree(self.dir, ignore_errors=True)
 
     # --- convenience ------------------------------------------------------

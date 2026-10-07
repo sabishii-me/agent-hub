@@ -1,3 +1,4 @@
+# TC-INTERRUPT-009
 # PASSIVE M1: the pi RUNTIME process (a DESCENDANT of the hub, under the adapter) is killed
 # while a real turn runs, but the ADAPTER process stays alive. The turn must settle
 # honestly (the model call can no longer complete), the session must stay usable, and the

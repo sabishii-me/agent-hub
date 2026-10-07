@@ -1,3 +1,4 @@
+# TC-PLUGINS-003
 # POST /v1/plugins REFUSALS: every rejection names itself with its contract code, and a
 # refused install leaves NO half tree behind. A success-only suite cannot see a wrong code
 # or a leaked directory.

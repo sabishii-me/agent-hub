@@ -1,3 +1,4 @@
+# TC-CONCURRENCY-004
 # N sessions of the SAME harness, started AT ONCE, each running its own real turn. This is
 # the shape a real user has: ONE harness home, many sessions sharing it. It must hold at
 # 100+ concurrent sessions - a harness is not one-process-per-customer.

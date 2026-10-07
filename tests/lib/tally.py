@@ -25,12 +25,11 @@ class Tally:
         return bool(ok)
 
     def blocked_check(self, what, why):
-        """A capability that CANNOT be exercised because a real PRECONDITION is missing (e.g.
-        the official registry is not published). NOT a pass and NOT a fail: it is recorded as
-        unverified, so no result claims it worked. Explicitly distinct from a failure (the code
-        may be right) and from a pass (nothing was proven)."""
-        self.blocked += 1
-        print(f"  BLOCKED {what} - {why}")
+        """REMOVED as a state. A missing precondition is a FAILURE with a reason, never a
+        separate 'BLOCKED' outcome: any BLOCK is a T0 (the environment or the test is wrong).
+        Kept as a name so callers fail loudly instead of silently skipping."""
+        self.failed += 1
+        print(f"  FAIL {what} - {why}")
         return False
 
     def require(self, condition, what, missing):
@@ -45,8 +44,7 @@ class Tally:
 
     def done(self):
         total = self.passed + self.failed
-        print(f"  [{self.name}] {self.passed}/{total} ok, {self.failed} failed, "
-              f"{self.skipped} skipped, {self.blocked} BLOCKED")
+        print(f"  [{self.name}] {self.passed}/{total} ok, {self.failed} failed, {self.skipped} skipped")
         return self.failed == 0
 
 
@@ -74,10 +72,9 @@ def combo(hub_sha, extra=""):
 
 
 class Blocked(Exception):
-    """Raised when a test CANNOT run because a real precondition is missing (e.g. the official
-    registry is unpublished). It is NOT a failure (the code may be right) and NOT a pass (nothing
-    was proven). `run.py` counts it separately. A test raises this - never fabricates the
-    precondition to keep going (owner direction: no mock registry, no test-side stand-in)."""
+    """REMOVED as an outcome. A test that cannot exercise a real precondition now FAILS with the
+    reason (exit 1), because a BLOCK is a T0: a missing precondition means the environment or the
+    test is wrong, not that the result is 'unverified'. Kept so old callers fail loudly."""
 
     def __init__(self, reason):
         super().__init__(reason)
@@ -85,6 +82,6 @@ class Blocked(Exception):
 
 
 def blocked(reason):
-    """Print a BLOCKED line and exit with the BLOCKED sentinel code (3)."""
-    print(f"BLOCKED: {reason}")
-    raise SystemExit(3)
+    """A BLOCK is a T0. Print it as a FAILURE and exit NON-ZERO (1), never the old sentinel 3."""
+    print(f"FAIL: {reason}")
+    raise SystemExit(1)

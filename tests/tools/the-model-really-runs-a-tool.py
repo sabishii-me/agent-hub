@@ -1,3 +1,4 @@
+# TC-TOOLS-001
 # The model must REALLY run a tool (not just answer): prompt it to read a file only the
 # filesystem can know, and require (a) a tool call on the message, and (b) the answer to
 # carry the file's content. A chat-only "pong" cannot pass this. Needs a REAL provider.

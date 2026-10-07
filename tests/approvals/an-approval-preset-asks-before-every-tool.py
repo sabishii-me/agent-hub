@@ -1,3 +1,4 @@
+# TC-APPROVALS-001
 # The `heavy-review` preset declares {"approve": true} - "every tool call asks before it
 # runs". A session that selects it MUST raise a REAL approval before the tool runs: the
 # approval appears on GET /v1/sessions/{id}/approvals, allowing it (POST the SAME id)

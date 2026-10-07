@@ -1,3 +1,4 @@
+# TC-APPROVALS-003
 # The preset's `approve` is the session's STARTING review state, not a nail. After the fix for
 # 20261004-050000 (a preset reported APPLIED but not enforced), review must still be switchable
 # within the session: `/review off` (PATCH review:false) lets tools run without asking, and

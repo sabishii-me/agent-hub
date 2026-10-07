@@ -1,5 +1,4 @@
-# ENV: dev   MOCK: yes (a local HTTP MOCK registry serves a real pi zip; see mock_registry.py)
-#
+# TC-PLUGINS-005
 # The plugin lifecycle against a REAL plugin, installed THROUGH /v1: install from a git
 # source (a local path), the resource reaches `ready`, list/get show it, preparing
 # materialises its runtime, disable/enable flip it, then REMOVE really removes it (GET
@@ -14,9 +13,8 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib"))
 from hub import Hub, hub_sha          # noqa: E402
-from mock_registry import MockRegistry          # noqa: E402
 from tally import Tally, combo        # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
@@ -27,9 +25,8 @@ if not t.require(os.path.isdir(PI), "a real plugin source is present", f"no plug
     t.done(); sys.exit(1)
 
 # A fresh hub with an EMPTY plugins root: nothing is pre-installed, so the install below
-# is the only reason the plugin exists. The registry is a MOCK served over loopback.
-mock = MockRegistry(); mock.add(PI); mock.start()
-hub = Hub(env={"AGENT_HUB_REGISTRY_URL": mock.url()})
+# is the only reason the plugin exists.
+hub = Hub()
 try:
     hub.start()
 
@@ -106,5 +103,4 @@ try:
 finally:
     ok = t.done()
     hub.cleanup()
-    mock.stop()
 sys.exit(0 if ok else 1)
