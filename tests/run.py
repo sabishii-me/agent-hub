@@ -26,6 +26,9 @@ LOCAL_ONLY = [
     "harnesses/an-uninstalled-harness-cannot-be-used.py",
     "skills/skills-crud-over-the-real-surface.py",
     "connections/connections-are-crud-and-delete-is-real.py",
+    # registry-online: the launch rehearsal - the hub fetches ITS registry from the configured
+    # address and installs a release the CATALOG names (test supplies the address only).
+    "plugins/registry-online-installs-a-listed-release.py",
 ]
 
 # UNVERIFIED materials: need a published registry / a plugin env / a real provider.
