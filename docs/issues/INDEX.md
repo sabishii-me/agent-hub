@@ -1,6 +1,7 @@
-# Issue index (true status, 2026-10-05)
+# Issue index (true status, 2026-10-05, hub 19746ff)
 
 A status is FIXED only with a real run as evidence. `OPEN` = not fixed.
+The registry is UNPUBLISHED: plugin-chain capability is UNVERIFIED (docs/tasks/CURRENT-STATE.md).
 
 | id | owner | what | status | evidence |
 |---|---|---|---|---|
@@ -39,8 +40,6 @@ A status is FIXED only with a real run as evidence. `OPEN` = not fixed.
 | 20261005-060000 | HUB | removing a prepared plugin fails and hangs at `removing` | FIXED | kill the cached adapter before remove; failed remove records `failed`; plugins 16/16 |
 | 20261005-100000 | HUB | the plugin registry is a checked-in local file; the tests fabricate it | OPEN | the test reads registry.json and injects the url; refresh route untested |
 | 20261005-110000 | HUB(contract) | registry/refresh reuses plugin_install_failed (false, retryable) | OPEN | needs a new contract code -> OWNER review |
-| 20261005-100000 | HUB | the plugin registry is a checked-in local file; the tests fabricate it | OPEN | OWNER: registry = AGENT_HUB_REGISTRY_URL only; suite must install by id |
-| 20261005-110000 | HUB | registry error surface is false (plugin_install_failed) + detail discarded the payload | A FIXED / B OPEN | B needs a contract code (registry_unavailable) -> OWNER review |
 | 20261005-120000 | HUB | POST /v1/plugins HANGS for an id owned by a deployment dir | OPEN | needs 409 conflict; exact blocking call not yet located |
 | **20261005-130000** | **HUB T0** | **install never consults the registry: with NO registry at all, any plugin still installs (reproduced)** | OPEN | url+sha256 must reconcile against the official registry; needs contract+product change |
 | 20261005-140000 | HUB | DELETE a nonexistent id says it "is a deployment directory" (a false detail) | FIXED | begin_remove: no row + no dir -> 404 not_found; release test |

@@ -1,73 +1,86 @@
 # CURRENT STATE — read this first (durable handoff)
 
-Updated 2026-10-05 at hub `f30442b` (branch `feat/hub-modular-redesign`). Working tree clean.
+Updated 2026-10-05, hub commit `19746ff` (branch `feat/hub-modular-redesign`). Working tree clean.
 
 ## The task (unchanged)
 
 Implement the Rust agent-hub per the approved architecture, delivering REAL, usable `/v1`
-capabilities **against the REAL adapters/plugins**. NOT: reviewer numbers, green tests, mounted
-routes, or mock-driven "verification". §17 of `docs/ARCHITECTURE.md` is the order of work.
+capabilities **against the REAL adapters/plugins**. §17 of `docs/ARCHITECTURE.md` is the order of
+work. A capability is DONE only when driven through `/v1` against a REAL adapter/plugin.
 
 ## The rule (repeated; do not break)
 
-- A FAKE anywhere makes the whole chain false. No fake provider, no stub adapter, no mocked
-  response. A missing REAL dependency FAILS the test - NO SKIP (SKIP enables 'fake green').
-- NEVER `git checkout --` / `git reset --hard` / discard uncommitted work.
-- No `_`-prefixed scratch dirs; use the real repos / a documented layout.
-- Docs FIRST, then code. If a document lacks a definition, SAY SO; do not invent a schema.
-- A change to `contract/` or an ADR needs the OWNER's review BEFORE it is written.
-- Acceptance is REAL runs against real adapters, with the version combo recorded.
-- A diagnosis needs a CONTROL (change one variable, hold state fixed); one observation is a
-  guess, reported as a guess, never as a cause. Enumerate the real STATE before theorizing.
-- Suspect MY inputs first (my test, my run, what I put on the host) before the environment.
-- NEVER experiment on the owner's system (no git credential-manager, cmdkey, registry edits).
-- An unlocated failure is UNLOCATED; never attribute it to a component not traced to it.
+- A FAKE anywhere makes the whole chain false. A missing REAL dependency FAILS the test - no fake
+  green, no scaffold substituting for the product.
+- NEVER `git checkout --` / `reset --hard` / discard uncommitted work.
+- Docs FIRST, then code. A change to `contract/` or an ADR needs the OWNER's review BEFORE it is
+  written. Do NOT impose a contract change to make tests pass.
+- A diagnosis needs a CONTROL; one observation is a guess. Suspect MY inputs first.
+- NEVER experiment on the owner's system; never read real credentials or call models unless the
+  task says so.
 
 ## Where things stand (2026-10-05)
 
-- **Surface**: `/v1/surface` == the contract (74 == 74), no stub route.
-- **Real acceptance**: pi (runtime 1.0.0, plugin `7a23419`) and jouzu (runtime 0.1.18 -> pi
-  0.87.1, plugin `89e17d4`) answer real model turns; preset/approval/review is REAL on pi
-(approvals/preset-gates 8/8, deny-blocks 2/2, review-toggle 9/9). Full suite `python
-tests/run.py` = **32/32** (the layer list now covers plugins/harnesses/presets).
-- **dsh**: BLOCKED (upstream runtime cannot boot here). docs/tasks/dsh-blocked.md.
-- **EXTENSION DELIVERY FIXED on pi (20261005-010000)**: the pi adapter delivered extensions
-  the wrong way (copy into the user workspace + `--approve`). Now it loads them from the
-  hub-owned snapshot with discovery off: pi `--no-extensions --extension
-  <AGENT_HUB_INSTALLED_EXTENSIONS_DIR>/<id>`, and the preset config lives in the hub-owned
-  harness dir. Nothing is written into the user's project. pi adapter `7b84cb0` (0.1.10).
-  Real: presets 2/2, approvals 8/8+2/2+9/9, full suite 32/32; the gate no longer needs the
-  workspace. **jouzu still has the wrong shape** (a separate fork, NOT a mirror) - its fix is
-  owed and must be verified on jouzu's own suite.
+**The single blocker: the official plugin registry is UNPUBLISHED**, so the plugin-driven user
+chain cannot be established and is UNVERIFIED. The registry address is compiled into the hub:
+`https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json` (a fixed
+`registry` release asset) — currently HTTP 404 (the repo has 0 releases).
 
-## Open defects (recorded, NOT fixed)
+### Verified, narrow (the default test entry — `python tests/run.py`, 10 files -> 8 PASS, 2 PARTIAL)
+- served metadata shapes (openapi == committed file; `/v1/models` is an ARRAY of {id,providerId});
+- the served ROUTE SET equals the contract; no parameterless GET is 501;
+- **registry-online rehearsal (7/7)**: a real HTTP registry serving the repo's `registry.json`
+  verbatim; the hub refreshes ITS registry, the catalog lists the real ids, and the hub installs a
+  release the CATALOG names (the test supplies the ADDRESS only, never a url/sha256) -> `ready`;
+- with NO registry, an unlisted source is refused 403 `plugin_not_in_registry` (install-reconciles,
+  install-refusals, a-caller-cannot-install);
+- a RELEASE binary ignores `AGENT_HUB_REGISTRY_URL` (probe);
+- an empty hub lists no plugin/harness; a session is 404 `harness_not_found`;
+- skills + connections CRUD (authoritative read-back);
+- 120 raw sockets held open; a held SSE does not block a GET.
 
-- **20261004-070000**: PATCH review:true could run the next turn ungated. pi 1.0.0 FIXED
-  (0/20); jouzu residual ~3/12 = an approval answered `allowed` WITHOUT the hub raising it
-  (adapter bus reply shows `{approved:true,reason:allowed}`; the hub's reverse handler never
-  raised that turn). Same family as 20261004-040000. See the issue's UPDATE 2.
-- **20261004-060000**: three jouzu suite failures - recorded as 'jouzu gaps' but NEVER
-  located to jouzu code; treat as UNLOCATED, re-trace before believing the wording.
-- **20261004-080000**: RESOLVED (the suite leaked 532 OS credentials and filled the store;
-  fixed by cleanup() deleting what it created). See docs/postmortems/20261005-000000-*.
-- **20261005-010000**: the extension-delivery deviation above (the headline).
+### UNVERIFIED (registry unpublished)
+The 33 plugin-chain files (lifecycle/interrupt/approvals/concurrency/provider/plugins-lifecycle/
+events/harness-discovery/presets/tools/model) need a plugin installed THROUGH the hub, which needs
+the published registry. Listed via `python tests/run.py --materials` (path + reason + product gaps);
+`--materials` starts NO subprocess. Their earlier PASS/FAIL are WITHDRAWN (a scaffold supplied the
+environment). See docs/tasks/20261005-retractions.md and .../entry-reconciliation.md.
 
-## Docs map
+### Product changes made this session (real, not test fakes)
+- **T0 `20261005-130000` FIXED**: install now RECONCILES the source against the hub's loaded
+  registry (`crates/plugins/src/service.rs` begin_install -> authorized(); `registry.rs`
+  Registry::authorizes: url AND sha256). With no registry, nothing installs.
+- `20261005-120000` FIXED: installing an id owned by a deployment dir -> 409 conflict, tree untouched.
+- `20261005-140000`/`-141000` FIXED: a missing-id remove -> 404 not_found (not a false "deployment
+  directory"); a body missing `source` -> 400 validation_failed (not 422 axum text).
+- `20261005-110000` A FIXED (`RegistryUrlMissing` displays its payload); B: the contract code
+  `registry_unavailable` (502) ADDED (owner-approved) and mapped.
+- The registry ADDRESS is fixed at build time (release: the official URL, no env override; dev:
+  `AGENT_HUB_REGISTRY_URL` override, compiled out of release).
 
-README.md; docs/ARCHITECTURE.md (sec 17 order, sec 18 status); docs/tasks/alignment-code-vs-goal.md
-(capability-by-capability, REAL results); docs/HANDOFF.md (resume here); docs/postmortems/*;
-docs/issues/* (open + resolved); docs/tasks/misalignment.md; dsh-blocked.md; contract/v1.json
-(the interface). The review documents were DELETED (expired) - do not cite docs/review/*.
+### Second, independent blocker
+The host's real provider (`~/.pi/agent/models.json` -> `192.168.31.29:8990`) answers 400 to its own
+`/models` with the host token (verified outside the hub). Session/turn tests are blocked by it too
+(`20261005-150000`).
 
-## Command facts
+### dsh
+BLOCKED (upstream runtime cannot boot here). docs/tasks/dsh-blocked.md.
 
-- Build: `cargo build --workspace` (rebuild after crate changes; kill stray `agent-hub.exe`
-  first or the link fails 'Access is denied').
-- Run needs `AGENT_HUB_CONTRACT_DIR`, `AGENT_HUB_DATA_DIR`, `AGENT_HUB_ADDR`.
-- Real suite: `python tests/run.py [layer]` (default runs every layer). Plugin is chosen by
-  `PI_PLUGIN_DIR` / `PI_HARNESS_ID` (default pi at `E:/AI/ideas/prts-harness-pi`).
-- Real plugin dirs: pi/jouzu/deepseek under `E:/AI/ideas/prts-harness-*`
-  (pi `7a23419`, jouzu `89e17d4` runtime 0.1.18, dsh `580aca8`, on `fix/runtime-placement`);
-  provider plugins under `E:/AI/ideas/prts-providers/*`.
-- Do NOT let the suite leak OS credentials again: `tests/lib/hub.py` cleanup() now deletes
-  what it created; if the keychain fills, that check regressed.
+## Open issues (see docs/issues/INDEX.md)
+- `20261005-130000` [T0] closes the injection hole; verify against the PUBLISHED registry.
+- `20261005-100000` the registry is still a checked-in local file for tests (the harness now drives
+  the hub's own refresh/catalog; the official release is what is missing).
+- `20261005-150000` host provider 400; `20261004-060000/-070000` jouzu residual;
+  `20261003-122000` contract close/readonly; the unratified `turn_end` clientMessageId edit.
+
+## What is next (in order)
+1. Publish the `registry` release of `sabishii-me/agent-hub` (the fixed asset name) and fix the host
+   provider. Then run the chain per docs/tasks/20261005-post-publication-acceptance.md — through the
+   hub's own mechanism, no test-side stand-in.
+2. Only then can the 33 UNVERIFIED files be run and the plugin-driver capability be established.
+
+## Do NOT
+- do not publish the registry to make tests green; publication is for verifying the real chain;
+- do not fabricate a registry, override a source, or use a test-side install to "prove" the chain;
+- do not modify `contract/` without the owner's review; do not add `{id}` install without that review;
+- do not treat PASS/FAIL counts as hub-capability acceptance.
