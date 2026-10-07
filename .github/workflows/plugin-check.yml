@@ -1,0 +1,26 @@
+# The PLUGIN check: a plugin enters the hub through its registry entry (url + sha256). This
+# workflow proves the hub can actually TAKE a plugin from the registry - it builds the hub,
+# starts it, refreshes the registry, and installs a listed plugin by the url+sha256 the
+# registry states. If the hub cannot reconcile and accept it, the check fails.
+#
+# It does NOT `cargo build` and call it a plugin check: that checks the hub's own compile,
+# not whether a plugin can enter. The object here is the PLUGIN'S ENTRY into the hub.
+name: plugin-check
+on:
+  pull_request:
+    paths:
+      - registry.json
+      - .github/workflows/plugin-check.yml
+  push:
+    branches: [develop]
+jobs:
+  install-from-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install stable
+      - name: Build the hub
+        run: cargo build -p agent-hub --locked
+      - name: The hub can take a plugin from its registry
+        run: node scripts/check-plugin-enters-hub.mjs
