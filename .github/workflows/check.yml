@@ -1,0 +1,37 @@
+# The merge check for the hub. Every PR runs it; a change to the registry, the contract
+# or the crates must pass before it can merge. It builds and tests the whole workspace.
+name: check
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install stable
+      - name: Build (zero warnings)
+        run: cargo build --workspace --locked
+        env:
+          RUSTFLAGS: -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Registry is parseable and every entry has a versions array
+        run: |
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("registry.json","utf8"));
+            if (!Array.isArray(r.plugins)) throw new Error("registry.plugins is not an array");
+            for (const p of r.plugins) {
+              if (typeof p.id !== "string" || typeof p.pluginType !== "string")
+                throw new Error(`entry ${JSON.stringify(p.id)} has no id/pluginType`);
+              if (!Array.isArray(p.versions) || p.versions.length === 0)
+                throw new Error(`${p.pluginType}/${p.id} has no versions`);
+              for (const v of p.versions) {
+                if (!/^https:\/\//.test(v.url)) throw new Error(`${p.id} ${v.version}: url is not https`);
+                if (!/^[0-9a-f]{64}$/.test(v.sha256)) throw new Error(`${p.id} ${v.version}: sha256 is not 64 hex`);
+              }
+            }
+            console.log(`registry ok: ${r.plugins.length} entries`);
+          '
