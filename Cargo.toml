@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = ["crates/contract", "crates/events", "crates/transport", "crates/db", "crates/plugins", "crates/sessions", "crates/providers", "crates/connections", "crates/adapter", "crates/harnesses", "crates/skills", "crates/extensions", "crates/humans", "crates/secrets", "hub"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+jsonschema = "0.58"
+thiserror = "2"
+
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util", "process"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+getrandom = "0.3"
+keyring = { version = "3", features = ["windows-native"] }
+subtle = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-stream = "0.3"
+# TLS is REQUIRED: a real provider (and a real plugin registry) is served over
+# HTTPS. Without a TLS feature reqwest cannot open an https:// connection at all
+# ("error sending request"), which is exactly how a real provider catalog fails.
+# `rustls-no-provider` avoids pulling a SECOND crypto backend: the hub installs
+# `ring` once at startup (already in the tree), keeping one provider.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "blocking", "rustls-no-provider"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+hex = "0.4"
+rusqlite = { version = "0.40", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

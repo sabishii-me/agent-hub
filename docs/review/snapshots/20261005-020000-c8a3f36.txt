@@ -1,0 +1,101 @@
+issue: 20261005-020000 (killing the adapter child leaves the session falsely active)
+snapshot-of: hub @ c8a3f36 (feat/hub-modular-redesign)
+adapter: prts-harness-pi @ 7b84cb0
+date: 2026-10-05
+
+== the code under test: the per-session notification pump (crates/sessions/src/runtime.rs) ==
+   The pump ends when the child's stdout closes; on that path NOTHING updates the session
+   status, so an 'active' session whose adapter died keeps reporting 'active'.
+
+        let mut notifications = std::mem::replace(
+            &mut bus.notifications,
+            agent_hub_adapter::Notifications::closed(),
+        );
+        tokio::spawn(async move {
+            while let Some(n) = notifications.recv().await {
+                // A REVERSE REQUEST (`id` present, e.g. `approval_need`) must be
+                // ANSWERED, not merely announced: run the handler and reply to the
+                // SAME request. A plain notification is published as an event.
+                if n.wants_reply() {
+                    let id = n.id.clone().unwrap_or(Value::Null);
+                    let method = n.method.clone();
+                    if let Some(handler) = &pump_reverse {
+                        let result = handler(pump_sid.clone(), method, n.params.clone()).await;
+                        if let Some(result) = result {
+                            let _ = pump_reply.reply(&id, result).await;
+                        }
+                    }
+                    continue;
+                }
+                let mut payload = n.params.clone();
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert("sessionId".into(), json!(pump_sid));
+                } else {
+                    payload = json!({ "sessionId": pump_sid, "data": payload });
+                }
+                // The adapter wraps EVERY event as method `event` with the real
+                // kind in `params.data.type`. Record the turn's TERMINAL from the
+                // `turn_end` event's `state` (the contract puts the terminal here,
+                // not on the prompt RPC result). Keep the raw name too.
+                let data_type = payload
+                    .get("data")
+                    .and_then(|d| d.get("type"))
+                    .and_then(|t| t.as_str())
+                    .map(str::to_string);
+                if data_type.as_deref() == Some("turn_end") {
+                    let data = payload.get("data");
+                    let cmid = data
+                        .and_then(|d| d.get("clientMessageId"))
+                        .and_then(|v| v.as_str());
+                    if let (Some(cmid), Some(state)) = (
+                        cmid,
+                        data.and_then(|d| d.get("state").or_else(|| d.get("status")))
+                            .and_then(|v| v.as_str()),
+                    ) {
+                        if let Some(tx) = pump_terminals
+                            .lock()
+                            .expect("terminals")
+                            .remove(cmid)
+                        {
+                            let _ = tx.send(state.to_string());
+                        }
+                    }
+                }
+                pump_events.publish(n.method, payload);
+            }
+        });
+        let process = SessionProcess {
+            sid: sid.clone(),
+            harness_id,
+            native_ref: native_ref.clone(),
+            bus: Some(bus),
+            requests: requests_out,
+            applied,
+            applied_provider,
+            applied_model,
+
+== is_running (the hub's own liveness view) ==
+    pub fn is_running(&self, sid: &str) -> bool {
+        if !self.running.lock().expect("running").contains_key(sid) {
+            return false;
+        }
+        self.requests
+            .lock()
+            .expect("requests")
+            .get(sid)
+            .map(|h| h.is_alive())
+            .unwrap_or(false)
+    }
+
+    /// Stop and drop a session's process. Idempotent. Returns an error if the
+    /// process could not be confirmed stopped (the entry is kept so a retry can
+    /// try again).
+    pub async fn stop(&self, sid: &str) -> Result<(), StartError> {
+        let handle = self.running.lock().expect("running").get(sid).cloned();
+        match handle {
+            None => Ok(()),
+            Some(handle) => {
+                let mut guard = handle.lock().await;
+                guard.stop().await?;
+                drop(guard);
+                self.running.lock().expect("running").remove(sid);

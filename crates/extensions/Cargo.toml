@@ -1,0 +1,15 @@
+[package]
+name = "agent-hub-extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+agent-hub-transport = { path = "../transport" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+agent-hub-contract = { path = "../contract" }

@@ -13,3 +13,11 @@ build-id.json
 # them to each plugin's own GitHub Release; the registry names those URLs, so
 # no build product belongs in this repository.
 dist/
+
+# Rust build output.
+/target/
+
+# Python test caches
+tests/**/__pycache__/
+__pycache__/
+*.pyc

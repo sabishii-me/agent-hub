@@ -5,7 +5,7 @@
   "transport": "stdin/stdout, one JSON-RPC 2.0 message per LF-terminated UTF-8 line",
   "version": 0,
   "manifest": {
-    "file": "plugins/<id>/manifest.json — a plugin is a directory; the directory name is its id",
+    "file": "plugins/<id>/manifest.json \u2014 a plugin is a directory; the directory name is its id",
     "required": [
       "id",
       "pluginType"
@@ -20,6 +20,7 @@
       "icons",
       "base",
       "version",
+      "minHubVersion",
       "permissionModel",
       "planMode",
       "repair",
@@ -31,20 +32,21 @@
       "id": "must equal the plugin directory name; a manifest that claims another id is refused",
       "protocol": "the adapter protocol this plugin speaks; must equal this file's version, or the hub refuses to start the adapter (harness_invalid)",
       "command": "argv that starts the adapter; relative paths resolve against the plugin directory",
-      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives — there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. The PLUGIN materialises the package at that version, through the `runtime` capability's `runtime/prepare` method; the hub asks for that and verifies the result, and hands `command` (absolute) to the adapter as AGENT_HUB_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
+      "runtime": "{package, version, command}: the harness this plugin drives. This is where the harness version lives \u2014 there is no separate `pin`: a version kept in two fields is a version that will one day disagree with itself, and this one did. The PLUGIN materialises the package at that version, through the `runtime` capability's `runtime/prepare` method; the hub asks for that and verifies the result, and hands `command` (absolute) to the adapter as AGENT_HUB_RUNTIME_COMMAND. Absent = the adapter brings its own runtime",
       "extensions": "harness-side extensions this plugin ships (registry defaults)",
       "capabilities": "what the hub may ask this plugin for; every value has an entry in capabilitySurface, and declaring one binds the plugin to its methods",
       "name": "display name for the harness; falls back to the id",
       "icons": "{light, dark}: the harness's own mark, each a file path relative to the plugin directory (e.g. logo.svg). `light` is the LIGHT-COLOURED mark (drawn on a dark background) and `dark` is the DARK-COLOURED mark (drawn on a light background) - the key names the mark's colour, not the theme it is shown in. The hub serves those bytes under the mark's real content type on its icon route, so a client draws the plugin's asset without reaching the disk or importing adapter code. A plugin that ships no mark omits this field and is drawn without one. Both keys are optional; a missing one falls back to the other.",
       "base": "the adapter base id a consumer groups by; falls back to the id",
       "version": "the harness version as the plugin declares it (not the runtime pin: see runtime.version)",
-      "permissionModel": "how the harness gates tools: native|extension|none — reported, never guessed",
+      "permissionModel": "how the harness gates tools: native|extension|none \u2014 reported, never guessed",
       "planMode": "how the harness carries plan mode; reported, never guessed",
       "repair": "whether the harness can repair an orphaned tail; reported, never guessed",
-      "provider": "{apiVersion, module}: this plugin ships a HUB provider module (one that is not built into the hub): the hub imports it for configuration validation, model catalog and — when the vendor has one — authorization. A provider-only plugin declares no command/protocol; a plugin may carry both. The module exports apiVersion 1, descriptor {id, version, owner:'hub', name, authMethods, configuration, catalog}, configure(input, previousEndpoint), fetchCatalog({endpoint, credential, catalogUrl}) and optionally beginAuth({providerId, report, signal, endpoint})/authLogout({credential}). configure and beginAuth may return {url, api, catalogUrl}: the endpoint and the rich model-catalog URL learned from sign-in, both persisted by the hub. fetchCatalog may return plain entries or {models, note}; entries may carry thinkingLevels, contextWindow, maxTokens, input and cost — the hub passes them on as data and lets declarations override per field. Nothing is built in: with no plugin for a type, a provider record naming it stays readable but unusable.",
-      "pluginType": "what this plugin is, from a fixed set: `harness-adapter` (drives a harness; declares command/protocol) or `model-provider` (ships a hub provider module; declares provider). The hub uses it as the plugin's own type - a harness-adapter and a model-provider may share an id, because they are different things. Also the repo prefix: agent-hub-<kind>-<id>.",
+      "provider": "{apiVersion, descriptor}: this plugin ships a model-provider TYPE as DATA. The descriptor states the type's id, version, owner:'hub', display name, authMethods, configuration fields and the CATALOG SHAPE (the dialect). It is data the hub reads and maps; the hub does NOT import or run plugin code in-process (ARCHITECTURE \u00a75). The hub owns the HTTP request, the auth, the catalog fetch and the field mapping; auth is a declared method (device-code/browser), not a plugin function. A provider-only plugin declares no command/protocol. Nothing is built in: with no plugin for a type, a provider record naming it stays readable but unusable.",
+      "pluginType": "what this plugin is, from a fixed set: `harness-adapter` (drives a harness; declares command/protocol) or `model-provider` ( ships a model-provider TYPE as data; declares provider). The hub uses it as the plugin's own type - a harness-adapter and a model-provider may share an id, because they are different things. Also the repo prefix: agent-hub-<kind>-<id>.",
       "summary": "one line saying what this plugin is, shown in a catalog row. Metadata: it travels with every listing.",
-      "release": "{repository, ...}: where this plugin is published. Present in the plugin's own repo; the catalog is derived from it."
+      "release": "{repository, ...}: where this plugin is published. Present in the plugin's own repo; the catalog is derived from it.",
+      "minHubVersion": "the minimum HUB version this back-end plugin needs (ADR-0008): MAJOR.MINOR.PATCH. A hub below it does NOT activate the plugin and reports the reason (\"needs hub >= X, this is Y\"); the product keeps working. One lower bound, no upper bound, no compatibility matrix. Front-end (desktop) plugins declare minDesktopVersion instead."
     },
     "rule": "a field set that does not match this list stops the hub at startup (boot self-check), it is not a warning",
     "capabilityValues": [
@@ -65,7 +67,7 @@
       "runtime",
       "history-readonly"
     ],
-    "kindRule": "id plus at least one of: command+protocol (harness adapter) or provider (hub provider module). A manifest that declares neither, or a provider block whose module cannot be honoured, stops the hub at startup."
+    "kindRule": "id plus at least one of: command+protocol (harness adapter) or provider (a model-provider type as data). A manifest that declares neither, or a provider block whose descriptor cannot be honoured, stops the hub at startup."
   },
   "coreCompliance": {
     "requests": [
@@ -84,7 +86,7 @@
           "config"
         ],
         "result": "{}",
-        "note": "config is the preset shape (v1 defs.preset: name/persona/tools/approval/sandbox/mcp/model/context) plus materialization blocks: connections [{id,name,scheme,endpoint,envName}] (enabled only; NO credential value — a connection's token reaches the adapter as an env var named envName, injected at process start, so it never lands in this payload or in conversation history). Skills are NOT in this payload: the hub installs them into a directory the adapter is pointed at (see capabilitySurface.skills), so there is one source of truth for what is installed. core never interprets these — the adapter translates to its native dialect (A-4). MUST be called before first prompt; may be re-sent mid-session; failure = run fails, never silent fallback"
+        "note": "config is the preset shape (v1 defs.preset: name/persona/tools/approval/sandbox/mcp/model/context) plus materialization blocks: connections [{id,name,scheme,endpoint,envName}] (enabled only; NO credential value \u2014 a connection's token reaches the adapter as an env var named envName, injected at process start, so it never lands in this payload or in conversation history). Skills are NOT in this payload: the hub installs them into a directory the adapter is pointed at (see capabilitySurface.skills), so there is one source of truth for what is installed. core never interprets these \u2014 the adapter translates to its native dialect (A-4). MUST be called before first prompt; may be re-sent mid-session; failure = run fails, never silent fallback"
       },
       {
         "method": "presets/list",
@@ -117,7 +119,7 @@
           "throughTurn?"
         ],
         "result": "{ ref }",
-        "note": "The hub spawns the CHILD's process and hands it where to branch from: `from` is the source session's native ref. This process opens the source only to fork it, then ADOPTS the result as its own session and answers with that ref — it is the child, not the source. The source session, its log and its live process are not touched. throughTurn is 1-based over the source's COMPLETED turns; absent = the whole conversation. The anchor is a turn because it is the only cut every harness makes exactly (pi forks before a message, so 'end with turn N' is the message that STARTS turn N+1, and the last turn is a copy; dsh snaps to the end of the turn containing its seq, and a seq past the log is a copy). A harness that cannot fork does not declare the `fork` capability and the hub answers `unsupported`.",
+        "note": "The hub spawns the CHILD's process and hands it where to branch from: `from` is the source session's native ref. This process opens the source only to fork it, then ADOPTS the result as its own session and answers with that ref \u2014 it is the child, not the source. The source session, its log and its live process are not touched. throughTurn is 1-based over the source's COMPLETED turns; absent = the whole conversation. The anchor is a turn because it is the only cut every harness makes exactly (pi forks before a message, so 'end with turn N' is the message that STARTS turn N+1, and the last turn is a copy; dsh snaps to the end of the turn containing its seq, and a seq past the log is a copy). A harness that cannot fork does not declare the `fork` capability and the hub answers `unsupported`.",
         "rule": "never run on the source's own process: pi's fork rebinds whichever process executes it, so a source process would silently become a different conversation than the hub believes it serves (verified: the source file's hash and its live process are unaffected when another process forks)"
       },
       {
@@ -135,7 +137,7 @@
           "sid"
         ],
         "result": "{ tokens?, cost?, context?, turns?, messages? }",
-        "note": "What the harness itself reports about this session: token totals (with cache and reasoning where it has them), cost, and context-window occupancy {tokens, window, percent}. A field the harness does not report is ABSENT — never zero, never a value computed against a window nobody declared. Read-only: it must not start, resume or change a turn."
+        "note": "What the harness itself reports about this session: token totals (with cache and reasoning where it has them), cost, and context-window occupancy {tokens, window, percent}. A field the harness does not report is ABSENT \u2014 never zero, never a value computed against a window nobody declared. Read-only: it must not start, resume or change a turn."
       },
       {
         "method": "session/compact",
@@ -144,7 +146,7 @@
           "instructions?"
         ],
         "result": "{ compacted, reason?, tokensBefore?, tokensAfter?, summary?, usage?, detail? }",
-        "note": "Ask the harness to compact its own conversation. The numbers are the harness's: pi reports tokensBefore plus ITS OWN ESTIMATE of the rebuilt context (estimatedTokensAfter), and its usage for the summarization call; dsh reports the token count of the span it replaced (shadowedTokenCount) and its own context projection read right after the rewrite as tokensAfter — the same number GET /stats reports. A harness with nothing worth compacting answers compacted:false with its own words in detail ('Nothing to compact (session too small)' / 'No compactable history yet.') — that is not an error. A compaction that FAILED is an error (compact_failed)."
+        "note": "Ask the harness to compact its own conversation. The numbers are the harness's: pi reports tokensBefore plus ITS OWN ESTIMATE of the rebuilt context (estimatedTokensAfter), and its usage for the summarization call; dsh reports the token count of the span it replaced (shadowedTokenCount) and its own context projection read right after the rewrite as tokensAfter \u2014 the same number GET /stats reports. A harness with nothing worth compacting answers compacted:false with its own words in detail ('Nothing to compact (session too small)' / 'No compactable history yet.') \u2014 that is not an error. A compaction that FAILED is an error (compact_failed)."
       },
       {
         "method": "session/rename",
@@ -153,7 +155,7 @@
           "title"
         ],
         "result": "{ title }",
-        "note": "Name the session in the harness itself, and answer with the title the harness ACCEPTED — not the one that was asked for. dsh normalizes and sanitises a title and refuses one that normalises to empty; pi appends a session_info entry, so its accepted name is read back from get_state. A title the harness did not accept is an error, never a hub-only rename that looks applied."
+        "note": "Name the session in the harness itself, and answer with the title the harness ACCEPTED \u2014 not the one that was asked for. dsh normalizes and sanitises a title and refuses one that normalises to empty; pi appends a session_info entry, so its accepted name is read back from get_state. A title the harness did not accept is an error, never a hub-only rename that looks applied."
       },
       {
         "method": "skills/list",
@@ -161,13 +163,13 @@
           "sid"
         ],
         "result": "{ skills: [{ name, description?, modelInvocable?, whenToUse? }] }",
-        "note": "What THIS harness actually has, read from the harness itself — pi/jouzu from get_commands (skill:<name> entries), dsh from its skill.list RPC. It is a READ-BACK, not an echo: dsh SILENTLY drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level bundle, and only the harness knows it did. A caller must be able to see 'installed: 4, the harness sees: 3'. The call can be slow the FIRST time on a harness that finishes its own startup lazily (jouzu measured 9s and 70s, then 24ms); the hub bounds it and reports known:false rather than an empty catalogue when it does not arrive."
+        "note": "What THIS harness actually has, read from the harness itself \u2014 pi/jouzu from get_commands (skill:<name> entries), dsh from its skill.list RPC. It is a READ-BACK, not an echo: dsh SILENTLY drops a skill whose name is not kebab-case, whose description is missing, whose invocation keys are camelCase, or that is not a single-level bundle, and only the harness knows it did. A caller must be able to see 'installed: 4, the harness sees: 3'. The call can be slow the FIRST time on a harness that finishes its own startup lazily (jouzu measured 9s and 70s, then 24ms); the hub bounds it and reports known:false rather than an empty catalogue when it does not arrive."
       },
       {
         "method": "runtime/prepare",
         "params": [],
         "result": "{ ready, package?, version?, target?, detail? }",
-        "note": "Materialise the runtime this plugin's manifest pins (runtime.package + runtime.version) into <plugin>/runtime, the directory the manifest's command is relative to, and answer with what happened. Idempotent: a runtime already on disk answers ready:true and detail 'already present'. It belongs to the adapter because HOW a harness is fetched is knowledge about that harness — the hub asks, waits, and then VERIFIES the declared command exists (it installs no harness and knows no package names). Declared only by a plugin that declares the `runtime` capability; the hub calls it before session/start when the target is missing, and from POST /v1/hub/plugins/{id}/prepare."
+        "note": "Materialise the runtime this plugin's manifest pins (runtime.package + runtime.version) into <plugin>/runtime, the directory the manifest's command is relative to, and answer with what happened. Idempotent: a runtime already on disk answers ready:true and detail 'already present'. It belongs to the adapter because HOW a harness is fetched is knowledge about that harness \u2014 the hub asks, waits, and then VERIFIES the declared command exists (it installs no harness and knows no package names). Declared only by a plugin that declares the `runtime` capability; the hub calls it before session/start when the target is missing, and from POST /v1/hub/plugins/{id}/prepare."
       },
       {
         "method": "history/read",
@@ -216,12 +218,14 @@
       },
       {
         "type": "turn_end",
-        "field": "state: ok|aborted|failed"
+        "requires": ["clientMessageId"],
+        "field": "state: ok|aborted|failed",
+        "note": "clientMessageId echoes the session/prompt this event ends, so a terminal is bound to the EXACT turn, never to the session. The prompt already names its turn (session/prompt params), and the protocol's ID rule already makes clientMessageId that identity; this event must carry it back."
       },
       {
         "type": "adapter_dialog_auto_cancelled",
         "requires": "method",
-        "note": "the adapter cancelled a harness dialog nobody rendered, so the agent does not hang waiting for a window that is not there. The hub drops it deliberately (no consumer yet) — declared, so the vocabulary is complete and the drop is a decision on the record"
+        "note": "the adapter cancelled a harness dialog nobody rendered, so the agent does not hang waiting for a window that is not there. The hub drops it deliberately (no consumer yet) \u2014 declared, so the vocabulary is complete and the drop is a decision on the record"
       },
       {
         "type": "compaction_started",
@@ -231,12 +235,12 @@
       {
         "type": "compaction_ended",
         "field": "reason?, tokensBefore?, tokensAfter?, summary?, aborted?, willRetry?",
-        "note": "the harness finished compacting. Sent for EVERY compaction the adapter observes, including the automatic ones nobody asked for — the same numbers the request would return."
+        "note": "the harness finished compacting. Sent for EVERY compaction the adapter observes, including the automatic ones nobody asked for \u2014 the same numbers the request would return."
       },
       {
         "type": "title_changed",
         "field": "title: string|null",
-        "note": "the harness's session title changed without the hub asking — dsh titles a session by itself from the first user message (its title service is part of its own composition), and a harness UI can rename one. The hub follows the harness: it records what the harness now holds and streams session.renamed, exactly as it does for plan mode"
+        "note": "the harness's session title changed without the hub asking \u2014 dsh titles a session by itself from the first user message (its title service is part of its own composition), and a harness UI can rename one. The hub follows the harness: it records what the harness now holds and streams session.renamed, exactly as it does for plan mode"
       },
       {
         "type": "notification",
@@ -339,7 +343,7 @@
           "providers?"
         ],
         "result": "models[] + failures[]",
-        "rule": "answers what THIS harness can run: its own catalog plus the core-managed providers passed in (each {id,url,declarations}), so one query is enough. An injected provider is named `hub-<id>` in every harness. Empty catalog separated from read failure; one failure never pollutes another. Each model’s `thinkingLevels` is the list its configuration states, passed on verbatim (absent = nothing stated)."
+        "rule": "answers what THIS harness can run: its own catalog plus the core-managed providers passed in (each {id,url,declarations}), so one query is enough. An injected provider is named `hub-<id>` in every harness. Empty catalog separated from read failure; one failure never pollutes another. Each model\u2019s `thinkingLevels` is the list its configuration states, passed on verbatim (absent = nothing stated)."
       },
       {
         "method": "credentials/grant",
@@ -384,7 +388,7 @@
     "Connection is a managed object: enable/disable/delete only; disable == cut-off == zero materialization",
     "session/abort acknowledges only that the harness was ASKED to stop; the turn's own turn_end proves it stopped. An abort that could not be delivered -> error data.code='abort-failed'; an abort delivered but never confirmed is the core's cancel timeout to report, not the adapter's to hide",
     "config/set with connectionId reports applied.modelProviderId as the requested provider identity and applied.connectionId as its resolved native route; model is selected within that route, not by bare-ID first match",
-    "Harness Adapter and Model Provider are two identities: a harness provides the agent runtime, a provider provides models. They are never conflated in names or DTOs (a session displays `via <harness> · <provider> · <model>`).",
+    "Harness Adapter and Model Provider are two identities: a harness provides the agent runtime, a provider provides models. They are never conflated in names or DTOs (a session displays `via <harness> \u00b7 <provider> \u00b7 <model>`).",
     "saved != validated: a successful connections/save or provider PATCH means stored, nothing more. \"Usable\" is a separate answer (connections/validate, or the first real request), and it is never rendered as validated before that."
   ],
   "capabilitySurface": {
@@ -406,7 +410,7 @@
         "tools/list"
       ],
       "hub": "GET /v1/harnesses/{id}/tools",
-      "rule": "known:false while no plugin declares this capability — an empty catalog is never faked"
+      "rule": "known:false while no plugin declares this capability \u2014 an empty catalog is never faked"
     },
     "plan": {
       "methods": [],
@@ -446,7 +450,7 @@
         "skills/list"
       ],
       "hub": "GET /v1/sessions/{id}/skills",
-      "note": "The hub INSTALLS a harness's skills before its process starts (exactly like extensions: it writes them into <DATA_DIR>/agents/<harness>/skills and hands the directory over as AGENT_HUB_INSTALLED_SKILLS_DIR); the adapter only points its harness at that directory — pi/jouzu with `--no-skills --skill <dir>` (so the user's own skill directories stay out of a hub-managed session), dsh with DSH_AGENTS_HOME. It is reported PER SESSION, because a catalogue depends on the session's directory. Skills no longer ride config/set: one path, one source."
+      "note": "The hub INSTALLS a harness's skills before its process starts (exactly like extensions: it writes them into <DATA_DIR>/agents/<harness>/skills and hands the directory over as AGENT_HUB_INSTALLED_SKILLS_DIR); the adapter only points its harness at that directory \u2014 pi/jouzu with `--no-skills --skill <dir>` (so the user's own skill directories stay out of a hub-managed session), dsh with DSH_AGENTS_HOME. It is reported PER SESSION, because a catalogue depends on the session's directory. Skills no longer ride config/set: one path, one source."
     },
     "connectionSchemes": {
       "methods": [],
@@ -464,7 +468,7 @@
         "session/stats"
       ],
       "hub": "GET /v1/sessions/{id}/stats",
-      "note": "pi/jouzu: get_session_stats. dsh: the tokenUsage and contextPressure projections (plus sessionStats for the turn count). The hub also emits the same object as a `session.stats` event on the turn stream right after `turn.ended`, which is when the numbers move — there is no separate stats stream, because only dsh pushes projection updates and pi/jouzu push nothing."
+      "note": "pi/jouzu: get_session_stats. dsh: the tokenUsage and contextPressure projections (plus sessionStats for the turn count). The hub also emits the same object as a `session.stats` event on the turn stream right after `turn.ended`, which is when the numbers move \u2014 there is no separate stats stream, because only dsh pushes projection updates and pi/jouzu push nothing."
     },
     "compact": {
       "methods": [
@@ -497,5 +501,5 @@
     }
   },
   "checkedBy": "the hub's boot self-check compares this file with the adapter requests it sends, the capabilities each manifest declares and the methods each adapter handles; a disagreement stops the hub before it serves anything",
-  "note": "What an adapter says to its harness is its own dialect and deliberately NOT here: this file is only what the hub and an adapter say to each other. (deepseek listening to turn/start, assistant/chunk, tool/call, tool/result, turn/end, plan/mode is exactly that — its harness speaking, translated by the adapter into the events below.) A method or event the HUB sends or handles, or an adapter emits toward the hub, must be declared here."
+  "note": "What an adapter says to its harness is its own dialect and deliberately NOT here: this file is only what the hub and an adapter say to each other. (deepseek listening to turn/start, assistant/chunk, tool/call, tool/result, turn/end, plan/mode is exactly that \u2014 its harness speaking, translated by the adapter into the events below.) A method or event the HUB sends or handles, or an adapter emits toward the hub, must be declared here."
 }
