@@ -8,7 +8,7 @@ CHANGE (like Dify's plugin marketplace: a PR that passes CI and a review), NOT a
 remembers. Later plugin additions must not be error-prone or hard to configure.
 
 ## The real topology (measured)
-- `sabishii-me` is a GitHub ACCOUNT (not an org). Plugin repos already exist:
+- `sabishii-me` is a GitHub ORGANIZATION (24 repos). Plugin repos already exist:
   `agent-hub-harness-adapter-{pi,deepseek,jouzu}`, `agent-hub-model-provider-{compatible,deepseek,
   shisa}` — one repo per plugin.
 - `agent-hub` is the hub repo (holds `registry.json` + `scripts/pack-plugins.mjs`). No CI workflows
@@ -17,10 +17,15 @@ remembers. Later plugin additions must not be error-prone or hard to configure.
   `https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json`.
 
 ## The principle
-**The registry is a reviewed ARTIFACT, not a hand-edited file and not an automated push.** A new
+The registry is a reviewed ARTIFACT, not a hand-edited file and not an automated push. A new
 plugin enters the catalog by a PR to the hub repo that carries only the registry ENTRY (derived from
 the plugin's own manifest/release), and CI + a reviewer decide. The plugin's own repo is where the
 plugin's code and its release live; the hub repo is where the ALLOW-LIST lives.
+
+Being an ORG, `sabishii-me` can (a) restrict who may create repos under it, so "a new plugin repo"
+is already a controlled act, (b) define a `registry-review` team and org rulesets, and (c) apply a
+required workflow to every agent-hub repo if we later want the plugin repos' own CI to also run the
+same check.
 
 ## The flow (one path; a plugin author does NOT need the hub checked out)
 
@@ -40,7 +45,9 @@ plugin's code and its release live; the hub repo is where the ALLOW-LIST lives.
      id/pluginType/version;
    - the name/icon are present (no silent missing icon);
    - the runtime is a DECLARATION, not bytes (no runtime in the zip).
-4. **A REVIEWER (CODEOWNERS on `registry.d/`) approves.** Only then can it merge.
+4. **A REVIEWER (CODEOWNERS on `registry.d/` + an org `registry-review` team) approves.** With
+   branch protection / rulesets on `main` (org-level), the check and the review are REQUIRED to
+   merge - not a convention. Only then can it merge.
 5. **On merge to `main`, a workflow COMPILES the fragments**: `registry.d/plugins/*.json` ->
    `registry.json` (sorted, deduped, older versions kept) -> published as the single `registry`
    release asset, overwritten in place (the URL never moves). Compilation is DETERMINISTIC from the
@@ -54,8 +61,9 @@ plugin's code and its release live; the hub repo is where the ALLOW-LIST lives.
   `registry.json` is generated, so it can never drift from the entries that were reviewed.
 - **CI downloads and hashes the release**: the digest is verified BEFORE it is trusted, closing the
   "entry lies about its artifact" gap at review time instead of at a user's install.
-- **CODEOWNERS on the fragments dir**: the review is enforceable (branch protection requires it),
-  not a convention.
+- **CODEOWNERS on the fragments dir + an org team**: the review is enforceable (branch protection
+  requires it), not a convention. Being an ORG, `sabishii-me` can define a `registry-review` team and
+  org-level rulesets that apply the requirement to the hub repo.
 - **The address never moves**: the hub keeps one compiled URL; publishing a plugin never needs a hub
   release; the desktop's pointer never goes stale.
 
@@ -70,11 +78,13 @@ plugin's code and its release live; the hub repo is where the ALLOW-LIST lives.
    is produced (build output, not a tracked source). It is contract-adjacent (the desktop reads the
    compiled `registry.json`). OWNER review.
 2. **Schemas/CI rules** (what a PR must pass) — the enforcement contract.
-3. **CODEOWNERS / branch protection** on `registry.d/` (a repo-setting decision, the owner's).
+3. **CODEOWNERS / an org `registry-review` team / org rulesets** on `registry.d/` and `main` (an org
+   setting; the owner's call).
 4. Whether `schema: 1 -> 2` goes in the same change or after.
 
 ## Not in this proposal
-- No GitHub org migration (the account can host repos + CODEOWNERS; an org is a separate call).
+- No org migration is needed: `sabishii-me` IS an org, so org teams + a `registry` review team +
+  org-level required workflows are available directly.
 - No id-only install change.
 - Nothing published now; the `registry` release stays unpublished until this is accepted.
 

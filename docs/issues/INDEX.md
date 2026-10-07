@@ -46,3 +46,4 @@ The registry is UNPUBLISHED: plugin-chain capability is UNVERIFIED (docs/tasks/C
 | 20261005-141000 | HUB | a body missing `source` returned 422 axum text, not a contract code | FIXED | install catches JsonRejection -> 400 validation_failed; release test |
 | 20261005-150000 | HOST(env) | the host provider returns 400 -> session tests blocked | OPEN | environment fault, not the hub |
 | 20261005-160000 | HUB(test) | a failing check still exited 0; a stale release binary was measured | FIXED | exit-tied results; release rebuilt; BLOCKED state added |
+| 20261005-170000 | DOCS | I called the org an account (queried /users, not /orgs) | RESOLVED | read `type` + /orgs; design corrected |
