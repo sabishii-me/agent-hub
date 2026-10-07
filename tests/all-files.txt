@@ -3,7 +3,9 @@ plugins/install-reconciles-against-the-registry.py
 plugins/install-refusals-have-honest-codes.py
 plugins/mock/a-hub-killed-mid-remove-finishes-the-removal.py
 plugins/mock/a-plugin-is-installed-listed-enabled-and-removed.py
+plugins/mock/concurrent-conflicting-commands.py
 plugins/mock/concurrent-install-and-remove.py
+plugins/mock/concurrent-mixed-different-ids.py
 plugins/mock/concurrent-mixed-install-remove.py
 plugins/registry-injection-matrix.py
 plugins/registry-refresh-updates-the-local-registry.py

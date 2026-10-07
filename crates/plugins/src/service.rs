@@ -24,6 +24,11 @@ pub enum PluginError {
     InvalidManifest(String),
     #[error("idempotency conflict for `{0}`")]
     Conflict(String),
+    /// A conflicting command on the SAME plugin while an operation is in flight (contract: a
+    /// conflicting command on the same plugin is refused). Distinct from `Conflict` (idempotency)
+    /// so the code is `conflict`, not `idempotency_conflict`.
+    #[error("plugin `{0}` already has an operation in progress")]
+    InProgress(String),
     /// The source is not in the official registry (docs/issues/20261005-130000): the trust
     /// anchor does not list it, so it is refused before anything is fetched.
     #[error("the source is not in the official registry: {0}")]
@@ -58,6 +63,7 @@ impl PluginError {
             PluginError::Busy(_, _) => "plugin_dir_busy",
             PluginError::InvalidManifest(_) => "plugin_archive_invalid",
             PluginError::Conflict(_) => "idempotency_conflict",
+            PluginError::InProgress(_) => "conflict",
             PluginError::NotInRegistry(_) => "plugin_not_in_registry",
             PluginError::InstallFailed(_) => "plugin_install_failed",
             PluginError::Source(e) => e.code(),
@@ -300,6 +306,16 @@ impl Plugins {
         ops.entry(id.to_string()).or_default().enter(op);
     }
 
+    /// The id has an operation in flight RIGHT NOW. The contract: a conflicting command on the
+    /// SAME plugin is refused (409). This covers BOTH "install while installing" and "delete
+    /// while installing" - an in-flight install owns its id, so neither a second install nor a
+    /// remove may proceed. It is called BEFORE any lock/staging so the answer is a clean 409,
+    /// never a 404 ("not found") or a 502 (a staging collision).
+    fn busy(&self, id: &str) -> bool {
+        let ops = self.ops.lock().expect("ops mutex");
+        ops.get(id).map(|o| !o.is_empty()).unwrap_or(false)
+    }
+
     fn leave(&self, id: &str, op: Op) {
         let mut ops = self.ops.lock().expect("ops mutex");
         if let Some(set) = ops.get_mut(id) {
@@ -463,6 +479,12 @@ impl Plugins {
             }
         };
         let id_lock = self.id_lock(&op_id);
+        // A conflicting command on the SAME plugin is refused 409 (contract): an in-flight install
+        // owns its id, so neither a second install nor a remove may proceed. Checked BEFORE the
+        // lock so the answer is a clean 409, not a 502 from a staging collision.
+        if self.busy(&op_id) {
+            return Err(PluginError::InProgress(op_id.clone()));
+        }
         let _op = id_lock
             .try_lock()
             .map_err(|_| PluginError::Conflict("another install/remove of this plugin is in progress".into()))?;
@@ -631,6 +653,11 @@ impl Plugins {
     /// installed (a deployment directory is refused). Registers the identity.
     pub fn begin_remove(&self, command_id: &str, id: &str) -> Result<RemoveIntent, PluginError> {
         // PER-ID lock: only the SAME plugin conflicts; different plugins proceed concurrently.
+        // A conflicting command on the SAME plugin is refused 409 (contract): an in-flight install
+        // owns its id, so a remove while installing is refused HERE, cleanly, not as a 404.
+        if self.busy(id) {
+            return Err(PluginError::InProgress(id.to_string()));
+        }
         let id_lock = self.id_lock(id);
         let _op = id_lock
             .try_lock()
