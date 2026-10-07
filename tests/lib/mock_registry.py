@@ -38,6 +38,8 @@ class MockRegistry:
         self.token = token
         self.entries = {}          # id -> entry
         self._zips = {}            # filename -> bytes
+        self.hits = []             # every path GETed, in order (proves a real HTTP fetch)
+        self._lock = threading.Lock()
         self._server = None
         self._thread = None
 
@@ -101,6 +103,9 @@ class MockRegistry:
                 if not self._auth_ok():
                     self.send_response(401); self.end_headers(); self.wfile.write(b"unauthorized"); return
                 name = self.path.lstrip("/")
+                # Record the hit so a test can prove the hub REALLY fetched over HTTP (not a copy).
+                with outer._lock:
+                    outer.hits.append(name)
                 if name == "registry.json":
                     body = json.dumps(outer.registry_json()).encode()
                     ctype = "application/json"

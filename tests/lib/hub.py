@@ -428,6 +428,12 @@ class Hub:
         shutil.rmtree(self.dir, ignore_errors=True)
 
     # --- convenience ------------------------------------------------------
+    def registry_hits(self):
+        """The paths the dev MOCK registry was GETed for, in order (empty in prod). Proves the hub
+        fetched a url over HTTP - a test asserts the plugin zip it installed was really requested."""
+        m = getattr(self, "_mock", None)
+        return list(getattr(m, "hits", [])) if m is not None else []
+
     def create_session(self, harness, **extra):
         body = {"harnessId": harness}
         body.update(extra)

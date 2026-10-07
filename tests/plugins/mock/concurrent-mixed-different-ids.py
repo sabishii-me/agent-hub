@@ -47,23 +47,31 @@ try:
     # `deepseek` (a third id) - all issued at once with nothing sequential.
     def install(pid):
         a = hub.registry_artifact(pid)
-        return pid, "install", hub.post("/v1/plugins", {"source": {"artifact": a}}, key=f"mx-i-{pid}-{time.time()}")
+        return pid, "install", a["url"].rsplit("/", 1)[-1], hub.post("/v1/plugins", {"source": {"artifact": a}}, key=f"mx-i-{pid}-{time.time()}")
 
     def remove(pid):
-        return pid, "remove", hub.delete(f"/v1/plugins/{pid}", key=f"mx-r-{pid}-{time.time()}")
+        return pid, "remove", None, hub.delete(f"/v1/plugins/{pid}", key=f"mx-r-{pid}-{time.time()}")
 
     with cf.ThreadPoolExecutor(max_workers=3) as ex:
         futs = [ex.submit(install, "pi"), ex.submit(install, "jouzu"), ex.submit(remove, "deepseek")]
         results = [f.result() for f in futs]
 
-    accepted = {pid: (op, r["status"]) for pid, op, r in results}
-    t.check(all(r["status"] < 300 for _, _, r in results),
+    accepted = {pid: (op, r["status"]) for pid, op, _z, r in results}
+    t.check(all(r["status"] < 300 for _, _, _z, r in results),
             "every mixed op is ACCEPTED at once (an install and a remove, different plugins)",
             f"results={accepted}")
-    t.check(any(op == "install" and r["status"] < 300 for _, op, r in results)
-            and any(op == "remove" and r["status"] < 300 for _, op, r in results),
+    t.check(any(op == "install" and r["status"] < 300 for _, op, _z, r in results)
+            and any(op == "remove" and r["status"] < 300 for _, op, _z, r in results),
             "the window really mixed an install AND a remove (not one kind)",
             f"results={accepted}")
+
+    # REAL download: the hub FETCHED the two zips over HTTP from the registry - the mock registry
+    # logged a GET for each. A local copy would leave no hit.
+    hits = hub.registry_hits()
+    wanted = [z for _, op, z, _r in results if op == "install"]
+    t.check(all(z in hits for z in wanted),
+            "REAL download: the hub GET each plugin zip over HTTP from the registry",
+            f"wanted={wanted} hits={hits}")
 
     # Both directions must ACTUALLY happen: BOTH installed plugins reach ready, the removed one
     # becomes absent. If the hub serialized them, one would be refused and this fails. We wait for
