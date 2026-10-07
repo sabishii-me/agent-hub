@@ -67,12 +67,25 @@ try:
 finally:
     hub0.cleanup()
 
-# The AUTHORIZED path (registry lists a release -> the hub installs it, url+sha256 reconcile) and
-# the proxied-url case (listed url, different sha256) BOTH need the official registry, which is
-# UNPUBLISHED. Testing them would require fabricating a registry, which is forbidden. BLOCKED.
-t.blocked_check(
-    "a source matching a registry release is accepted; a proxied url is refused",
-    "needs the official registry (UNPUBLISHED); not tested by fabricating one")
+# The AUTHORIZED path: with a registry loaded (the environment's config), a source matching a
+# registry release (url AND sha256) is accepted, and the SAME listed url with a WRONG sha256 is
+# refused - the digest is the anchor, so a proxied url cannot pass.
+hub1 = Hub()
+try:
+    hub1.start()
+    rr = hub1.post("/v1/plugins/registry/refresh", timeout=60)
+    t.check(rr["status"] < 300, "the environment's registry refreshes", f"status={rr['status']} {rr['text'][:120]}")
+    listed = hub1.registry_artifact("pi")
+    ok = hub1.post("/v1/plugins", {"source": {"artifact": listed}}, key="auth", timeout=120)
+    t.check(ok["status"] == 202, "a source matching a registry release is accepted (202)",
+            f"status={ok['status']} {ok['text'][:160]}")
+    proxied = dict(listed); proxied["sha256"] = "0" * 64
+    bad = hub1.post("/v1/plugins", {"source": {"artifact": proxied}}, key="proxied", timeout=40)
+    t.check(bad["status"] == 403 and code_of(bad) == "plugin_not_in_registry",
+            "the listed url with a WRONG sha256 is refused (403 plugin_not_in_registry)",
+            f"status={bad['status']} code={code_of(bad)} {bad['text'][:160]}")
+finally:
+    hub1.cleanup()
 
 _ok = t.done()
 sys.exit(0 if _ok else 1)

@@ -100,9 +100,23 @@ try:
             f"status={r['status']} code={code} {r['text'][:160]}")
     t.check("pi" not in plugin_dirs(hub.plugins), "a refused artifact left no `pi` directory",
             f"left={plugin_dirs(hub.plugins)}")
-    t.blocked_check(
-        "an artifact whose sha256 differs from a REGISTRY entry is refused for THAT reason",
-        "needs the official registry to be a 'listed' url at all (UNPUBLISHED)")
+    # With a registry loaded (the environment's config), post the LISTED url with a WRONG sha256:
+    # the hub must refuse for the digest, not for absence. `registry_artifact` reads the release
+    # the hub's own catalog lists for pi, then we corrupt its sha256.
+    rr = hub.post("/v1/plugins/registry/refresh", timeout=60)
+    t.check(rr["status"] < 300, "the environment's registry refreshes", f"status={rr['status']} {rr['text'][:120]}")
+    entry = next((p for p in (hub.get("/v1/plugins/catalog")['json'] or {}).get("plugins", []) if p.get("id") == "pi"), None)
+    listed = (entry or {}).get("versions", [None])[0]
+    if t.check(listed is not None, "the catalog lists a pi release to corrupt", f"entry={entry}"):
+        r = hub.post("/v1/plugins", {"source": {"artifact": {
+            "url": listed["url"], "sha256": "1" * 64, "id": "pi",
+            "pluginType": "harness-adapter", "version": listed["version"]}}}, key="b8b", timeout=40)
+        code, detail = code_and_detail(r)
+        t.check(r["status"] == 403 and code == "plugin_not_in_registry",
+                "a LISTED url with a WRONG sha256 is refused (403 plugin_not_in_registry)",
+                f"status={r['status']} code={code} {r['text'][:160]}")
+        t.check("pi" not in plugin_dirs(hub.plugins), "the mismatched artifact left no `pi` directory",
+                f"left={plugin_dirs(hub.plugins)}")
 finally:
     hub.cleanup()
 

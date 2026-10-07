@@ -21,3 +21,7 @@ dist/
 tests/**/__pycache__/
 __pycache__/
 *.pyc
+
+# A stable, git-ignored home for the hub during tests: NOT a random tmp dir, NOT the OS
+# temp dir. Every run STARTS clean and cleanup() REMOVES it, so no state is left behind.
+/.test-home/

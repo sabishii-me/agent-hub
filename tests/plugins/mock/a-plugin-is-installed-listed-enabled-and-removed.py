@@ -59,11 +59,33 @@ try:
     t.check(g["status"] == 200 and (g["json"] or {}).get("plugin", {}).get("id") == "pi",
             "GET /v1/plugins/{id} reads the installed plugin", f"status={g['status']}")
 
-    # prepare: materialises the runtime; the hub VERIFIES the declared command exists.
-    p = hub.post("/v1/plugins/pi/prepare")
+    # prepare: materialises the runtime; the hub VERIFIES the declared command exists. This is the
+    # HEAVY step (the adapter installs the runtime package), so give it real time.
+    t0 = time.time()
+    p = hub.post("/v1/plugins/pi/prepare", timeout=900)
     pj = p["json"] or {}
     t.check(p["status"] < 300 and pj.get("ready") is True, "prepare reports a ready runtime", f"body={p['text'][:160]}")
     t.check(pj.get("version"), "prepare names the runtime version", f"version={pj.get('version')}")
+    # REAL install: the runtime command the manifest declares now EXISTS on disk (a fact about the
+    # filesystem, not a claim) - the runtime was materialised, not reported.
+    runtime_cmd = os.path.join(hub.plugins, "pi", "runtime", "dist", "cli.js")
+    t.check(os.path.isfile(runtime_cmd),
+            "REAL install: the declared runtime command exists on disk after prepare",
+            f"missing {runtime_cmd}")
+    # REAL download (not a local copy): the installed manifest.json is byte-identical to the one
+    # inside the zip the hub DOWNLOADED from the registry url. If the hub had copied a local dir
+    # instead of downloading, the zip's manifest could differ and this would catch it.
+    import hashlib, io, urllib.request, zipfile
+    url = hub.registry_artifact("pi")["url"]
+    zbytes = urllib.request.urlopen(url, timeout=120).read()
+    with zipfile.ZipFile(io.BytesIO(zbytes)) as z:
+        zman = z.read("manifest.json")
+    with open(os.path.join(hub.plugins, "pi", "manifest.json"), "rb") as f:
+        iman = f.read()
+    t.check(hashlib.sha256(zman).hexdigest() == hashlib.sha256(iman).hexdigest(),
+            "REAL download: the installed manifest equals the zip's manifest (downloaded, not copied)",
+            f"zip={hashlib.sha256(zman).hexdigest()[:12]} installed={hashlib.sha256(iman).hexdigest()[:12]}")
+    print(f"  (prepare took {time.time()-t0:.1f}s)")
 
     # disable / enable flip the HARNESS status (the contract has no plugin `enabled`
     # field; the plugin's `state` is absent|installing|removing|preparing|failed|ready).

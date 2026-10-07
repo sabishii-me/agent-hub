@@ -31,6 +31,9 @@ if not t.require(os.path.isdir(PI) and os.path.isdir(DEEP), "two real plugin sou
 hub = Hub()
 try:
     hub.start()
+    # Resolve the registry artifacts ONCE (the subject is install/remove, not refresh;
+    # racing N refreshes corrupts the catalog read).
+    ARTIFACTS = {p: hub.registry_artifact(p) for p in ('pi', 'deepseek')}
     sse = hub.sse_open(); sse.wait(1, timeout=10)
 
     # >=3 operations in flight, mixed install/remove on two ids, in several sequences.
@@ -45,7 +48,7 @@ try:
     def run(op):
         kind, pid = op
         if kind == "post":
-            return hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact(pid)}}, key=f"mx-{pid}-i-{time.time()}")["status"]
+            return hub.post("/v1/plugins", {"source": {"artifact": ARTIFACTS[pid]}}, key=f"mx-{pid}-i-{time.time()}")["status"]
         return hub.delete(f"/v1/plugins/{pid}", key=f"mx-{pid}-d-{time.time()}")["status"]
 
     with cf.ThreadPoolExecutor(max_workers=len(ops)) as ex:

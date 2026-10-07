@@ -28,9 +28,12 @@ if not t.require(os.path.isdir(PI), "a real plugin source is present", f"no plug
 hub = Hub()
 try:
     hub.start()
+    # Resolve the registry artifacts ONCE (the subject is install/remove, not refresh;
+    # racing N refreshes corrupts the catalog read).
+    ARTIFACTS = {'pi': hub.registry_artifact('pi')}
 
     def install(i):
-        r = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key=f"ci-{i}")
+        r = hub.post("/v1/plugins", {"source": {"artifact": ARTIFACTS["pi"]}}, key=f"ci-{i}")
         return r["status"]
 
     # N concurrent installs of the SAME id.
@@ -66,7 +69,7 @@ try:
     # operation finishes; the final state is a real, readable one (ready or absent).
     def churn(i):
         if i % 2 == 0:
-            hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key=f"ch-i{i}")
+            hub.post("/v1/plugins", {"source": {"artifact": ARTIFACTS["pi"]}}, key=f"ch-i{i}")
         else:
             hub.delete("/v1/plugins/pi", key=f"ch-d{i}")
     with cf.ThreadPoolExecutor(max_workers=4) as ex:

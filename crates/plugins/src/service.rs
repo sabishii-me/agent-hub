@@ -86,12 +86,12 @@ pub struct Plugins {
     ids: CommandIds,
     /// Per-plugin in-flight operations (the one verdict).
     ops: std::sync::Mutex<std::collections::HashMap<String, Ops>>,
-    /// Serializes install/remove: the staging dir is ONE per root (the comment on
-    /// `staging_dir` says "one at a time per root"), so two installs landing at once
-    /// trample it and fail with os error 5. Holding this lock makes install/remove
-    /// ONE at a time; a second concurrent call is refused 409, never a 500
-    /// (docs/issues/20261005-070000).
-    op_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    /// PER-ID install/remove locks. The old design held ONE global lock, so an install of pi and
+    /// an install of deepseek - DIFFERENT plugins - were wrongly refused 409 each other, reducing
+    /// concurrency to one op at a time hub-wide (a T0). The staging dir is now per-id too, so two
+    /// DIFFERENT ids proceed concurrently; two ops on the SAME id conflict (contract: refused or
+    /// joined).
+    op_locks: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
     /// The loaded official registry (docs/issues/20261005-130000). Loaded once at construction
     /// and replaced by a refresh; the INSTALL path reconciles a caller's source against this, so
     /// a source the registry does not list is refused before anything is fetched. `None` = not
@@ -220,7 +220,7 @@ impl Plugins {
             bus,
             ids: CommandIds::new(4096),
             ops: std::sync::Mutex::new(std::collections::HashMap::new()),
-            op_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            op_locks: std::sync::Mutex::new(std::collections::HashMap::new()),
             registry: std::sync::Mutex::new(None),
             registry_fault: std::sync::Mutex::new(None),
         }
@@ -448,16 +448,25 @@ impl Plugins {
         // official registry (url AND sha256) before ANY work - no clone, no download, no
         // staging. This is what stops a caller installing code the registry never approved.
         self.authorized(source)?;
-        // ONE install at a time per root: the staging dir is shared, so two installs
-        // landing at once trample it (os error 5). A concurrent install is refused
-        // 409, never a 500 (docs/issues/20261005-070000). The guard is held for the
-        // synchronous staging below; the detached finish works on the per-id target,
-        // which the `ops` map already serializes per id.
-        let _op = self
-            .op_lock
+        // The plugin id FIRST (artifact spec, or the git dir's manifest): the lock and the staging
+        // dir are PER-ID, so DIFFERENT plugins install CONCURRENTLY and only the SAME id conflicts.
+        let op_id: String = match source {
+            crate::source::Source::Artifact(spec) => spec.id.clone(),
+            crate::source::Source::Git { url, .. } => {
+                let p = PathBuf::from(url);
+                let mf = std::fs::read_to_string(p.join("manifest.json"))
+                    .map_err(|_| PluginError::InvalidManifest("no manifest.json in the source".into()))?;
+                crate::manifest::Manifest::parse(&mf)
+                    .map_err(PluginError::InvalidManifest)?
+                    .id
+                    .ok_or_else(|| PluginError::InvalidManifest("the source manifest has no id".into()))?
+            }
+        };
+        let id_lock = self.id_lock(&op_id);
+        let _op = id_lock
             .try_lock()
-            .map_err(|_| PluginError::Conflict("another install/remove is in progress".into()))?;
-        let staging = self.staging_dir();
+            .map_err(|_| PluginError::Conflict("another install/remove of this plugin is in progress".into()))?;
+        let staging = self.staging_dir(&op_id);
         if let Some(parent) = staging.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -553,8 +562,17 @@ impl Plugins {
     }
 
     /// The staging directory for the next install (one at a time per root).
-    fn staging_dir(&self) -> PathBuf {
-        self.root.join(".stage").join("install")
+    fn staging_dir(&self, id: &str) -> PathBuf {
+        // PER-ID staging: two DIFFERENT plugins stage in their own dir and proceed concurrently.
+        // (One shared `.stage/install` forced a global lock, which wrongly serialized different
+        // ids - a T0.) The id is a plugin id, already validated as a path leaf by the source.
+        self.root.join(".stage").join(id)
+    }
+
+    /// The per-id operation lock. Two ops on the SAME id conflict; different ids never do.
+    fn id_lock(&self, id: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+        let mut m = self.op_locks.lock().expect("op_locks mutex");
+        m.entry(id.to_string()).or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(()))).clone()
     }
 
     /// The detached half of an install: land the tree and commit the row. The
@@ -565,7 +583,7 @@ impl Plugins {
         id: &str,
         artifact_json: Option<String>,
     ) -> Result<(), PluginError> {
-        let source_dir = self.staging_dir();
+        let source_dir = self.staging_dir(id);
         let record_artifact = artifact_json.clone();
         let manifest = std::fs::read_to_string(source_dir.join("manifest.json"))
             .ok()
@@ -612,11 +630,11 @@ impl Plugins {
     /// Validate a remove **before any work**: the plugin must be one the hub
     /// installed (a deployment directory is refused). Registers the identity.
     pub fn begin_remove(&self, command_id: &str, id: &str) -> Result<RemoveIntent, PluginError> {
-        // Same one-at-a-time rule as install (the staging/root is shared).
-        let _op = self
-            .op_lock
+        // PER-ID lock: only the SAME plugin conflicts; different plugins proceed concurrently.
+        let id_lock = self.id_lock(id);
+        let _op = id_lock
             .try_lock()
-            .map_err(|_| PluginError::Conflict("another install/remove is in progress".into()))?;
+            .map_err(|_| PluginError::Conflict("another install/remove of this plugin is in progress".into()))?;
         // Distinguish THREE cases, so the message never lies (docs/issues/20261005-140000):
         //  - a hub-installed plugin (a row with installed_at) -> allowed;
         //  - a DEPLOYMENT directory (no row, but a directory with a manifest exists) ->

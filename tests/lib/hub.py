@@ -15,6 +15,8 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import atexit
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -24,6 +26,16 @@ _SUFFIX = ".exe" if os.name == "nt" else ""
 # time (no env override exists) - that is what the release-build tests must exercise.
 _PROFILE = os.environ.get("AGENT_HUB_PROFILE", "debug").strip() or "debug"
 EXE = os.path.join(REPO, "target", _PROFILE, "agent-hub" + _SUFFIX)
+
+_TEST_HOME = os.path.join(REPO, ".test-home")
+
+
+def _cleanup_test_home():
+    """Remove the whole stable test home at process exit - nothing is left behind."""
+    shutil.rmtree(_TEST_HOME, ignore_errors=True)
+
+
+atexit.register(_cleanup_test_home)
 
 
 def registry_published():
@@ -92,10 +104,21 @@ def hub_sha():
 
 
 class Hub:
-    """One real hub process on its own isolated data dir."""
+    """One real hub process on a FIXED, STABLE data dir (not a random tmp dir).
 
-    def __init__(self, plugins_src=None, env=None, data_dir=None):
-        self.dir = data_dir or tempfile.mkdtemp(prefix="hub-test-")
+    The data dir is `<repo>/.test-home/<name>` unless a caller names another one. It is the SAME
+    path across runs (so an install lands somewhere you can inspect and so a stale cache is
+    visibly reused, not silently hidden in tmp), and `cleanup()` REMOVES it - every run ends with
+    no leftover home."""
+
+    def __init__(self, plugins_src=None, env=None, data_dir=None, home=None):
+        # ONE stable, git-ignored home: `<repo>/.test-home`. NOT a random tmp dir and NOT a
+        # per-instance/per-test subdir. The user runs ONE hub on ONE home, repeatedly (start,
+        # stop, install, remove, restart); so does the test. The constructor does NOT wipe the
+        # home - wiping it would HIDE a collision that a real user would hit. It is cleaned only
+        # by cleanup() / process exit.
+        self.dir = data_dir or os.path.join(REPO, ".test-home")
+        os.makedirs(self.dir, exist_ok=True)
         self.plugins = os.path.join(self.dir, "plugins")
         os.makedirs(self.plugins, exist_ok=True)
         # NO backdoor: a plugin source is NOT copied into the plugins root. It is

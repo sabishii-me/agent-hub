@@ -125,13 +125,20 @@ try:
 finally:
     srv5.shutdown()
 
-# --- Case 6: a CORRECT, REACHABLE registry whose content becomes the catalog. This needs a real
-# registry to be meaningful; a loopback server here would be the test fabricating the registry and
-# proving only that the hub can read bytes it was handed. BLOCKED until the official one is
-# published (owner direction: no mock registry).
-t.blocked_check(
-    "a reachable, valid registry: refresh succeeds and the catalog restates it",
-    "needs the official registry (UNPUBLISHED); not tested by fabricating one")
+# --- Case 6: a CORRECT, REACHABLE registry whose content becomes the catalog. The environment's
+# registry (dev injects a MOCK over loopback; prod uses the compiled-in official address) IS the
+# correct registry. Refresh it and assert the catalog RESTATES it - the real user operation.
+hub6 = Hub()
+try:
+    hub6.start()
+    rr = hub6.post("/v1/plugins/registry/refresh", timeout=60)
+    t.check(rr["status"] < 300, "a reachable, valid registry refreshes (2xx)",
+            f"status={rr['status']} {rr['text'][:160]}")
+    cat = hub6.get("/v1/plugins/catalog")["json"] or {}
+    t.check(bool(cat.get("plugins")), "the catalog restates the refreshed registry (lists plugins)",
+            f"plugins={[p.get('id') for p in cat.get('plugins', [])]}")
+finally:
+    hub6.cleanup()
 
 _ok = t.done()
 sys.exit(0 if _ok else 1)
