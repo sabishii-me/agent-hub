@@ -217,9 +217,7 @@ class Hub:
             if isinstance(r.get("json"), dict) and r["json"].get("error"):
                 raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
             self._await_plugin(pid, "ready")
-            pr = self.post(f"/v1/plugins/{pid}/prepare")
-            if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
-                raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
+            # Install now prepares the runtime itself; `ready` must mean the runtime is on disk.
             self._await_runtime(pid)
             self._installed.add(pid)
 
@@ -250,9 +248,7 @@ class Hub:
         if isinstance(r.get("json"), dict) and r["json"].get("error"):
             raise RuntimeError(f"install {pid} failed: {r['status']} {r['text'][:200]}")
         self._await_plugin(pid, "ready")
-        pr = self.post(f"/v1/plugins/{pid}/prepare")
-        if isinstance(pr.get("json"), dict) and pr["json"].get("error"):
-            raise RuntimeError(f"prepare {pid} failed: {pr['status']} {pr['text'][:200]}")
+        # Install now prepares the runtime itself; `ready` must mean the runtime is on disk.
         self._await_runtime(pid)
         self._installed.add(pid)
         return r

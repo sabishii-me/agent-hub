@@ -41,9 +41,11 @@ try:
     t.check((ins["json"] or {}).get("pluginId"),
             "the install names the plugin id", f"body={ins['text'][:160]}")
 
-    # The resource reaches `ready` (the install is a long command, read at the Location).
+    # The resource reaches `ready` (the install is a long command - it downloads the adapter AND
+    # prepares the runtime, tens of seconds - read at the Location).
+    t0 = time.time()
     state = None
-    for _ in range(240):
+    for _ in range(3000):
         g = hub.get("/v1/plugins/pi")
         state = (g["json"] or {}).get("plugin", {}).get("state")
         if state in ("ready", "failed", "absent"):
@@ -59,19 +61,20 @@ try:
     t.check(g["status"] == 200 and (g["json"] or {}).get("plugin", {}).get("id") == "pi",
             "GET /v1/plugins/{id} reads the installed plugin", f"status={g['status']}")
 
-    # prepare: materialises the runtime; the hub VERIFIES the declared command exists. This is the
-    # HEAVY step (the adapter installs the runtime package), so give it real time.
-    t0 = time.time()
-    p = hub.post("/v1/plugins/pi/prepare", timeout=900)
-    pj = p["json"] or {}
-    t.check(p["status"] < 300 and pj.get("ready") is True, "prepare reports a ready runtime", f"body={p['text'][:160]}")
-    t.check(pj.get("version"), "prepare names the runtime version", f"version={pj.get('version')}")
+    # INSTALL PREPARES THE RUNTIME itself (docs/issues/20261007-200000): there is no separate
+    # `prepare` command. `ready` must MEAN the runtime is on disk - a fact about the filesystem.
+    pj = (g["json"] or {}).get("plugin", {})
+    t.check(pj.get("state") == "ready", "install ends `ready` (the install IS the prepare)", f"state={pj.get('state')}")
+    t.check(pj.get("runtimeReady") is True, "`ready` means runtimeReady (the runtime was materialised)",
+            f"runtimeReady={pj.get('runtimeReady')}")
     # REAL install: the runtime command the manifest declares now EXISTS on disk (a fact about the
     # filesystem, not a claim) - the runtime was materialised, not reported.
     runtime_cmd = os.path.join(hub.plugins, "pi", "runtime", "dist", "cli.js")
     t.check(os.path.isfile(runtime_cmd),
-            "REAL install: the declared runtime command exists on disk after prepare",
+            "REAL install: the declared runtime command exists on disk after install",
             f"missing {runtime_cmd}")
+    t.check((pj.get("runtime") or {}).get("target"), "the runtime target is resolved (not null)",
+            f"runtime={pj.get('runtime')}")
     # REAL download (not a local copy): the installed manifest.json is byte-identical to the one
     # inside the zip the hub DOWNLOADED from the registry url. If the hub had copied a local dir
     # instead of downloading, the zip's manifest could differ and this would catch it.
@@ -85,7 +88,7 @@ try:
     t.check(hashlib.sha256(zman).hexdigest() == hashlib.sha256(iman).hexdigest(),
             "REAL download: the installed manifest equals the zip's manifest (downloaded, not copied)",
             f"zip={hashlib.sha256(zman).hexdigest()[:12]} installed={hashlib.sha256(iman).hexdigest()[:12]}")
-    print(f"  (prepare took {time.time()-t0:.1f}s)")
+    print(f"  (install incl. runtime took {time.time()-t0:.1f}s)")
 
     # disable / enable flip the HARNESS status (the contract has no plugin `enabled`
     # field; the plugin's `state` is absent|installing|removing|preparing|failed|ready).

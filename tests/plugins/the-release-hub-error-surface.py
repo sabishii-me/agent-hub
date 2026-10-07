@@ -65,9 +65,13 @@ try:
             "a missing plugin is NOT described as a deployment directory",
             f"detail={detail!r}")
 
+    # `prepare` is NOT a separate command (docs/issues/20261007-200000): install prepares the
+    # runtime itself. The old endpoint must be GONE - the router answers 404 (no such route) or
+    # 405 (method not allowed on a known path), never a domain not_found for a plugin.
     r = hub.post("/v1/plugins/nope/prepare")
-    t.check(r["status"] == 404 and code_of(r) == "not_found",
-            "prepare a missing plugin -> 404 not_found", f"status={r['status']} code={code_of(r)}")
+    t.check(r["status"] in (404, 405),
+            "POST /v1/plugins/{id}/prepare is GONE (install prepares the runtime)",
+            f"status={r['status']} body={r['text'][:120]}")
 
     # A RELEASE hub has NO registry (the official one is unpublished). Every install source is
     # therefore refused at the registry gate with 403 plugin_not_in_registry - the correct

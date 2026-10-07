@@ -2539,51 +2539,6 @@
         }
       }
     },
-    "/v1/plugins/{id}/prepare": {
-      "post": {
-        "description": "ask a plugin's adapter to materialise the runtime its manifest pins (`runtime/prepare`). Idempotent: a runtime already on disk answers `ready:true`. The hub reports the adapter's own words — including on failure (`runtime_prepare_failed`), because only the adapter knows how its harness is fetched. A plugin that does not declare the `runtime` capability answers 501 `unsupported`.",
-        "responses": {
-          "200": {
-            "description": "success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "harnessId": {
-                      "type": "string"
-                    },
-                    "runtimeReady": {
-                      "type": "boolean"
-                    },
-                    "ready": {
-                      "type": "boolean"
-                    },
-                    "package": {
-                      "type": "string"
-                    },
-                    "version": {
-                      "type": "string"
-                    },
-                    "target": {
-                      "type": "string"
-                    },
-                    "detail": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "harnessId",
-                    "runtimeReady",
-                    "ready"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/sessions/{id}/resources": {
       "get": {
         "description": "Read-only resource catalogue authorized by this session harness skill selection. Logical skills:// URIs only; no installation paths. This is not filesystem or shell confinement. null skill selection retains existing all-installed semantics.",

@@ -642,6 +642,12 @@ impl Plugins {
                     artifact: record_artifact.clone(),
                 };
                 self.db.upsert_plugin(&row)?;
+                // The adapter LANDED, but the harness is NOT usable yet: its runtime (the command
+                // the manifest pins) is materialised by the adapter's `runtime/prepare`. Enter
+                // `preparing` and DO NOT announce `ready` here - the caller prepares next and only
+                // then clears the op (docs/issues/20261007-190000). Announcing `ready` now would be
+                // a false ready: the declared runtime command is not on disk.
+                self.enter(id, Op::Preparing);
                 self.announce(id);
                 Ok(())
             }
@@ -654,6 +660,22 @@ impl Plugins {
                 Err(PluginError::InstallFailed(e.to_string()))
             }
         }
+    }
+
+    /// Called by the install route AFTER the adapter's `runtime/prepare` ran (or was skipped
+    /// because the plugin brings its own runtime). Clears `preparing` so the plugin settles to
+    /// `ready` - or to `failed` with the reason, which is a fact about the runtime, not a claim.
+    pub fn finish_prepare(&self, id: &str, ok: bool, detail: Option<String>) -> String {
+        self.leave(id, Op::Preparing);
+        if !ok {
+            self.enter(id, Op::Failed);
+            if let Ok(Some(mut row)) = self.db.plugin(id) {
+                row.state = PluginState::Failed;
+                row.detail = detail.clone();
+                let _ = self.db.upsert_plugin(&row);
+            }
+        }
+        self.announce(id)
     }
 
     /// Validate a remove **before any work**: the plugin must be one the hub
