@@ -1,95 +1,113 @@
-# Plugin contribution flow: separate repos -> reviewed PR -> official registry (DESIGN PROPOSAL)
+# Plugin contribution flow: any repo -> reviewed ENTRY -> official registry (DESIGN PROPOSAL)
 
 Status: PROPOSAL for owner review. Nothing implemented, nothing published, no contract change.
 
 ## The goal (owner, 2026-10-05)
-Plugins live in their OWN repos. Adding one to the official catalog must be a reviewed, checked
-CHANGE (like Dify's plugin marketplace: a PR that passes CI and a review), NOT a manual step someone
-remembers. Later plugin additions must not be error-prone or hard to configure.
+Plugins live in their OWN repos - **and NOT all of those repos are in our org.** Adding a plugin to
+the official catalog must be a reviewed, checked CHANGE (like Dify's marketplace: submit -> CI check
+-> human review -> appears in the official catalog), NOT a manual step, and NOT something that
+requires us to control the plugin's repository.
 
-## The real topology (measured)
-- `sabishii-me` is a GitHub ORGANIZATION (24 repos). Plugin repos already exist:
-  `agent-hub-harness-adapter-{pi,deepseek,jouzu}`, `agent-hub-model-provider-{compatible,deepseek,
-  shisa}` — one repo per plugin.
-- `agent-hub` is the hub repo (holds `registry.json` + `scripts/pack-plugins.mjs`). No CI workflows
-  today.
-- The hub compiles in ONE registry address:
-  `https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json`.
+## The fact that decides the design
+Most plugins will be THIRD-PARTY repos: another user's or org's GitHub repo (or GitLab/self-hosted),
+where we have NO write access, cannot add CI, and cannot enforce anything. So the reviewed unit is
+NOT "a PR in the plugin's repo". It is **the registry ENTRY** - the `{id, pluginType, version, url,
+sha256}` record - which the AUTHOR submits to US, and WE review. We never need rights on their repo.
 
-## The principle
-The registry is a reviewed ARTIFACT, not a hand-edited file and not an automated push. A new
-plugin enters the catalog by a PR to the hub repo that carries only the registry ENTRY (derived from
-the plugin's own manifest/release), and CI + a reviewer decide. The plugin's own repo is where the
-plugin's code and its release live; the hub repo is where the ALLOW-LIST lives.
+This is exactly what ADR-0007 already fixes: **a plugin is consumed as an ARTIFACT (url + sha256),
+not as a repository**; one repo may publish many artifacts; the isolation posture is ORDINARY (a
+review of the input's declared shape), deliberately NOT a signing/attestation scheme. So the review
+is a review of the ENTRY + the BYTES it points at, not of the author's source tree or CI.
 
-Being an ORG, `sabishii-me` can (a) restrict who may create repos under it, so "a new plugin repo"
-is already a controlled act, (b) define a `registry-review` team and org rulesets, and (c) apply a
-required workflow to every agent-hub repo if we later want the plugin repos' own CI to also run the
-same check.
+## What is in our org vs not
+- **First-party** (our org, `sabishii-me`): we can use org teams, CODEOWNERS, rulesets, required
+  workflows. Convenient, but only for our own plugins.
+- **Third-party** (anywhere): we have nothing. The flow below must work with ZERO cooperation from
+  the plugin's repo beyond "it hosts a release at a URL".
 
-## The flow (one path; a plugin author does NOT need the hub checked out)
+## The flow (ONE path; works for first-party AND third-party)
 
-1. Author builds and releases their plugin in ITS OWN repo:
-   `node scripts/pack-plugins.mjs --write --publish --yes` (in the plugin repo) -> the zip + icon are
-   uploaded to that repo's own GitHub Release `v<version>`; a `entry.json` fragment is produced.
-2. Author opens a PR to `sabishii-me/agent-hub` that **adds one file**:
-   `registry.d/plugins/<pluginType>-<id>-<version>.json` (the release entry, DERIVED — id, pluginType,
-   name, summary, capabilities, icon, one version {version,url,sha256,size}).
-   The PR touches NOTHING else. No hand-editing `registry.json`.
-3. **CI (the CHECK) runs on the PR** and must pass:
-   - the entry's JSON matches the schema (schema 2 rules: required fields, https url, 64-hex sha256);
-   - `(id, pluginType, version)` does not already exist with different bytes;
-   - the url is reachable AND its bytes hash to the stated sha256 (download + verify) — the release
-     exists and is what the entry claims;
-   - the plugin's `manifest.json` (fetched from the plugin repo at that tag) agrees with the entry's
-     id/pluginType/version;
-   - the name/icon are present (no silent missing icon);
-   - the runtime is a DECLARATION, not bytes (no runtime in the zip).
-4. **A REVIEWER (CODEOWNERS on `registry.d/` + an org `registry-review` team) approves.** With
-   branch protection / rulesets on `main` (org-level), the check and the review are REQUIRED to
-   merge - not a convention. Only then can it merge.
-5. **On merge to `main`, a workflow COMPILES the fragments**: `registry.d/plugins/*.json` ->
-   `registry.json` (sorted, deduped, older versions kept) -> published as the single `registry`
-   release asset, overwritten in place (the URL never moves). Compilation is DETERMINISTIC from the
-   fragments: `registry.json` is a build output, not a source file a human edits.
-6. The desktop/hub pick up the new catalog on the next `registry/refresh`. No hub release needed.
+1. **Author releases the plugin in THEIR repo, however they like.** The artifact is
+   `<pluginType>-<id>-<version>.zip` at some URL, with a `manifest.json` inside stating id,
+   pluginType, name, capabilities, version. They compute the sha256. Nothing about their repo/CI is
+   ours.
 
-## Why this shape (each avoids a concrete failure)
-- **A PR, not a push**: an automated publish would let a compromised plugin repo inject itself; a
-  reviewed PR puts a human between "new repo" and "official catalog".
-- **Fragments, not a hand-edited registry**: two authors adding plugins never conflict on one file;
-  `registry.json` is generated, so it can never drift from the entries that were reviewed.
-- **CI downloads and hashes the release**: the digest is verified BEFORE it is trusted, closing the
-  "entry lies about its artifact" gap at review time instead of at a user's install.
-- **CODEOWNERS on the fragments dir + an org team**: the review is enforceable (branch protection
-  requires it), not a convention. Being an ORG, `sabishii-me` can define a `registry-review` team and
-  org-level rulesets that apply the requirement to the hub repo.
-- **The address never moves**: the hub keeps one compiled URL; publishing a plugin never needs a hub
-  release; the desktop's pointer never goes stale.
+2. **Author submits ONE registry ENTRY to us** - by a PR to the hub repo adding
+   `registry.d/plugins/<pluginType>-<id>-<version>.json`, OR by an ISSUE with the same JSON when the
+   author cannot/should not open a PR. The entry is:
+   ```json
+   { "id":"x", "pluginType":"harness-adapter", "name":"X", "summary":"…",
+     "capabilities":[...], "icon":{"light":"…","dark":"…"},
+     "version":"1.2.3", "url":"https://…/harness-adapter-x-1.2.3.zip",
+     "sha256":"<64 hex>", "size":12345 }
+   ```
+   This is the ONLY thing submitted. Our repo; our review; their repo untouched.
+
+3. **OUR CI (the CHECK) runs on the submission and must pass:**
+   - the entry matches the schema (required fields; `url` is `https://`; `sha256` is 64 hex);
+   - `(id, pluginType, version)` is unique; a re-submitted version with a DIFFERENT sha256 is a
+     conflict (a published version is never silently rewritten);
+   - **the URL is downloaded and its bytes hash to the stated sha256** - the artifact exists and is
+     what the entry claims (this is the whole point: we verify the DIGEST, not the source);
+   - the downloaded zip's `manifest.json` AGREES with the entry (same id, pluginType, version) - so
+     the entry cannot claim one thing and ship another;
+   - the zip contains NO `runtime/` (the runtime is a DECLARATION fetched at install time, per the
+     existing rule) and no path escapes;
+   - the icon URLs resolve (no silent missing icon);
+   - the artifact is immutable-addressable (the URL is a release asset that will not be overwritten
+     - a moving URL with a pinned digest is a trap; if it is a moving URL, reject).
+4. **A human REVIEWER approves.** For entries under our org, CODEOWNERS + an org `registry-review`
+   team + rulesets make this REQUIRED. For third-party entries, the submission is a PR/issue in OUR
+   repo, so the same rule (a maintainer must approve) holds - we do NOT need rights on their repo.
+   The review is bounded by ADR-0007: we check the declared shape and the bytes' digest, NOT their
+   source (ordinary isolation is the decided posture).
+
+5. **On merge to `main`, OUR workflow COMPILES the fragments**: `registry.d/plugins/*.json` ->
+   `registry.json` (sorted by pluginType,id; older versions kept; deterministic) -> published as the
+   single `registry` release asset, overwritten in place (URL never moves). `registry.json` becomes
+   a BUILD OUTPUT, not a hand-edited source.
+
+6. The hub/desktop pick it up on the next `registry/refresh`. No hub release needed.
+
+## Why this shape holds for BOTH kinds of plugin
+- The reviewed unit is an ENTRY we host, so **third-party repos need no cooperation** - the author
+  only needs "a release at a URL".
+- We verify the DIGEST, so we do not need their source or CI to trust the bytes.
+- One fragment per (plugin, version) means two authors (in different orgs) never conflict on one
+  file, and the compiled `registry.json` can never drift from what was reviewed.
+- The address never moves: publishing a plugin never needs a hub release.
+
+## Enforcement (available because sabishii-me IS an org) - applied to OUR repo only
+- `registry.d/` has CODEOWNERS pointing at a `registry-review` team; org rulesets on `main` require
+  the check + a review. This gates OUR repo, which is where the allow-list lives - independent of
+  where the plugin repo is.
+- Optionally, an org-required workflow can run the SAME check on first-party plugin repos' PRs, but
+  that is a convenience for our repos, never a requirement on third parties.
 
 ## What stays the same
 - The hub's read path (boot loads the local copy; refresh GETs the fixed address; install reconciles
   url+sha256). Unchanged.
-- The plugin's own repo, zip format, and `manifest.json` as the single description of a plugin.
-- `schema 2` invariants (from registry-update-and-release-design.md) are what CI enforces.
+- ADR-0007: artifact = (url, sha256); a repo may publish many; ordinary isolation, no signing scheme.
+- `schema 2` invariants (registry-update-and-release-design.md) are what CI enforces.
 
 ## What needs the owner's review BEFORE it is written
-1. **Fragments in the hub repo (`registry.d/`) + a compile step**: this changes how `registry.json`
-   is produced (build output, not a tracked source). It is contract-adjacent (the desktop reads the
-   compiled `registry.json`). OWNER review.
-2. **Schemas/CI rules** (what a PR must pass) — the enforcement contract.
-3. **CODEOWNERS / an org `registry-review` team / org rulesets** on `registry.d/` and `main` (an org
-   setting; the owner's call).
-4. Whether `schema: 1 -> 2` goes in the same change or after.
+1. **Fragments (`registry.d/`) + a compile step** making `registry.json` a build output (contract-
+   adjacent: the desktop reads it).
+2. **The CI rule set** above (what a submission must pass) - the enforcement contract.
+3. **CODEOWNERS / `registry-review` team / org rulesets** on `registry.d/` (an org setting).
+4. **Submission channel**: PR-only, or PR + issue-fallback for authors who cannot open a PR. (A
+   third-party author CAN open a PR to a public repo without write access, so PR-only may suffice;
+   the owner decides.)
+5. Whether `schema 1 -> 2` rides the same change.
 
 ## Not in this proposal
-- No org migration is needed: `sabishii-me` IS an org, so org teams + a `registry` review team +
-  org-level required workflows are available directly.
+- No requirement that a plugin repo be in our org; no rights on third-party repos.
+- No signing/attestation gate (ADR-0007 decides ordinary isolation).
 - No id-only install change.
 - Nothing published now; the `registry` release stays unpublished until this is accepted.
 
 ## Alternative considered and rejected
-**Publish straight from each plugin repo to the shared registry** (a plugin's CI overwrites the
-catalog asset). Rejected: a plugin repo could add itself to the official allow-list without review;
-the catalog would have no single reviewed source of truth; concurrent publishes would race on one
-asset. The PR+fragments flow makes review and determinism structural.
+**Each plugin repo's own CI overwrites the shared registry asset.** Rejected: a third-party repo
+cannot be given write to our catalog; even for first-party repos it removes review (a compromised
+repo injects itself) and races on one asset. The submitted-entry flow keeps review and determinism
+in OUR repo, which is the only place we control - and works for repos we do not control.
