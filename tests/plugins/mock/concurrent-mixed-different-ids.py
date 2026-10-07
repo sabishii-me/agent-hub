@@ -65,9 +65,11 @@ try:
             "the window really mixed an install AND a remove (not one kind)",
             f"results={accepted}")
 
-    # Both directions must ACTUALLY happen: the installed plugin reaches ready, the removed one
-    # becomes absent. If the hub serialized them, one would be refused and this fails.
-    t.check(wait_ready("pi"), "the concurrently-installed plugin reaches `ready`", "pi not ready")
+    # Both directions must ACTUALLY happen: BOTH installed plugins reach ready, the removed one
+    # becomes absent. If the hub serialized them, one would be refused and this fails. We wait for
+    # the REAL terminal state (install is detached: a 202 means `installing`, not done).
+    t.check(wait_ready("pi"), "the concurrently-installed plugin `pi` reaches `ready`", "pi not ready")
+    t.check(wait_ready("jouzu"), "the concurrently-installed plugin `jouzu` reaches `ready`", "jouzu not ready")
     end = time.time() + 120
     gone = False
     while time.time() < end:
