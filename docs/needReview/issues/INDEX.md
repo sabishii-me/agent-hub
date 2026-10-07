@@ -47,3 +47,4 @@ The registry is UNPUBLISHED: plugin-chain capability is UNVERIFIED (docs/tasks/C
 | 20261005-150000 | HOST(env) | the host provider returns 400 -> session tests blocked | OPEN | environment fault, not the hub |
 | 20261005-160000 | HUB(test) | a failing check still exited 0; a stale release binary was measured | FIXED | exit-tied results; release rebuilt; BLOCKED state added |
 | 20261005-170000 | DOCS | I called the org an account (queried /users, not /orgs) | RESOLVED | read `type` + /orgs; design corrected |
+| 20261007-010000 | HUB+CONTRACT | `approve-unsafe` (force-install an unlisted source) is settled policy but NOT implemented | OPEN | install chain 6/6 covers listed/unlisted/git; no forced-install case; contract field undecided |
