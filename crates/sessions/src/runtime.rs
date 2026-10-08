@@ -42,6 +42,8 @@ pub struct SessionProcess {
     pub applied_plan: Option<bool>,
     /// The review state the adapter confirmed (`applied.review`).
     pub applied_review: Option<bool>,
+    /// The thinking level the adapter confirmed (`applied.thinkingLevel`).
+    pub applied_thinking_level: Option<String>,
 }
 
 impl SessionProcess {
@@ -322,6 +324,10 @@ impl Sessions {
             .get("preset")
             .and_then(Value::as_str)
             .map(str::to_string);
+        let applied_thinking_level = applied
+            .get("thinkingLevel")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         // Confirm the requested preset was applied. A requested preset that the
         // adapter did not confirm applied is a start failure (never a silent
         // default): the session would otherwise run the wrong composition.
@@ -478,6 +484,7 @@ impl Sessions {
             applied_provider,
             applied_model,
             applied_route,
+            applied_thinking_level: applied_thinking_level.clone(),
             applied_preset,
             applied_plan,
             applied_review,
@@ -510,6 +517,7 @@ impl Sessions {
             applied_provider: applied_provider_out,
             applied_model: applied_model_out,
             applied_route: applied_route_out,
+            applied_thinking_level: applied_thinking_level.clone(),
             applied_preset: applied_preset_out,
             applied_plan: applied_plan_out,
             applied_review: applied_review_out,

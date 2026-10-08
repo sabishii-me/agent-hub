@@ -156,6 +156,12 @@ pub struct SessionView {
     /// The native route the adapter resolved (`applied.connectionId`).
     #[serde(rename = "appliedRoute", skip_serializing_if = "Option::is_none")]
     pub applied_route: Option<String>,
+    /// The thinking level the caller asked for; null when none was set.
+    #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// The thinking level the adapter CONFIRMED (`applied.thinkingLevel`); null = unconfirmed.
+    #[serde(rename = "appliedThinkingLevel", skip_serializing_if = "Option::is_none")]
+    pub applied_thinking_level: Option<String>,
     pub plan: Option<bool>,
     pub review: Option<bool>,
     pub cwd: Option<String>,
@@ -523,6 +529,8 @@ impl Sessions {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            thinking_level: None,
+            applied_thinking_level: None,
             preset_id: req.preset_id.clone(),
             applied_preset: None,
             plan: req.plan,
@@ -658,6 +666,7 @@ impl Sessions {
                 row.applied_preset = process.applied_preset.clone();
                 row.applied_plan = process.applied_plan;
                 row.applied_review = process.applied_review;
+                row.applied_thinking_level = process.applied_thinking_level.clone();
                 row.start_error = None;
                 row.updated_at = now_utc();
                 if let Err(e) = self.db.update_session(&row) {
@@ -1093,6 +1102,10 @@ impl Sessions {
                 .get("preset")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
+            row.applied_thinking_level = applied
+                .get("thinkingLevel")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
         }
         }
 
@@ -1103,6 +1116,7 @@ impl Sessions {
         // fail CLOSED (quarantine) rather than keep serving a session whose
         // configuration we cannot state (TASK-048 F3/F5).
         if let Some(level) = &req.thinking_level {
+            row.thinking_level = Some(level.clone());
             let call = self.runtime.request(
                 id,
                 "config/set",
@@ -1114,13 +1128,26 @@ impl Sessions {
                         .get("applied")
                         .and_then(|a| a.get("thinkingLevel"))
                         .and_then(|v| v.as_str());
-                    if applied != Some(level.as_str()) {
+                    if applied == Some(level.as_str()) {
+                        row.applied_thinking_level = Some(level.clone());
+                    } else {
+                        row.applied_thinking_level = None;
                         warning = Some(format!(
                             "the thinking level `{level}` was not confirmed by the harness"
                         ));
                     }
                 }
                 Err(e) => {
+                    // A REFUSAL by the adapter is an ANSWER: the execution it was asked for did NOT
+                    // run, so the session's configuration is unchanged, NOT unknown. Map it to its
+                    // contract identity (a level the model does not offer arrives as
+                    // `validation-failed` -> `400 validation_failed`) and KEEP the session serving.
+                    // Only an UNKNOWN outcome (no answer: a transport failure or a crash) leaves the
+                    // effective configuration uncertain - that remains a fail-closed quarantine
+                    // (TASK-048 F3/F5).
+                    if matches!(e, crate::runtime::StartError::Refused { .. }) {
+                        return Err(SessionError::from_start(e));
+                    }
                     return Err(self
                         .quarantine_session(id, &format!("config/set outcome unknown: {e}"))
                         .await);
@@ -1338,6 +1365,8 @@ impl Sessions {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            thinking_level: None,
+            applied_thinking_level: None,
             preset_id: source.preset_id.clone(),
             applied_preset: None,
             plan: source.plan,
@@ -1507,6 +1536,8 @@ impl Sessions {
             applied_model: row.applied_model.clone(),
             applied_provider: row.applied_provider.clone(),
             applied_route: row.applied_route.clone(),
+            thinking_level: row.thinking_level.clone(),
+            applied_thinking_level: row.applied_thinking_level.clone(),
             plan: row.plan,
             review: row.review,
             cwd: row.cwd.clone(),
@@ -2338,6 +2369,8 @@ mod reconcile_tests {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            thinking_level: None,
+            applied_thinking_level: None,
             preset_id: None,
             applied_preset: None,
             plan: None,

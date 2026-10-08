@@ -23,7 +23,8 @@ from tally import Tally, combo  # noqa: E402
 t = Tally("thinking/level")
 combo(hub_sha())
 HARNESS = os.environ.get("PI_HARNESS", "pi")
-LEVELS = ["low", "high"]  # the levels we DECLARE the model accepts (the provider's own list has none)
+# The levels come from the MODEL's own configuration (pi's `thinkingLevelMap`), never invented: we
+# pick a model that states levels and declare EXACTLY those, then require the hub to accept them.
 
 hub = Hub()
 try:
@@ -49,7 +50,20 @@ try:
     t.check(rf["status"] < 300, "the provider catalog is refreshed (real fetch)", f"status={rf['status']} {rf['text'][:160]}")
     cached = (hub.get(f"/v1/model-providers/{PROV}/models")["json"] or {}).get("models") or []
     t.check(len(cached) > 0, "the provider serves real models (fetched)", f"models={[m.get('id') for m in cached][:6]}")
-    MODEL = (cached[0] or {}).get("id")
+    # Choose a model whose OWN configuration states thinking levels (thinkingLevelMap), so the levels
+    # below are the real ones - not made up.
+    import json as _json
+    src = _json.load(open(os.path.expanduser("~/.pi/agent/models.json"), encoding="utf-8"))["providers"]["HOME-JP-prod"]["models"]
+    pick, LEVELS = None, []
+    for m in src:
+        tlm = m.get("thinkingLevelMap") or {}
+        lv = [k for k, v in tlm.items() if v is not None]
+        if len(lv) >= 2:
+            pick, LEVELS = m["id"], lv
+            break
+    t.check(pick is not None, "a model in the provider states >=2 thinking levels (thinkingLevelMap)",
+            f"no model stated thinkingLevelMap in {os.path.expanduser('~/.pi/agent/models.json')}")
+    MODEL = pick
 
     # Declare the thinking levels for that model (the documented way a caller states them) and
     # refresh so the catalog carries them.

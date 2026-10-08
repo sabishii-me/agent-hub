@@ -18,6 +18,10 @@ pub struct SessionRow {
     pub applied_provider: Option<String>,
     /// The native route the adapter resolved (`applied.connectionId`).
     pub applied_route: Option<String>,
+    /// The thinking level the caller asked for (contract `thinkingLevel`).
+    pub thinking_level: Option<String>,
+    /// The thinking level the adapter CONFIRMED (`applied.thinkingLevel`); null = unconfirmed.
+    pub applied_thinking_level: Option<String>,
     /// The preset the session was created with (opaque id; null = harness default).
     pub preset_id: Option<String>,
     /// The preset the harness confirmed it applied (`applied.preset`).
@@ -68,6 +72,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   applied_model          TEXT,
   applied_provider       TEXT,
   applied_route          TEXT,
+  thinking_level         TEXT,
+  applied_thinking_level TEXT,
   preset_id              TEXT,
   applied_preset         TEXT,
   plan                   INTEGER,
@@ -128,10 +134,10 @@ impl crate::Db {
 
     fn insert_session_tx(conn: &Connection, s: &SessionRow) -> Result<(), rusqlite::Error> {
         conn.execute(
-            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, additional_dirs, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+            "INSERT INTO sessions (id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, thinking_level, applied_thinking_level, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, additional_dirs, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
             params![
-                s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.preset_id, s.applied_preset,
+                s.id, s.harness_id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.thinking_level, s.applied_thinking_level, s.preset_id, s.applied_preset,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64),
                 s.applied_plan.map(|b| b as i64), s.applied_review.map(|b| b as i64),
                 s.cwd, serde_json::to_string(&s.additional_dirs).unwrap_or_else(|_| "[]".into()), s.title,
@@ -151,30 +157,32 @@ impl crate::Db {
             applied_model: r.get(4)?,
             applied_provider: r.get(5)?,
             applied_route: r.get(6)?,
-            preset_id: r.get(7)?,
-            applied_preset: r.get(8)?,
-            plan: r.get::<_, Option<i64>>(9)?.map(|v| v != 0),
-            review: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
-            applied_plan: r.get::<_, Option<i64>>(11)?.map(|v| v != 0),
-            applied_review: r.get::<_, Option<i64>>(12)?.map(|v| v != 0),
-            cwd: r.get(13)?,
+            thinking_level: r.get(7)?,
+            applied_thinking_level: r.get(8)?,
+            preset_id: r.get(9)?,
+            applied_preset: r.get(10)?,
+            plan: r.get::<_, Option<i64>>(11)?.map(|v| v != 0),
+            review: r.get::<_, Option<i64>>(12)?.map(|v| v != 0),
+            applied_plan: r.get::<_, Option<i64>>(13)?.map(|v| v != 0),
+            applied_review: r.get::<_, Option<i64>>(14)?.map(|v| v != 0),
+            cwd: r.get(15)?,
             additional_dirs: r
-                .get::<_, Option<String>>(14)?
+                .get::<_, Option<String>>(16)?
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
-            title: r.get(15)?,
-            status: r.get(16)?,
-            created_at: r.get(17)?,
-            updated_at: r.get(18)?,
-            deleted: r.get::<_, i64>(19)? != 0,
-            forked_from_session: r.get(20)?,
-            forked_from_turn: r.get(21)?,
-            native_ref: r.get(22)?,
-            start_error: r.get(23)?,
+            title: r.get(17)?,
+            status: r.get(18)?,
+            created_at: r.get(19)?,
+            updated_at: r.get(20)?,
+            deleted: r.get::<_, i64>(21)? != 0,
+            forked_from_session: r.get(22)?,
+            forked_from_turn: r.get(23)?,
+            native_ref: r.get(24)?,
+            start_error: r.get(25)?,
         })
     }
 
-    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, additional_dirs, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
+    const SESSION_COLS: &'static str = "id, harness_id, model_provider_id, model_id, applied_model, applied_provider, applied_route, thinking_level, applied_thinking_level, preset_id, applied_preset, plan, review, applied_plan, applied_review, cwd, additional_dirs, title, status, created_at, updated_at, deleted, forked_from_session, forked_from_turn, native_ref, start_error";
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, DbError> {
         let conn = self.lock();
@@ -206,9 +214,9 @@ impl crate::Db {
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
-            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, preset_id=?7, applied_preset=?8, plan=?9, review=?10, applied_plan=?11, applied_review=?12, additional_dirs=?13, title=?14, status=?15, updated_at=?16, native_ref=?17, start_error=?18 WHERE id=?1",
+            "UPDATE sessions SET model_provider_id=?2, model_id=?3, applied_model=?4, applied_provider=?5, applied_route=?6, thinking_level=?7, applied_thinking_level=?8, preset_id=?9, applied_preset=?10, plan=?11, review=?12, applied_plan=?13, applied_review=?14, additional_dirs=?15, title=?16, status=?17, updated_at=?18, native_ref=?19, start_error=?20 WHERE id=?1",
             params![
-                s.id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.preset_id, s.applied_preset,
+                s.id, s.model_provider_id, s.model_id, s.applied_model, s.applied_provider, s.applied_route, s.thinking_level, s.applied_thinking_level, s.preset_id, s.applied_preset,
                 s.plan.map(|b| b as i64), s.review.map(|b| b as i64),
                 s.applied_plan.map(|b| b as i64), s.applied_review.map(|b| b as i64),
                 serde_json::to_string(&s.additional_dirs).unwrap_or_else(|_| "[]".into()),
@@ -559,6 +567,8 @@ mod turn_admission_tests {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            thinking_level: None,
+            applied_thinking_level: None,
             preset_id: None,
             applied_preset: None,
             plan: None,
@@ -655,6 +665,8 @@ mod cancel_hold_tests {
             applied_model: None,
             applied_provider: None,
             applied_route: None,
+            thinking_level: None,
+            applied_thinking_level: None,
             preset_id: None,
             applied_preset: None,
             plan: None,
