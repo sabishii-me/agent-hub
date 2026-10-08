@@ -86,22 +86,49 @@ try:
             "with the provider+model: the session reaches `active`",
             f"status={s2.get('status')} err={s2.get('startError')}")
 
-    # ---- 5. REMOVE: pin the code the system RETURNS. ------------------------------------------
-    # The contract wants 409 plugin_in_use while a session is open (docs/issues/20261008-063000).
-    # Today the hub has no such guard, so record what it actually does - and flag the mismatch.
+    # ---- 5. REMOVE with an OPEN session: the contract REFUSES it (409 plugin_in_use). ---------
     d = hub.delete("/v1/plugins/pi", key="remove-open")
-    t.check(d["status"] in (200, 202, 409),
-            "removing a plugin with an open session returns a defined code (never a 5xx)",
+    t.check(d["status"] == 409 and (d["json"] or {}).get("error") == "plugin_in_use",
+            "remove with an OPEN session -> 409 plugin_in_use (the harness is not yanked out)",
             f"status={d['status']} body={d['text'][:160]}")
-    if d["status"] == 409:
-        t.check((d["json"] or {}).get("error") == "plugin_in_use",
-                "the refusal (when it happens) names plugin_in_use", f"body={d['text'][:160]}")
-    else:
-        # The contract requires 409 plugin_in_use; the hub allowed it. Record the mismatch, do not
-        # hide it: this is a REAL finding, not a test to bend.
-        t.check(False,
-                "CONTRACT: removing a plugin with open sessions must be refused 409 plugin_in_use",
-                f"the hub accepted the remove (status={d['status']}) - see docs/issues/20261008-063000")
+    # The plugin is still there: the refusal changed nothing.
+    g = hub.get("/v1/plugins/pi")
+    t.check(g["status"] == 200 and (g["json"] or {}).get("plugin", {}).get("state") == "ready",
+            "after the refused remove the plugin is still `ready` (nothing was torn down)",
+            f"status={g['status']} state={(g['json'] or {}).get('plugin', {}).get('state')}")
+
+    # ---- 6. CLOSE the sessions, THEN remove: now it succeeds. ----------------------------------
+    # BOTH sessions on this harness must be closed: the guard is per harness, and each open session
+    # holds it (the product is right - both are still using `pi`).
+    for s_id in (sid, sid2):
+        c = hub.post(f"/v1/sessions/{s_id}/close", key=f"close-{s_id}")
+        t.check(c["status"] in (200, 202), f"the session {s_id} CLOSES", f"status={c['status']} {c['text'][:120]}")
+    for s_id in (sid, sid2):
+        closed = None
+        for _ in range(240):
+            s = hub.get(f"/v1/sessions/{s_id}")
+            closed = (s["json"] or {}).get("session", {}).get("status")
+            if closed in ("readonly", "closed"):
+                break
+            time.sleep(0.25)
+        t.check(closed in ("readonly", "closed"), f"the session {s_id} reaches a closed status", f"status={closed}")
+
+    d2 = hub.delete("/v1/plugins/pi", key="remove-after-close")
+    t.check(d2["status"] in (200, 202),
+            "remove AFTER the session is closed -> accepted (the harness is free)",
+            f"status={d2['status']} body={d2['text'][:160]}")
+    gone = False
+    for _ in range(600):
+        g = hub.get("/v1/plugins/pi")
+        if g["status"] == 404 or (g["json"] or {}).get("plugin", {}).get("state") == "absent":
+            gone = True
+            break
+        time.sleep(0.25)
+    t.check(gone, "the removed plugin is GONE (the install is fully undone)",
+            f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
+    hs = hub.get("/v1/harnesses")
+    t.check(not any(h.get("id") == "pi" for h in (hs["json"] or {}).get("harnesses", [])),
+            "the removed harness is no longer listed", f"rows={[h.get('id') for h in (hs['json'] or {}).get('harnesses', [])]}")
 finally:
     ok = t.done()
     hub.cleanup()
