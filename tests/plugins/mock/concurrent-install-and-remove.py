@@ -52,7 +52,9 @@ try:
 
     # It converges to EXACTLY ONE plugin, `ready`, with a valid manifest on disk.
     ready = False
-    for _ in range(240):
+    # The install is REAL: the hub downloads the runtime closure (146 tarballs for pi), so the
+    # wait is sized for that, not for a mock (was 60s, which a real install outlasts).
+    for _ in range(1200):
         g = hub.get("/v1/plugins/pi")
         st = None if g["status"] == 404 else (g["json"] or {}).get("plugin", {}).get("state")
         if st == "ready":
@@ -74,9 +76,9 @@ try:
             hub.delete("/v1/plugins/pi", key=f"ch-d{i}")
     with cf.ThreadPoolExecutor(max_workers=4) as ex:
         list(ex.map(churn, range(4)))
-    # Let the ops settle.
+    # Let the ops settle (same real-install budget as above).
     final = None
-    for _ in range(240):
+    for _ in range(1200):
         g = hub.get("/v1/plugins/pi")
         final = "absent" if g["status"] == 404 else (g["json"] or {}).get("plugin", {}).get("state")
         if final in ("ready", "absent", "failed"):

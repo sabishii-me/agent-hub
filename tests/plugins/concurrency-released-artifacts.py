@@ -25,7 +25,7 @@ from mock_registry import MockRegistry  # noqa: E402
 from tally import Tally  # noqa: E402
 
 FIX = os.path.join(ROOT, "tests", "fixtures", "released")
-RELEASED = [("pi", "0.1.10"), ("jouzu", "0.1.11"), ("deepseek", "0.1.9")]
+RELEASED = [("pi", "0.1.10"), ("jouzu", "0.1.11"), ("deepseek", "0.1.10")]
 IDS = [p for p, _ in RELEASED]
 
 ap = argparse.ArgumentParser()

@@ -325,6 +325,22 @@ impl Plugins {
             .unwrap_or(false)
     }
 
+    /// ATOMICALLY claim `id` for an in-flight `op`: under ONE lock, refuse if an operation is
+    /// already in flight, else mark it and return true. `busy()` + `enter()` as two calls is a
+    /// race: two concurrent installs of the SAME id both see the id free and both proceed
+    /// (measured: two 202s for one id). This closes it.
+    fn try_claim(&self, id: &str, op: Op) -> bool {
+        let mut ops = self.ops.lock().expect("ops mutex");
+        let set = ops.entry(id.to_string()).or_default();
+        if set.in_flight() {
+            return false;
+        }
+        // A new operation supersedes a previous `failed` verdict (a retry).
+        set.clear_failed();
+        set.enter(op);
+        true
+    }
+
     fn leave(&self, id: &str, op: Op) {
         let mut ops = self.ops.lock().expect("ops mutex");
         if let Some(set) = ops.get_mut(id) {
@@ -498,9 +514,11 @@ impl Plugins {
                     .ok_or_else(|| PluginError::InvalidManifest("the source manifest has no id".into()))?
             }
         };
-        // A conflicting command on the SAME plugin is refused 409 (contract): an in-flight install
-        // owns its id, so neither a second install nor a remove may proceed.
-        if self.busy(&id) {
+        // ATOMICALLY: a conflicting command on the SAME plugin is refused 409, and no other
+        // concurrent call for this id may slip past. Claiming marks `installing` in the same
+        // critical section that checks it - `busy()` then `enter()` is a race (two same-id installs
+        // both saw it free).
+        if !self.try_claim(&id, Op::Installing) {
             return Err(PluginError::InProgress(id.clone()));
         }
         // A DEPLOYMENT directory is READ-ONLY to the hub: if a directory for this id already exists
@@ -514,16 +532,19 @@ impl Plugins {
                 .map(|r| r.installed_at.is_some())
                 .unwrap_or(false);
             if !owns && target.join("manifest.json").exists() {
+                self.leave(&id, Op::Installing);
                 return Err(PluginError::NotInstalledByHub(id.clone()));
             }
         }
         // Same identity + same request (install of this id) is a retry.
         match self.ids.present(command_id, &format!("install:{id}")) {
             Idempotency::Replay => {
+                self.leave(&id, Op::Installing);
                 let row = self.row_for_dir(&id);
                 return Ok(InstallIntent::Replay(self.view(&id, Some(row))));
             }
             Idempotency::Conflict => {
+                self.leave(&id, Op::Installing);
                 return Err(PluginError::Conflict(command_id.into()));
             }
             Idempotency::New => {}
@@ -537,11 +558,9 @@ impl Plugins {
             .ok(),
             crate::source::Source::Git { .. } => None,
         };
-        // ENTER `installing` and ANNOUNCE **BEFORE the download** (docs/issues/20261007-183000):
+        // `installing` was claimed ATOMICALLY above; ANNOUNCE it now (docs/issues/20261007-183000):
         // the contract says a 202 Location names a resource readable, in `installing`, WHILE it
-        // fetches. The download runs in the detached `finish_install`, so `installing` is a real,
-        // visible duration instead of a ~0ms blip announced only after the bytes had landed.
-        self.enter(&id, Op::Installing);
+        // fetches. The download runs in the detached `finish_install`.
         self.announce(&id);
         Ok(InstallIntent::Proceed { id, source: source.clone(), artifact_json })
     }
@@ -690,16 +709,15 @@ impl Plugins {
     /// Validate a remove **before any work**: the plugin must be one the hub
     /// installed (a deployment directory is refused). Registers the identity.
     pub fn begin_remove(&self, command_id: &str, id: &str) -> Result<RemoveIntent, PluginError> {
-        // PER-ID lock: only the SAME plugin conflicts; different plugins proceed concurrently.
-        // A conflicting command on the SAME plugin is refused 409 (contract): an in-flight install
-        // owns its id, so a remove while installing is refused HERE, cleanly, not as a 404.
-        if self.busy(id) {
-            return Err(PluginError::InProgress(id.to_string()));
-        }
+        // ATOMICALLY claim the id for a remove: refuse if any operation is in flight, else mark
+        // `removing`. `busy()` then a later `enter()` is a race.
         let id_lock = self.id_lock(id);
         let _op = id_lock
             .try_lock()
-            .map_err(|_| PluginError::Conflict("another install/remove of this plugin is in progress".into()))?;
+            .map_err(|_| PluginError::InProgress(id.to_string()))?;
+        if !self.try_claim(id, Op::Removing) {
+            return Err(PluginError::InProgress(id.to_string()));
+        }
         // Distinguish THREE cases, so the message never lies (docs/issues/20261005-140000):
         //  - a hub-installed plugin (a row with installed_at) -> allowed;
         //  - a DEPLOYMENT directory (no row, but a directory with a manifest exists) ->
@@ -708,6 +726,7 @@ impl Plugins {
         let row = match self.db.plugin(id)? {
             Some(row) => row,
             None => {
+                self.leave(id, Op::Removing);
                 if self.has_dir(id) {
                     return Err(PluginError::NotInstalledByHub(id.into()));
                 }
@@ -715,17 +734,20 @@ impl Plugins {
             }
         };
         if row.installed_at.is_none() {
+            self.leave(id, Op::Removing);
             return Err(PluginError::NotInstalledByHub(id.into()));
         }
         match self.ids.present(command_id, &format!("remove:{id}")) {
-            Idempotency::Replay => return Ok(RemoveIntent::Replay),
-            Idempotency::Conflict => return Err(PluginError::Conflict(command_id.into())),
+            Idempotency::Replay => {
+                self.leave(id, Op::Removing);
+                return Ok(RemoveIntent::Replay);
+            }
+            Idempotency::Conflict => {
+                self.leave(id, Op::Removing);
+                return Err(PluginError::Conflict(command_id.into()));
+            }
             Idempotency::New => {}
         }
-        if let Some(op) = self.current_op(id) {
-            return Err(PluginError::Busy(id.into(), op.as_str().into()));
-        }
-        self.enter(id, Op::Removing);
         self.announce(id);
         Ok(RemoveIntent::Proceed)
     }
@@ -757,11 +779,6 @@ impl Plugins {
         row.detail = Some(reason.to_string());
         let _ = self.db.upsert_plugin(&row);
         self.announce(id);
-    }
-
-    fn current_op(&self, id: &str) -> Option<Op> {
-        let ops = self.ops.lock().expect("ops mutex");
-        ops.get(id).and_then(|s| s.verdict())
     }
 }
 
