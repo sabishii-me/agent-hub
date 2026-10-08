@@ -31,8 +31,9 @@ hub = Hub(plugins_src=PI)
 try:
     hub.start()
     c = hub.post("/v1/model-providers", {"id": "bh", "url": BLACKHOLE, "api": "anthropic-messages", "token": "x-not-a-key"})
+    PROV = ((c.get("json") or {}).get("provider") or {}).get("id")
     t.check(c["status"] < 300, "a provider with a hanging endpoint is registered", f"status={c['status']} {c['text'][:120]}")
-    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "bh", "modelId": "deepseek-flash"}, key="bh-s")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV, "modelId": "deepseek-flash"}, key="bh-s")
     sid = r["json"]["session"]["id"]
 
     # The hub MUST answer (not freeze) - poll the status with a bound. A hang in the

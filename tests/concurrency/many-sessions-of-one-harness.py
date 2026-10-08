@@ -35,10 +35,11 @@ if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    t.require(register_provider(hub) is not None, "a real provider is registered", "no real provider")
+    PROV = register_provider(hub)
+    t.require(PROV is not None, "a real provider is registered", "no real provider")
 
     def start(i):
-        r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL}, key=f"ms-{i}")
+        r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key=f"ms-{i}")
         return r["json"]["session"]["id"]
 
     with cf.ThreadPoolExecutor(max_workers=N) as ex:

@@ -31,7 +31,7 @@ hub = Hub(plugins_src=PI)
 try:
     hub.start()
     t.require(register_provider(hub) is not None, "a real provider is registered", "no real provider in ~/.pi/agent/models.json")
-    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL}, key="c3-s")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key="c3-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")

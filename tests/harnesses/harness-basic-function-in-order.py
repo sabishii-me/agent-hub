@@ -77,7 +77,7 @@ try:
     pr = register_provider(hub)
     t.check(pr is not None, "the provider is registered", f"provider={pr}")
     # A provider alone is not a session model; the session names the provider+model (the real path).
-    r2 = hub.post("/v1/sessions", {"harnessId": "pi", "modelProviderId": "p", "modelId": MODEL}, key="with-provider")
+    r2 = hub.post("/v1/sessions", {"harnessId": "pi", "modelProviderId": PROV["id"], "modelId": MODEL}, key="with-provider")
     t.check(r2["status"] == 202, "with the provider+model: the session is accepted (202)",
             f"status={r2['status']} {r2['text'][:160]}")
     sid2 = (r2["json"] or {}).get("session", {}).get("id")

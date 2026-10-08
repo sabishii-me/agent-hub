@@ -35,8 +35,9 @@ def assistant_messages(hub, sid):
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    hub.post("/v1/model-providers", {"id": "p", "url": prov["url"], "api": prov["api"], "token": prov["token"]})
-    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL}, key="m-1")
+    c = hub.post("/v1/model-providers", {"id": "HOME-JP-prod", "url": prov["url"], "api": prov["api"], "token": prov["token"]})
+    PROV = ((c.get("json") or {}).get("provider") or {}).get("id")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV, "modelId": MODEL}, key="m-1")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")

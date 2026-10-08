@@ -472,15 +472,20 @@ def wait_turn(hub, sid, tid, states, tries=240, interval=0.25):
     return last or {}
 
 
-def register_provider(hub, pid="p"):
-    """Register the REAL provider from ~/.pi/agent/models.json. Returns its identity
-    dict, or None when the host has none (a missing real dependency FAILS, never
-    skips)."""
+def register_provider(hub, pid=None):
+    """Register the REAL provider from ~/.pi/agent/models.json under a STABLE id, and return its
+    identity. The id is the provider's own name (`HOME-JP-prod`, from the file) unless the caller
+    names one - the hub does NOT generate ids (docs/issues/20261008-090000). Returns None when the
+    host has no real provider (a missing real dependency FAILS, never skips)."""
     prov = real_provider()
     if not prov:
         return None
-    hub.post("/v1/model-providers", {"id": pid, "url": prov["url"], "api": prov["api"], "token": prov["token"]})
-    return {"id": pid, **prov}
+    name = pid or prov.get("id") or "HOME-JP-prod"
+    r = hub.post("/v1/model-providers", {"id": name, "url": prov["url"], "api": prov["api"], "token": prov["token"]})
+    # The hub owns the final id (a user provider lives in the `custom:` namespace): read it BACK
+    # from the response - the caller must use the id the hub actually assigned.
+    real_id = (((r.get("json") or {}).get("provider") or {}).get("id")) or name
+    return {"id": real_id, **prov}
 
 
 def real_provider(env_var="HOME_JP_PROD_JSON"):
@@ -496,7 +501,8 @@ def real_provider(env_var="HOME_JP_PROD_JSON"):
     p = (cfg.get("providers") or {}).get("HOME-JP-prod")
     if not p or not p.get("baseUrl") or not p.get("apiKey"):
         return None
-    return {"url": p["baseUrl"], "api": p.get("api"), "token": p["apiKey"]}
+    # The provider's ID IS its name in the source (the `providers` key) - no generated value.
+    return {"id": "HOME-JP-prod", "url": p["baseUrl"], "api": p.get("api"), "token": p["apiKey"]}
 
 
 def child_processes(parent_pid):

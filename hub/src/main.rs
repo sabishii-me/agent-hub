@@ -253,12 +253,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await
                 .map_err(|e| format!("{}|{}", e.code(), e))?;
             Ok(agent_hub_sessions::runtime::Grant {
-                connection_id: g.connection_id,
+                provider_id: g.provider_id,
                 value: g.value,
                 url: g.url,
                 api: g.api,
                 declarations: g.declarations,
-                requested_provider_id: g.requested_provider_id,
                 requested_model_id: None,
             })
         }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<agent_hub_sessions::runtime::Grant, String>> + Send>>

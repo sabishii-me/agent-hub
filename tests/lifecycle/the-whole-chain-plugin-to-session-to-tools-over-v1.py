@@ -54,8 +54,9 @@ try:
             "the installed harness is listed", f"rows={[h.get('id') for h in (hs['json'] or {}).get('harnesses', [])]}")
 
     # 3. A real provider, then a SESSION on the just-installed harness.
-    t.require(register_provider(hub) is not None, "a real provider is registered", "no real provider")
-    r = hub.post("/v1/sessions", {"harnessId": "pi", "modelProviderId": "p", "modelId": MODEL}, key="chain-s")
+    PROV = register_provider(hub)
+    t.require(PROV is not None, "a real provider is registered", "no real provider")
+    r = hub.post("/v1/sessions", {"harnessId": "pi", "modelProviderId": PROV["id"], "modelId": MODEL}, key="chain-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session on the installed plugin is active",

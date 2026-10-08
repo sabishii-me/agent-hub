@@ -28,9 +28,10 @@ if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    t.require(register_provider(hub) is not None, "a real provider is registered", "no real provider")
-    a = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL}, key="cc-a")
-    b = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL}, key="cc-b")
+    PROV = register_provider(hub)
+    t.require(PROV is not None, "a real provider is registered", "no real provider")
+    a = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key="cc-a")
+    b = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key="cc-b")
     sid_a = a["json"]["session"]["id"]
     sid_b = b["json"]["session"]["id"]
     t.check(hub.wait_status(sid_a, "active").get("status") == "active", "session A is active")

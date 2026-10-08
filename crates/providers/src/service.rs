@@ -272,7 +272,39 @@ impl Providers {
                 }
             }
         }
-        let id = req.id.clone().unwrap_or_else(|| new_id("prov"));
+        // The ID rule (docs/issues/20261008-090000):
+        //  - an INSTALLED type (a shipped model adapter, e.g. `deepseek`) OWNS its id: the id IS the
+        //    type's id. A caller cannot rename it, and cannot shadow the official one.
+        //  - the built-in `custom-compatible` type is the USER's own provider: its id lives in the
+        //    `custom:` namespace, so a user naming it `deepseek` gets `custom:deepseek` and can
+        //    NEVER collide with the official `deepseek`.
+        // No id is ever generated; nothing is random.
+        let user_id = req.id.clone().filter(|s| !s.trim().is_empty());
+        let id = match req.provider_type.as_deref() {
+            Some(t) if t != Self::BUILTIN_TYPE => {
+                // An installed type: the id is the type's id (fixed). A different caller id is refused.
+                if let Some(given) = &user_id {
+                    if given != t {
+                        return Err(ProviderError::Validation(format!(
+                            "provider type `{t}` owns its id; a provider of this type is named `{t}`, not `{given}`"
+                        )));
+                    }
+                }
+                t.to_string()
+            }
+            _ => {
+                // The user's own provider: `custom:<name>`, the name REQUIRED. Idempotent: a name
+                // already in the namespace is kept as-is.
+                let name = user_id.ok_or_else(|| {
+                    ProviderError::Validation("id is required: name this provider (it becomes `custom:<id>`)".into())
+                })?;
+                if name.starts_with("custom:") || name.starts_with("user:") {
+                    name
+                } else {
+                    format!("custom:{name}")
+                }
+            }
+        };
         let lock = self.lock_for(&id);
         let _guard = lock.lock().await;
         let mut record = ProviderRecord {
@@ -608,16 +640,6 @@ impl Providers {
     }
 }
 
-fn new_id(prefix: &str) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static C: AtomicU64 = AtomicU64::new(0);
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    format!("{prefix}-{millis:x}-{:x}", C.fetch_add(1, Ordering::Relaxed))
-}
-
 impl Providers {
     /// The boot sweep: resolve every credential transition that was in flight
     /// when the process stopped. It is **retry-safe**: a journal entry is removed
@@ -740,12 +762,14 @@ impl Providers {
 /// What the sessions domain needs to grant a provider to an adapter. Kept as a
 /// plain struct here so `sessions` does not depend on `providers`.
 pub struct ResolvedGrant {
-    pub connection_id: String,
+    /// The provider's id (its stable name). The session sends it to the adapter as the adapter-v1
+    /// `config.connectionId` and the adapter names the injected route `hub-<id>`. There is no
+    /// separate "connection id" or "requested provider id": the provider id IS the identity.
+    pub provider_id: String,
     pub value: String,
     pub url: Option<String>,
     pub api: Option<String>,
     pub declarations: Option<serde_json::Value>,
-    pub requested_provider_id: String,
 }
 
 impl Providers {
@@ -851,12 +875,11 @@ impl Providers {
             serde_json::to_value(&rec.declarations).ok()
         };
         Ok(ResolvedGrant {
-            connection_id: id.to_string(),
+            provider_id: id.to_string(),
             value,
             url: Some(url),
             api: rec.api.clone(),
             declarations,
-            requested_provider_id: id.to_string(),
         })
     }
 }

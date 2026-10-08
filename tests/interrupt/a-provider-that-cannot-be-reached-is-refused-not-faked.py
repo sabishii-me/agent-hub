@@ -30,9 +30,10 @@ hub = Hub(plugins_src=PI)
 try:
     hub.start()
     c = hub.post("/v1/model-providers", {"id": "dead", "url": DEAD, "api": "anthropic-messages", "token": "x-not-a-key"})
+    PROV = ((c.get("json") or {}).get("provider") or {}).get("id")
     t.check(c["status"] < 300, "a provider with a dead endpoint is registered", f"status={c['status']} {c['text'][:120]}")
 
-    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "dead", "modelId": "deepseek-flash"}, key="pu-s")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV, "modelId": "deepseek-flash"}, key="pu-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     # HONEST: the session must NOT be `active` (an unreachable provider cannot serve).

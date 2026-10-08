@@ -434,8 +434,8 @@ impl Sessions {
         // `config.model`. The adapter then reports `applied.modelProviderId` (the
         // requested identity) and `applied.connectionId` (its resolved native
         // route).
-        config["connectionId"] = serde_json::json!(grant.connection_id);
-        config["modelProviderId"] = serde_json::json!(grant.connection_id);
+        config["connectionId"] = serde_json::json!(grant.provider_id);
+        config["modelProviderId"] = serde_json::json!(grant.provider_id);
         if let Some(m) = model_id {
             config["model"] = serde_json::json!(m);
         }

@@ -137,16 +137,13 @@ pub struct StartSpec {
 /// the keychain.
 #[derive(Debug, Clone)]
 pub struct Grant {
-    /// The hub's provider id (the adapter names it `hub-<connectionId>`).
-    pub connection_id: String,
+    /// The hub's provider id (its stable name).
+    pub provider_id: String,
     /// The credential value (from the OS secret store; never logged).
     pub value: String,
     pub url: Option<String>,
     pub api: Option<String>,
     pub declarations: Option<Value>,
-    /// The provider id AS THE HUB requested it, recorded from the adapter's
-    /// `applied` proof (never assumed).
-    pub requested_provider_id: String,
     /// The model to select within that provider's route.
     pub requested_model_id: Option<String>,
 }
@@ -270,7 +267,7 @@ impl Sessions {
         // pretend a session is active with a provider it did not receive.
         if let Some(grant) = &spec.grant {
             let params = json!({
-                "connectionId": grant.connection_id,
+                "connectionId": grant.provider_id,
                 "value": grant.value,
                 "url": grant.url,
                 // The DIALECT the provider speaks. Without it the adapter defaults
@@ -356,7 +353,7 @@ impl Sessions {
         // session is NOT started: an unconfirmed identity is never recorded as
         // applied.
         if let Some(grant) = &spec.grant {
-            let want_provider = Some(grant.requested_provider_id.as_str());
+            let want_provider = Some(grant.provider_id.as_str());
             let want_model = grant.requested_model_id.as_deref();
             let ok_provider = applied_provider.as_deref() == want_provider;
             let ok_model = match want_model {
@@ -662,7 +659,7 @@ impl Sessions {
     /// provider switch: `credentials/grant` precedes `config/set`).
     pub async fn grant(&self, sid: &str, grant: &Grant) -> Result<(), StartError> {
         let params = json!({
-            "connectionId": grant.connection_id,
+            "connectionId": grant.provider_id,
             "value": grant.value,
             "url": grant.url,
             "api": grant.api,

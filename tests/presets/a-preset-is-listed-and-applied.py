@@ -27,7 +27,8 @@ if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    t.require(register_provider(hub) is not None, "a real provider is registered", "no real provider")
+    PROV = register_provider(hub)
+    t.require(PROV is not None, "a real provider is registered", "no real provider")
 
     # The preset catalogue for the harness (declared capability `presets`).
     pr = hub.get(f"/v1/harnesses/{HARNESS}/presets")
@@ -37,7 +38,7 @@ try:
     t.check("standard" in ids or "heavy-review" in ids, "the shipped presets are listed", f"presets={ids}")
 
     # Create with an explicit preset and confirm it is the one APPLIED.
-    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL, "presetId": "standard"}, key="pa-s")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL, "presetId": "standard"}, key="pa-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")
@@ -46,7 +47,7 @@ try:
     # An unknown preset must NOT yield a usable session. Create is a long command (202),
     # so the refusal lands on the resource: the session must end `starting_failed` with a
     # reason, never `active` with a preset that does not exist.
-    r2 = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL, "presetId": "no-such-preset"}, key="pa-s2")
+    r2 = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL, "presetId": "no-such-preset"}, key="pa-s2")
     t.check(r2["status"] in (202, 400, 422), "the create is accepted (202) or refused before it", f"status={r2['status']}")
     if r2["status"] == 202:
         sid2 = r2["json"]["session"]["id"]

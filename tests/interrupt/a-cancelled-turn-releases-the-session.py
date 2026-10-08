@@ -33,9 +33,10 @@ if not t.require(prov is not None, "a real provider is present", "no real provid
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    c = hub.post("/v1/model-providers", {"id": "p", "url": prov["url"], "api": prov["api"], "token": prov["token"]})
+    c = PROV = hub.post("/v1/model-providers", {"id": "HOME-JP-prod", "url": prov["url"], "api": prov["api"], "token": prov["token"]})
+    PROV = ((c.get("json") or {}).get("provider") or {}).get("id")
     t.check(c["status"] < 300, "a real provider is registered", f"status={c['status']} {c['text'][:120]}")
-    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": os.environ.get("PI_MODEL", "deepseek-flash")}, key="cn-1")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV, "modelId": os.environ.get("PI_MODEL", "deepseek-flash")}, key="cn-1")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")

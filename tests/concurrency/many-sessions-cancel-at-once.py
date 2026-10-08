@@ -34,11 +34,12 @@ if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    t.require(register_provider(hub) is not None, "a real provider is registered", "no real provider")
+    PROV = register_provider(hub)
+    t.require(PROV is not None, "a real provider is registered", "no real provider")
 
     sids, tids = [], []
     for i in range(N):
-        r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": "p", "modelId": MODEL}, key=f"c1-s{i}")
+        r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key=f"c1-s{i}")
         sid = r["json"]["session"]["id"]; sids.append(sid)
         t.check(hub.wait_status(sid, "active").get("status") == "active", f"session {i} is active")
         tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "Count slowly from 1 to 400."}], "idempotencyKey": f"c1-t{i}"}, key=f"c1-t{i}")
