@@ -76,12 +76,12 @@ try:
                 f"{held} connections held OPEN AT ONCE, and the hub still answers a new GET",
                 f"held={held} status={fast['status']} dt={dt:.2f}s")
     else:
-        # Do NOT call this a product failure: the MEASUREMENT could not establish 100 simultaneous
-        # connections on this host (a client/socket limit or the hub's fast serve). Unverified.
-        t.blocked_check(
-            ">=100 connections held OPEN AT THE SAME TIME",
-            f"only {held}/{N} sockets were open at once (err={connected['err']}); the measurement "
-            f"did not establish 100 simultaneous connections - NOT a product verdict")
+        # The target (ADR-0009) is >=100 CONCURRENTLY open connections. If the measurement cannot
+        # hold 100, that is a REAL failure to reproduce the target - NOT a "block". A block is a T0;
+        # there is nothing to wait for, so this must be red.
+        t.check(False,
+                ">=100 connections held OPEN AT THE SAME TIME (ADR-0009 target)",
+                f"only {held}/{N} sockets were open at once (err={connected['err']})")
     t.check(fast["status"] == 200, "the hub answers a new GET while connections are held", f"status={fast['status']}")
 
     # A connection held open by a SECOND request must not block a short one: run a slow

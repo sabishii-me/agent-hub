@@ -24,14 +24,6 @@ class Tally:
             print(f"  FAIL {what}" + (f" - {detail}" if detail else ""))
         return bool(ok)
 
-    def blocked_check(self, what, why):
-        """REMOVED as a state. A missing precondition is a FAILURE with a reason, never a
-        separate 'BLOCKED' outcome: any BLOCK is a T0 (the environment or the test is wrong).
-        Kept as a name so callers fail loudly instead of silently skipping."""
-        self.failed += 1
-        print(f"  FAIL {what} - {why}")
-        return False
-
     def require(self, condition, what, missing):
         """A PRECONDITION of the test. A missing real dependency is a FAILURE, not a
         skip: the test exists to prove a capability against the real thing, and a
@@ -74,14 +66,9 @@ def combo(hub_sha, extra=""):
 class Blocked(Exception):
     """REMOVED as an outcome. A test that cannot exercise a real precondition now FAILS with the
     reason (exit 1), because a BLOCK is a T0: a missing precondition means the environment or the
-    test is wrong, not that the result is 'unverified'. Kept so old callers fail loudly."""
+    test is wrong, not that the result is 'unverified'. There is no `blocked()` helper: no caller
+    may declare a block - a precondition that cannot be met is a FAILURE with its reason."""
 
     def __init__(self, reason):
         super().__init__(reason)
         self.reason = reason
-
-
-def blocked(reason):
-    """A BLOCK is a T0. Print it as a FAILURE and exit NON-ZERO (1), never the old sentinel 3."""
-    print(f"FAIL: {reason}")
-    raise SystemExit(1)

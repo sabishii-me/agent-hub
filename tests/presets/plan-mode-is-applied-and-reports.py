@@ -59,10 +59,25 @@ try:
 
     # (C) ACTUAL RUNTIME BEHAVIOUR under plan (e.g. a write is refused/hidden). This needs a
     # behaviour the contract makes observable; we do NOT infer it from `plan`/`appliedPlan` and do
-    # NOT fabricate it. UNVERIFIED here.
-    t.blocked_check(
-        "(C) plan ACTUALLY constrains runtime behaviour (a write under plan is refused/hidden)",
-        "no contract-pinned observable for it; not inferred from the plan/appliedPlan FIELDS")
+    # NOT fabricate it.
+    # (C) plan ACTUALLY constrains runtime behaviour: under plan, a write tool is not available, so
+    # asking the model to WRITE A FILE must leave the file ABSENT. That is a fact about the
+    # filesystem, not the `plan` field - a real observable.
+    target = os.path.join(hub.dir, "plan-should-not-write.txt")
+    if os.path.exists(target):
+        os.remove(target)
+    tr = hub.post(f"/v1/sessions/{sid}/turns",
+                  {"content": [{"type": "text", "text":
+                    f"Use your write tool to create a file at {target} containing HELLO."}],
+                   "idempotencyKey": "plan-write"}, key="plan-write")
+    t.check(tr["status"] == 202, "(C) under plan, a write request is admitted as a turn",
+            f"status={tr['status']} {tr['text'][:140]}")
+    tid = (tr["json"] or {}).get("turn", {}).get("id")
+    if tid:
+        wait_turn(hub, sid, tid, {"ended"}, tries=480)
+    t.check(not os.path.exists(target),
+            "(C) plan CONSTRAINS runtime: the write tool is unavailable, so the file is NOT created",
+            f"the file exists at {target} - plan did not gate a write")
 
     # (B2) Switch OFF and confirm the adapter reports appliedPlan false.
     p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False}, key="plan-off")
