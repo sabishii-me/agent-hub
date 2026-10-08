@@ -283,40 +283,40 @@ async fn install(
                     .await;
                     match outcome {
                         Ok(Ok(())) => {
-                            // The adapter LANDED. Make it USABLE now: an install of an adapter MUST
-                            // prepare its runtime (docs/issues/20261007-190000). Rescan so the
-                            // harness and its adapter are registered (docs/issues/20261005-050000)
-                            // BEFORE asking it to prepare.
+                            // The adapter LANDED. The runtime is materialised BY THE HUB, from the
+                            // closure the plugin ships (runtime.sources.json): download -> verify
+                            // sha512 integrity -> unpack. No package manager, no system toolchain -
+                            // the plugin cannot reach the machine and the hub supervises it. Rescan
+                            // so the adapter is registered before we verify its target.
                             adapters.scan();
-                            let declared = adapters
-                                .get(&id)
-                                .map(|h| h.manifest.capabilities.iter().any(|c| c == "runtime"))
-                                .unwrap_or(false);
-                            let (ok, detail) = if !declared {
-                                // The plugin brings its own runtime: `runtime/prepare` is not part
-                                // of its contract. A valid, ready state - not a failure.
-                                (true, None)
-                            } else {
-                                match adapters
-                                    .call(&id, "runtime", "runtime/prepare", serde_json::json!({}))
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        // VERIFY the declared command is on disk - the adapter's own
-                                        // `ready` is not taken on faith.
-                                        let present = adapters
-                                            .get(&id)
-                                            .map(|h| runtime_target_present(&h))
-                                            .unwrap_or(false);
-                                        if present {
-                                            (true, None)
-                                        } else {
-                                            (false, Some("the declared runtime command is not on disk".to_string()))
-                                        }
-                                    }
-                                    Err(e) => (false, Some(format!("runtime prepare failed: {e}"))),
+                            let plugin_dir = plugins.root.join(&id);
+                            let id_for_prep = id.clone();
+                            let prep = tokio::task::spawn_blocking(move || {
+                                match crate::runtime::read_closure(&plugin_dir) {
+                                    // No closure: the plugin brings its own runtime.
+                                    Err(crate::runtime::RuntimeError::NoClosure) => (true, None),
+                                    Err(e) => (false, Some(e.to_string())),
+                                    Ok(closure) => match crate::runtime::install(&plugin_dir, &closure) {
+                                        Ok(_target) => (true, None),
+                                        Err(e) => (false, Some(e.to_string())),
+                                    },
                                 }
-                            };
+                            })
+                            .await;
+                            let (mut ok, mut detail) = prep.unwrap_or((false, Some("runtime install panicked".into())));
+                            // VERIFY the declared command exists on disk - a fact, not a claim.
+                            if ok {
+                                if detail.is_none() {
+                                    let present = adapters
+                                        .get(&id_for_prep)
+                                        .map(|h| runtime_target_present(&h))
+                                        .unwrap_or(false);
+                                    if !present {
+                                        ok = false;
+                                        detail = Some("the declared runtime command is not on disk".to_string());
+                                    }
+                                }
+                            }
                             plugins.finish_prepare(&id, ok, detail);
                         }
                         Ok(Err(e)) => tracing::error!(error = %e, "detached install failed"),

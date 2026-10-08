@@ -9,6 +9,7 @@ pub mod identity;
 pub mod manifest;
 pub mod registry;
 pub mod routes;
+pub mod runtime;
 pub mod service;
 pub mod source;
 pub mod state;
