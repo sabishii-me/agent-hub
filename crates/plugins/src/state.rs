@@ -51,8 +51,22 @@ impl Ops {
         self.0.retain(|o| *o != op);
     }
 
+    /// Drop the persistent `Failed` verdict. Called when a NEW operation starts on the id: a retry
+    /// supersedes the previous failure (otherwise a failed plugin that is reinstalled would keep
+    /// showing `failed` after it succeeded).
+    pub fn clear_failed(&mut self) {
+        self.leave(Op::Failed);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// An operation is RUNNING right now - installing, removing or preparing. `Failed` is a
+    /// persistent verdict (`state` = "failed"), NOT a running operation, so it is excluded: a
+    /// failed plugin is idle (and therefore retryable), never busy.
+    pub fn in_flight(&self) -> bool {
+        self.0.iter().any(|o| matches!(o, Op::Installing | Op::Removing | Op::Preparing))
     }
 
     /// The single verdict: the highest-ranked operation, or `None` when idle.

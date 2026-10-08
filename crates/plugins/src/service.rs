@@ -303,7 +303,10 @@ impl Plugins {
 
     fn enter(&self, id: &str, op: Op) {
         let mut ops = self.ops.lock().expect("ops mutex");
-        ops.entry(id.to_string()).or_default().enter(op);
+        let set = ops.entry(id.to_string()).or_default();
+        // A new operation supersedes a previous `failed` verdict (a retry).
+        set.clear_failed();
+        set.enter(op);
     }
 
     /// The id has an operation in flight RIGHT NOW. The contract: a conflicting command on the
@@ -311,9 +314,15 @@ impl Plugins {
     /// while installing" - an in-flight install owns its id, so neither a second install nor a
     /// remove may proceed. It is called BEFORE any lock/staging so the answer is a clean 409,
     /// never a 404 ("not found") or a 502 (a staging collision).
+    /// The id has an operation IN FLIGHT right now. `Failed` is a persistent VERDICT, not an
+    /// operation - a failed plugin must be retryable (docs/issues/20261007-210000), so `Failed`
+    /// does NOT make the id busy. Without this a failure wedged the id forever: every later
+    /// install/remove answered 409 because the `Failed` op never left.
     fn busy(&self, id: &str) -> bool {
         let ops = self.ops.lock().expect("ops mutex");
-        ops.get(id).map(|o| !o.is_empty()).unwrap_or(false)
+        ops.get(id)
+            .map(|o| o.in_flight())
+            .unwrap_or(false)
     }
 
     fn leave(&self, id: &str, op: Op) {
