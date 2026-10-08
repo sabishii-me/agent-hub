@@ -25,14 +25,6 @@ pub struct PluginsState {
     /// The adapter registry: enable/disable acts on a harness (a plugin is a
     /// harness too), so the lifecycle routes reach it here.
     pub adapters: Arc<agent_hub_adapter::Adapters>,
-    /// Bounds how many plugins run the HEAVY `runtime/prepare` (an npm install) at once. A user may
-    /// fire many installs; downloads/landing stay concurrent, but the heavy prepare goes through
-    /// this gate so installs do not trample each other (measured: 3 unbounded prepares took 634s
-    /// versus 381s when they did not contend). The number is the HUB's own scheduling choice, not a
-    /// user setting: a small bound keeps latency low and total throughput high. It is a semaphore,
-    /// not a queue we manage: `state` already exposes `installing`/`preparing` to the user, so a
-    /// waiting install is visible, never "stuck".
-    pub prepare_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl PluginsState {
@@ -42,27 +34,8 @@ impl PluginsState {
         errors: ErrorRenderer,
         adapters: Arc<agent_hub_adapter::Adapters>,
     ) -> Self {
-        PluginsState {
-            plugins: Arc::new(plugins),
-            transport,
-            errors,
-            adapters,
-            // The hub's own bound on concurrent heavy prepares. Overridable by env for tuning and
-            // tests; NOT a user-facing choice.
-            prepare_gate: Arc::new(tokio::sync::Semaphore::new(prepare_gate_limit())),
-        }
+        PluginsState { plugins: Arc::new(plugins), transport, errors, adapters }
     }
-}
-
-/// How many plugins may run `runtime/prepare` (a heavy npm install) at once. Default 2: one leaves
-/// the machine idle between phases; many contend and slow everything (measured). Override with
-/// `AGENT_HUB_PREPARE_CONCURRENCY` (0 or absent -> default).
-fn prepare_gate_limit() -> usize {
-    std::env::var("AGENT_HUB_PREPARE_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(2)
 }
 
 /// Build the router AND its surface from one declaration (TASK-048 C5): the
@@ -295,7 +268,6 @@ async fn install(
         Ok(Ok(crate::service::InstallIntent::Proceed { id, source, artifact_json })) => {
             let plugins = s.plugins.clone();
             let adapters = s.adapters.clone();
-            let s2 = s.clone();
             let location = format!("/v1/plugins/{id}");
             // The landing does synchronous fs + SQLite work; it MUST run on the
             // blocking pool, not on the async runtime (TASK-048 F06).
@@ -325,10 +297,6 @@ async fn install(
                                 // of its contract. A valid, ready state - not a failure.
                                 (true, None)
                             } else {
-                                // HEAVY step: bound how many run at once (the hub's own scheduling;
-                                // see PluginsState::prepare_gate). The permit is held only across the
-                                // prepare call.
-                                let _permit = s2.prepare_gate.clone().acquire_owned().await;
                                 match adapters
                                     .call(&id, "runtime", "runtime/prepare", serde_json::json!({}))
                                     .await
