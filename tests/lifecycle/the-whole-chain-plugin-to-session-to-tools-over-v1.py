@@ -39,7 +39,9 @@ try:
     ins = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="chain-install")
     t.check(ins["status"] == 202, "install the plugin (202)", f"status={ins['status']} {ins['text'][:140]}")
     ready = False
-    for _ in range(240):
+    # A REAL install: the hub downloads the runtime closure (~100s for pi), so size the wait for
+    # that, not for a mock.
+    for _ in range(1200):
         g = hub.get("/v1/plugins/pi")
         if (g["json"] or {}).get("plugin", {}).get("state") == "ready":
             ready = True; break
@@ -66,9 +68,10 @@ try:
     tr = hub.post(f"/v1/sessions/{sid}/turns",
                   {"content": [{"type": "text", "text": f"Use the read tool to read {fpath}, then reply with its exact contents."}],
                    "idempotencyKey": "chain-t1"}, key="chain-t1")
-    t.check(tr["status"] == 202, "the turn is accepted", f"status={tr['status']}")
-    tid = tr["json"]["turn"]["id"]
-    end = wait_turn(hub, sid, tid, {"ended"}, tries=480)
+    t.check(tr["status"] == 202, "the turn is accepted", f"status={tr['status']} {tr['text'][:160]}")
+    tid = (tr["json"] or {}).get("turn", {}).get("id")
+    t.check(tid is not None, "the accepted turn names its id", f"body={tr['text'][:160]}")
+    end = wait_turn(hub, sid, tid, {"ended"}, tries=480) if tid else {"state": "no-turn"}
     t.check(end.get("state") == "ended", "the turn reaches a terminal", f"state={end.get('state')}")
 
     msgs = (hub.get(f"/v1/sessions/{sid}/messages")["json"] or {}).get("messages", [])

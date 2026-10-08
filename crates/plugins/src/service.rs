@@ -549,6 +549,22 @@ impl Plugins {
             }
             Idempotency::New => {}
         }
+        // Replacing a harness that has OPEN sessions is refused rather than swapped under a running
+        // process (contract/openapi.json POST /v1/plugins -> 409 `plugin_in_use`). A fresh install
+        // (no session can exist - the harness was not there) is unaffected.
+        if self.db.plugin(&id)?.map(|r| r.installed_at.is_some()).unwrap_or(false) {
+            match self.db.open_sessions_for(&id) {
+                Ok(open) if !open.is_empty() => {
+                    self.leave(&id, Op::Installing);
+                    return Err(PluginError::InUse(id.clone(), open.join(", ")));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    self.leave(&id, Op::Installing);
+                    return Err(PluginError::Db(e));
+                }
+            }
+        }
         let artifact_json = match source {
             crate::source::Source::Artifact(spec) => serde_json::to_string(&serde_json::json!({
                 "id": spec.id, "version": spec.version, "url": spec.url,
@@ -717,6 +733,20 @@ impl Plugins {
             .map_err(|_| PluginError::InProgress(id.to_string()))?;
         if !self.try_claim(id, Op::Removing) {
             return Err(PluginError::InProgress(id.to_string()));
+        }
+        // A harness with OPEN sessions is refused rather than yanked out from under them
+        // (contract/openapi.json DELETE /v1/plugins/{id} -> 409 `plugin_in_use`, naming them;
+        // docs/issues/20261008-063000).
+        match self.db.open_sessions_for(id) {
+            Ok(open) if !open.is_empty() => {
+                self.leave(id, Op::Removing);
+                return Err(PluginError::InUse(id.to_string(), open.join(", ")));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                self.leave(id, Op::Removing);
+                return Err(PluginError::Db(e));
+            }
         }
         // Distinguish THREE cases, so the message never lies (docs/issues/20261005-140000):
         //  - a hub-installed plugin (a row with installed_at) -> allowed;

@@ -190,6 +190,19 @@ impl crate::Db {
         Ok(rows)
     }
 
+    /// The ids of OPEN sessions on `harness_id`: a session that is USING the harness. `active`,
+    /// `starting` and `needs-repair` are open (a live/held session must not be yanked out from
+    /// under); `readonly` (closed) and `starting_failed` (never started) are not.
+    pub fn open_sessions_for(&self, harness_id: &str) -> Result<Vec<String>, DbError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM sessions WHERE deleted = 0 AND harness_id = ?1 \
+             AND status IN ('starting','active','needs-repair') ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([harness_id], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn update_session(&self, s: &SessionRow) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(
