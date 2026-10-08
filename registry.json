@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "ONE entry, verified: harness-adapter pi 0.1.8 (url downloaded and sha256 matched).",
+  "note": "Official registry: the released harness-adapter artifacts (pi 0.1.10, jouzu 0.1.11, deepseek 0.1.10), each url+sha256 from the published release.",
   "plugins": [
     {
       "id": "pi",
@@ -22,10 +22,10 @@
       ],
       "versions": [
         {
-          "version": "0.1.8",
-          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.8/harness-adapter-pi-0.1.8.zip",
-          "sha256": "aa8a345f143704a53f10d96a80b4a770f74a49dbaed57c459bc9b785b55f50b8",
-          "size": 54566
+          "version": "0.1.10",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-pi/releases/download/v0.1.10/harness-adapter-pi-0.1.10.zip",
+          "sha256": "4ffbba9225b78035db1158fbf6b2b29b0fb387f56da47bc7dd7a043a1c6dc5ea",
+          "size": 57958
         }
       ]
     },
@@ -34,12 +34,53 @@
       "pluginType": "harness-adapter",
       "name": "Jouzu",
       "summary": "pi-compatible harness driving the jouzu runtime.",
+      "capabilities": [
+        "models",
+        "providers",
+        "runtime",
+        "presets",
+        "plan",
+        "review",
+        "fork",
+        "stats",
+        "compact",
+        "rename",
+        "skills",
+        "history-readonly"
+      ],
       "versions": [
         {
-          "version": "0.1.9",
-          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.9/harness-adapter-jouzu-0.1.9.zip",
-          "sha256": "5fd8c08bb722d92a35463776cf61c78fc092074f55da07a8c6aaa1c637e619da",
-          "size": 635045
+          "version": "0.1.11",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-jouzu/releases/download/v0.1.11/harness-adapter-jouzu-0.1.11.zip",
+          "sha256": "7046ae92bb07373e1bcd99126aefb35154002495a5d323e99b0f8e4be516d6b7",
+          "size": 638217
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "pluginType": "harness-adapter",
+      "name": "DeepSeek Harness",
+      "summary": "Drives the dsh web server over loopback; sessions, approvals and resume are the harness's own.",
+      "capabilities": [
+        "models",
+        "runtime",
+        "providers",
+        "presets",
+        "plan",
+        "review",
+        "fork",
+        "stats",
+        "compact",
+        "rename",
+        "skills"
+      ],
+      "versions": [
+        {
+          "version": "0.1.10",
+          "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.10/harness-adapter-deepseek-0.1.10.zip",
+          "sha256": "1d1010013df0f617d104ab86ee88762b5c2b5cabe5fcd2028c2fdf0f3b1b0b61",
+          "size": 98640
         }
       ]
     }
