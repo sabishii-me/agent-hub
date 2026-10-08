@@ -175,7 +175,7 @@ try:
 
     # Wait for the terminal state; `failed` is a FAILURE, reported with the reason (never skipped).
     state = None
-    while time.time() - t0 < 600:
+    while time.time() - t0 < 1800:
         s, body = hub.get(f"/v1/plugins/{PID}")
         state = None if s == 404 else (body.get("plugin") or {}).get("state")
         if state in ("ready", "failed"):

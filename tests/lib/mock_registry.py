@@ -82,6 +82,22 @@ class MockRegistry:
         }
         return self.entries[pid]
 
+    def add_released_artifact(self, zip_path, manifest):
+        """Serve a REAL, already-built release artifact (the bytes CI published) without repacking.
+        `manifest` is its manifest.json contents; the sha256 is computed from the ACTUAL bytes, so
+        the registry entry is the real release identity. Used to install the OFFICIAL artifacts."""
+        zbuf = open(zip_path, "rb").read()
+        pid, ptype = manifest["id"], manifest["pluginType"]
+        version = manifest["version"]
+        fname = f"{ptype}-{pid}-{version}.zip"
+        self._zips[fname] = zbuf
+        sha = hashlib.sha256(zbuf).hexdigest()
+        self.entries[pid] = {
+            "id": pid, "pluginType": ptype, "name": manifest.get("name", pid),
+            "versions": [{"version": version, "sha256": sha, "size": len(zbuf), "_file": fname}],
+        }
+        return self.entries[pid]
+
     def registry_json(self):
         plugins = []
         for e in self.entries.values():

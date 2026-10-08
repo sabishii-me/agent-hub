@@ -431,7 +431,7 @@ impl Adapters {
     /// The `AGENT_HUB_*` environment for an adapter, plus the connection
     /// credentials, exactly as the contract and the old hub define it: the
     /// process environment with `AGENT_HUB_SECRET_KEY` removed, then the hub's
-    /// own variables (`server.mjs:802/2964`).
+    /// own variables.
     pub fn adapter_env(&self, harness: &Harness) -> Result<Vec<(String, String)>, AdapterError> {
         let mut env: Vec<(String, String)> = std::env::vars()
             .filter(|(k, _)| k != "AGENT_HUB_SECRET_KEY")

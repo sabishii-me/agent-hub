@@ -97,8 +97,7 @@ impl AdapterManifest {
 
     /// The absolute argv the hub hands to the adapter as
     /// `AGENT_HUB_RUNTIME_COMMAND`: the first part is kept, the rest are resolved
-    /// against the plugin directory (the old hub did exactly this,
-    /// `server.mjs:782`).
+    /// against the plugin directory.
     pub fn runtime_argv(&self, dir: &std::path::Path) -> Option<Vec<String>> {
         let command = self.runtime.as_ref()?.command.as_ref()?;
         if command.is_empty() {
