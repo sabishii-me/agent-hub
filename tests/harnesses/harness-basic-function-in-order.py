@@ -129,6 +129,17 @@ try:
     hs = hub.get("/v1/harnesses")
     t.check(not any(h.get("id") == "pi" for h in (hs["json"] or {}).get("harnesses", [])),
             "the removed harness is no longer listed", f"rows={[h.get('id') for h in (hs['json'] or {}).get('harnesses', [])]}")
+
+    # ---- 7. AFTER it is GONE, try to chat: the honest code, and history kept. ------------------
+    n = hub.post("/v1/sessions", {"harnessId": "pi"}, key="after-remove")
+    t.check(n["status"] == 404 and (n["json"] or {}).get("error") == "harness_not_found",
+            "chat AFTER removal: POST /v1/sessions -> 404 harness_not_found (the harness is gone)",
+            f"status={n['status']} body={n['text'][:160]}")
+    # The contract: "a plugin is code, a session is history" - removal does NOT delete sessions.
+    old = hub.get(f"/v1/sessions/{sid}")
+    t.check(old["status"] == 200,
+            "after removal the OLD session still reads (a plugin is code, a session is history)",
+            f"status={old['status']}")
 finally:
     ok = t.done()
     hub.cleanup()
