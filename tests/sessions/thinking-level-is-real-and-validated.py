@@ -47,13 +47,13 @@ try:
     PROV = ((_c.get("json") or {}).get("provider") or {}).get("id")
     rf = hub.post(f"/v1/model-providers/{PROV}/models/refresh", key="cat-refresh")
     t.check(rf["status"] < 300, "the provider catalog is refreshed (real fetch)", f"status={rf['status']} {rf['text'][:160]}")
-    cached = (hub.get("/v1/model-providers/p/models")["json"] or {}).get("models") or []
+    cached = (hub.get(f"/v1/model-providers/{PROV}/models")["json"] or {}).get("models") or []
     t.check(len(cached) > 0, "the provider serves real models (fetched)", f"models={[m.get('id') for m in cached][:6]}")
     MODEL = (cached[0] or {}).get("id")
 
     # Declare the thinking levels for that model (the documented way a caller states them) and
     # refresh so the catalog carries them.
-    d = hub.patch("/v1/model-providers/p", {"declarations": {MODEL: {"thinkingLevels": LEVELS}}}, key="declare")
+    d = hub.patch(f"/v1/model-providers/{PROV}", {"declarations": {MODEL: {"thinkingLevels": LEVELS}}}, key="declare")
     t.check(d["status"] < 300, "the provider's model declaration (thinkingLevels) is stored",
             f"status={d['status']} {d['text'][:160]}")
     hub.post(f"/v1/model-providers/{PROV}/models/refresh", key="cat-refresh-2")

@@ -144,7 +144,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // replaces it by fetching the hub's fixed official address.
     plugins.load_registry_from_file();
     let plugin_state = PluginsState::new(plugins, transport.clone(), errors.clone(), adapters.clone());
-    let harness_state = HarnessesState::new(Harnesses::new(adapters.clone()), errors.clone());
 
     // Providers: the relationship state is in the database; the credential is in
     // the OS secret store, namespaced by the PERSISTED instance id (created once,
@@ -169,6 +168,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stopped (a crash between the row store and the keychain).
     providers.recover_pending();
     let providers = std::sync::Arc::new(providers);
+    // The harness catalog must INCLUDE every core-managed provider (contract GET
+    // /v1/harnesses/{id}/models): each managed provider's models are named `hub-<providerId>` and
+    // keep their real providerId and the `thinkingLevels` their declarations state.
+    let managed_for_harnesses = {
+        let providers = providers.clone();
+        std::sync::Arc::new(move || {
+            let mut out: Vec<serde_json::Value> = Vec::new();
+            if let Ok(recs) = providers.list() {
+                for rec in recs {
+                    for mut m in rec.merged_models() {
+                        if let Some(obj) = m.as_object_mut() {
+                            obj.insert("providerId".into(), serde_json::json!(rec.id));
+                            obj.insert("providerName".into(), serde_json::json!(format!("hub-{}", rec.id)));
+                        }
+                        out.push(m);
+                    }
+                }
+            }
+            out
+        }) as std::sync::Arc<dyn Fn() -> Vec<serde_json::Value> + Send + Sync>
+    };
+    let harness_state = HarnessesState::new(
+        Harnesses::new(adapters.clone()).with_managed_models(managed_for_harnesses),
+        errors.clone(),
+    );
     // The DURABLE auth-operation store (ADR-0012): the operation survives a restart.
     // Its own Db handle (opening the same file is how every domain shares it here).
     let auth_store = std::sync::Arc::new(agent_hub_providers::auth::AuthStore::new(

@@ -47,11 +47,25 @@ impl HarnessError {
 /// The harnesses domain over the adapter registry.
 pub struct Harnesses {
     pub adapters: Arc<Adapters>,
+    /// The core-managed providers' model catalogs, supplied by the hub as a closure so this crate
+    /// does not depend on `providers`. Contract GET /v1/harnesses/{id}/models: the harness's own
+    /// catalog PLUS every core-managed provider the harness can reach; an injected provider is named
+    /// `hub-<coreProviderId>`.
+    managed_models: Arc<dyn Fn() -> Vec<Value> + Send + Sync>,
 }
 
 impl Harnesses {
     pub fn new(adapters: Arc<Adapters>) -> Self {
-        Harnesses { adapters }
+        Harnesses { adapters, managed_models: Arc::new(Vec::new) }
+    }
+
+    /// Give the harness catalog the core-managed provider models (the hub wires this).
+    pub fn with_managed_models(
+        mut self,
+        f: Arc<dyn Fn() -> Vec<Value> + Send + Sync>,
+    ) -> Self {
+        self.managed_models = f;
+        self
     }
 
     /// The `harness` projection for one registered harness.
@@ -192,7 +206,34 @@ impl Harnesses {
     }
 
     pub async fn models(&self, id: &str) -> Result<Value, HarnessError> {
-        self.gated(id, "models", "models/list", "models").await
+        let adapter_value = self.gated(id, "models", "models/list", "models").await?;
+        // Merge the core-managed providers: the contract says this endpoint is the harness's own
+        // catalog PLUS every managed provider the harness can reach. Each managed entry keeps its
+        // real provider id and is named `hub-<coreProviderId>` in the harness vocabulary, so a bare
+        // model id means the same thing whichever harness answered.
+        let managed = (self.managed_models)();
+        let mut out = adapter_value;
+        let obj = match out.as_object_mut() {
+            Some(o) => o,
+            None => return Ok(out),
+        };
+        // The adapter may report known:false (no models capability). A managed provider still adds
+        // entries: the harness CAN run them once injected.
+        let existing = obj
+            .get("models")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let known = obj.get("known").and_then(Value::as_bool).unwrap_or(false);
+        let mut models = existing;
+        for m in managed {
+            models.push(m);
+        }
+        obj.insert("models".into(), Value::Array(models));
+        if !known && !obj.contains_key("known") {
+            obj.insert("known".into(), Value::Bool(false));
+        }
+        Ok(out)
     }
 
     pub async fn tools(&self, id: &str) -> Result<Value, HarnessError> {
