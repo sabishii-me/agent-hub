@@ -129,9 +129,14 @@ pub fn install(plugin_dir: &Path, closure: &RuntimeClosure) -> Result<PathBuf, R
     std::fs::create_dir_all(&staging)?;
 
     let result = (|| -> Result<(), RuntimeError> {
-        for src in closure.sources.iter().filter(|s| applies(s)) {
-            let bytes = download(&src.url)?;
-            verify_integrity(&src.url, &src.integrity, &bytes)?;
+        // Downloads are IO-bound and independent: fetch them BOUNDED-PARALLEL so 146 tarballs do not
+        // go one-at-a-time. Unpacking then runs SERIALLY into the shared staging dir (two tarballs
+        // may create the same parent directories, so unpack order must not race). Verification
+        // happens as each download completes, so a bad byte never reaches the disk.
+        let sources: Vec<&RuntimeSource> = closure.sources.iter().filter(|s| applies(s)).collect();
+        let limit = download_concurrency().min(sources.len().max(1));
+        let fetched = parallel_download(&sources, limit)?;
+        for (src, bytes) in sources.iter().zip(fetched) {
             let dest = match src.path.as_deref() {
                 Some(p) if !p.is_empty() => staging.join(p),
                 _ => staging.clone(),
@@ -159,6 +164,75 @@ pub fn install(plugin_dir: &Path, closure: &RuntimeClosure) -> Result<PathBuf, R
             Err(e)
         }
     }
+}
+
+/// How many tarballs to fetch at once. The hub's own scheduling (IO-bound; the number is not a user
+/// setting). `AGENT_HUB_FETCH_CONCURRENCY` overrides; default 8.
+fn download_concurrency() -> usize {
+    std::env::var("AGENT_HUB_FETCH_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(8)
+}
+
+/// Download every source with at most `limit` in flight, verifying each. The result is in SOURCE
+/// order, so the caller can unpack serially without a lookaside. The first failure stops the pool.
+fn parallel_download(sources: &[&RuntimeSource], limit: usize) -> Result<Vec<Vec<u8>>, RuntimeError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let n = sources.len();
+    let out_shared: Mutex<Vec<Option<Vec<u8>>>> = Mutex::new((0..n).map(|_| None).collect());
+    let next = AtomicUsize::new(0);
+    let error: Mutex<Option<RuntimeError>> = Mutex::new(None);
+
+    std::thread::scope(|scope| {
+        for _ in 0..limit {
+            scope.spawn(|| loop {
+                // If an earlier worker failed, stop taking new work.
+                if error.lock().map(|e| e.is_some()).unwrap_or(true) {
+                    return;
+                }
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                if i >= n {
+                    return;
+                }
+                let src = sources[i];
+                let got = download(&src.url).and_then(|b| {
+                    verify_integrity(&src.url, &src.integrity, &b)?;
+                    Ok(b)
+                });
+                match got {
+                    Ok(b) => {
+                        if let Ok(mut slot) = out_shared.lock() {
+                            slot[i] = Some(b);
+                        }
+                    }
+                    Err(e) => {
+                        if let Ok(mut err) = error.lock() {
+                            if err.is_none() {
+                                *err = Some(e);
+                            }
+                        }
+                        return;
+                    }
+                }
+            });
+        }
+    });
+
+    if let Ok(mut err) = error.lock() {
+        if let Some(e) = err.take() {
+            return Err(e);
+        }
+    }
+    Ok(out_shared
+        .into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.unwrap_or_default())
+        .collect())
 }
 
 /// A blocking download on its own OS thread (the same shape `source.rs` uses: it cannot be blocked
