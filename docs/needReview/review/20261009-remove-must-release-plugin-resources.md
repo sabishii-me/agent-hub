@@ -1,8 +1,19 @@
 # Review: plugin REMOVE must release what the plugin started (a service lifecycle gap)
 
-Status: **PROPOSAL — needs owner review before any contract/code edit.**
+Status: **RESOLVED — implemented and verified (deepseek whole-chain 14/14).**
 Recorded 2026-10-09. Extends `docs/needReview/review/20261005-plugin-lifecycle-cases.md` (C/D) and
 the ARCHITECTURE lifecycle table (operation `install / remove (plugin)`).
+
+## DECISION (owner): remove delivers an EVENT; the plugin keeps itself clean
+
+Deleting a plugin is the HUB's operation, and the plugin is responsible for being clean when it
+happens. The hub does not call a cleanup RPC and does not sequence the plugin's internals: during a
+remove it delivers ONE one-way event (`plugin/removing`) to the plugin, and the plugin releases what
+it started. Implemented as: contract `coreCompliance.notifications`, `RequestHandle::notify` (a frame
+with a method and no id), `AdapterManager::notify_removing` (ensures an adapter to receive it),
+`crates/plugins` remove (deliver → brief wait → stop → delete), and the deepseek adapter (record the
+shared server's pid; on the event, stop the home's server even from an attached adapter). See
+`docs/issues/20261009-030000` for the fix and the verification.
 
 ## The gap
 

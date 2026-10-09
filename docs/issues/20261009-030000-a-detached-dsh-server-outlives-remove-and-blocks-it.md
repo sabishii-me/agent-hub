@@ -1,8 +1,21 @@
 # 20261009-030000 - a DETACHED dsh server outlives every adapter, so remove cannot delete the plugin
 
-**State:** OPEN. Owner: adapter (server lifetime) + hub (which processes `remove` stops).
+**State:** FIXED (verified). Owner: adapter (server lifetime) + hub (the remove event).
 **Severity:** the plugin can never be removed on Windows once a deepseek session has run; the remove
 fails with `io: Access is denied. (os error 5)` and (before that) hangs at `removing`.
+
+## Resolution
+
+The hub now delivers a one-way `plugin/removing` EVENT to the plugin as part of the remove, before
+it deletes anything; the plugin keeps ITSELF clean. Contract `coreCompliance.notifications` declares
+it; the bus writes it as a frame with a method and no id; the adapter manager ensures an adapter is
+running to receive it; the remove delivers it, waits a moment, then stops and deletes. The deepseek
+adapter records the shared server's pid and, on `plugin/removing`, stops the home's server even if
+THIS adapter only attached (its owner may already have exited). Ordinary stdin-EOF shutdown still
+stops only a server this process spawned, so closing a session never disturbs a shared server.
+
+**Verified:** deepseek whole-chain **14/14** (was 13/14); no orphan node process remains after the
+remove. Commits: hub `957dcd5`, adapter `532f6e3`.
 
 ## Measured (dev, real dsh 0.2.0-rc.2, Windows)
 
