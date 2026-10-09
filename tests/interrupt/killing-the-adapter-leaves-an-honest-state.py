@@ -38,16 +38,22 @@ try:
     t.check(len(kids) >= 1, "the adapter child process is found (a REAL process)", f"children={child_processes(hub.child.pid)}")
     for pid in kids:
         kill_pid(pid)
-    time.sleep(1.5)
 
     # The hub is still up (only the adapter died).
     t.check(hub.child.poll() is None, "the HUB survives the adapter death")
 
     # The hub must be honest: it must NOT keep reporting `active` for a session whose adapter
-    # process is gone (the docstring's claim). This is the SPECIFIC property; `is not None`
-    # accepted `active` and hid a real defect (docs/issues/20261005-020000).
-    g = hub.get(f"/v1/sessions/{sid}")
-    st = (g["json"] or {}).get("session", {}).get("status")
+    # process is gone (the docstring's claim). POLL for it rather than sleeping a fixed 1.5s: the
+    # property is "active is not left standing", and how fast the hub notices is a separate
+    # question (docs/issues/20261009-110000: measured ~6.6s, too slow, being fixed). A fixed sleep
+    # made this timing-dependent (sometimes 5/6, sometimes 6/6). Bound the poll so a hub that NEVER
+    # reconciles still fails.
+    st = None
+    for _ in range(120):
+        st = (hub.get(f"/v1/sessions/{sid}")["json"] or {}).get("session", {}).get("status")
+        if st != "active":
+            break
+        time.sleep(0.25)
     t.check(st != "active", "the session no longer claims `active` after its adapter died",
             f"status={st} (a processless session reporting `active` is the defect)")
 
