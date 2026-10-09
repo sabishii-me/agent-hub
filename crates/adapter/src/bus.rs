@@ -74,13 +74,41 @@ impl RequestHandle {
         self.alive.load(Ordering::Relaxed)
     }
 
+    /// Close the adapter's stdin (EOF) so it can run its own shutdown path before
+    /// any kill. The protocol says an adapter dies when its stdin closes ("die with
+    /// the core"); an adapter that owns child processes needs that signal.
+    pub async fn close_stdin(&self) {
+        let mut stdin = self.stdin.lock().await;
+        let _ = tokio::io::AsyncWriteExt::shutdown(&mut *stdin);
+    }
+
     /// Stop the adapter process and confirm it exited. The exit is only proven when
     /// `wait` returns; a kill error when the child already exited is not a failure.
+    ///
+    /// The adapter protocol says an adapter dies when its stdin closes ("die with the
+    /// core"). That graceful path matters: the adapter may own child processes and
+    /// data under the plugin directory, and it tears them down on stdin EOF. A hard
+    /// kill skips that clean-up - measured: a `deepseek` adapter's DETACHED dsh server
+    /// survived a kill and kept the plugin's files locked, so a remove hung at
+    /// `removing`. So close stdin FIRST, give a short grace period, then force-kill.
     pub async fn kill(&self) -> Result<(), BusError> {
+        // Close stdin (EOF) so a well-behaved adapter runs its shutdown path.
+        {
+            let mut stdin = self.stdin.lock().await;
+            let _ = tokio::io::AsyncWriteExt::shutdown(&mut *stdin);
+        }
         let mut child = self.child.lock().await;
         if let Ok(Some(_)) = child.try_wait() {
             return Ok(());
         }
+        // Grace period for the adapter to exit on its own after EOF.
+        for _ in 0..20 {
+            if let Ok(Some(_)) = child.try_wait() {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        // Still alive after ~2s: force it.
         if let Err(e) = child.kill().await {
             if child.try_wait().ok().flatten().is_none() {
                 return Err(e.into());
@@ -310,9 +338,23 @@ impl AgentBus {
         // is a CONFIRMED stop (TASK-048 S3). A stdout EOF alone is NOT proof of
         // exit, so we consult the child itself. Kill, then WAIT: the exit is only
         // confirmed when `wait` returns.
+        //
+        // Close stdin FIRST so the adapter runs its own shutdown ("die with the
+        // core"). An adapter may OWN child processes and data under the plugin dir;
+        // a hard kill skips that, and a detached harness server would survive and
+        // keep the plugin's files locked (measured: a remove then fails with
+        // `Access is denied`, docs/issues/20261009-030000). Give it a short grace
+        // period, then force.
+        self.requests.close_stdin().await;
         let mut child = self.child.lock().await;
         if let Ok(Some(_status)) = child.try_wait() {
             return Ok(());
+        }
+        for _ in 0..20 {
+            if let Ok(Some(_)) = child.try_wait() {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         if let Err(e) = child.kill().await {
             if child.try_wait().ok().flatten().is_none() {
@@ -356,3 +398,5 @@ mod alive_tests {
         assert!(!handle.is_alive(), "a handle whose child exited reports dead");
     }
 }
+
+// m

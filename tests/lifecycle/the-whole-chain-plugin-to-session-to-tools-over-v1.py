@@ -21,6 +21,9 @@ from hub import Hub, hub_sha, register_provider, wait_turn      # noqa: E402
 from tally import Tally, combo                                  # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
+# The harness id under test (the SAME env the sibling lifecycle tests use), so the one chain runs
+# for pi, jouzu or deepseek without a copy per plugin.
+HARNESS = os.environ.get("PI_HARNESS_ID", "pi")
 PI_REF = os.environ.get("PI_PLUGIN_REF", "fix/runtime-placement")
 MODEL = os.environ.get("PI_MODEL", "deepseek-flash")
 t = Tally("lifecycle/whole-chain")
@@ -36,27 +39,27 @@ try:
             "the hub starts with an EMPTY plugins root", "")
 
     # 1. INSTALL the plugin through /v1.
-    ins = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="chain-install")
+    ins = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact(HARNESS)}}, key="chain-install")
     t.check(ins["status"] == 202, "install the plugin (202)", f"status={ins['status']} {ins['text'][:140]}")
     ready = False
     # A REAL install: the hub downloads the runtime closure (~100s for pi), so size the wait for
     # that, not for a mock.
     for _ in range(1200):
-        g = hub.get("/v1/plugins/pi")
+        g = hub.get(f"/v1/plugins/{HARNESS}")
         if (g["json"] or {}).get("plugin", {}).get("state") == "ready":
             ready = True; break
         time.sleep(0.25)
-    t.check(ready, "the installed plugin reaches `ready`", f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
+    t.check(ready, "the installed plugin reaches `ready`", f"body={hub.get(f'/v1/plugins/{HARNESS}')['text'][:140]}")
 
     # 2. The harness is now discoverable through /v1.
     hs = hub.get("/v1/harnesses")
-    t.check(any(h.get("id") == "pi" for h in (hs["json"] or {}).get("harnesses", [])),
+    t.check(any(h.get("id") == HARNESS for h in (hs["json"] or {}).get("harnesses", [])),
             "the installed harness is listed", f"rows={[h.get('id') for h in (hs['json'] or {}).get('harnesses', [])]}")
 
     # 3. A real provider, then a SESSION on the just-installed harness.
     PROV = register_provider(hub)
     t.require(PROV is not None, "a real provider is registered", "no real provider")
-    r = hub.post("/v1/sessions", {"harnessId": "pi", "modelProviderId": PROV["id"], "modelId": MODEL}, key="chain-s")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key="chain-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")
     t.check(s.get("status") == "active", "the session on the installed plugin is active",
@@ -86,17 +89,17 @@ try:
     # 5. The chain holds DOWNWARD too: close the session, then remove the plugin.
     c = hub.post(f"/v1/sessions/{sid}/close")
     t.check(c["status"] in (200, 202), "the session closes", f"status={c['status']}")
-    d = hub.delete("/v1/plugins/pi", key="chain-remove")
+    d = hub.delete(f"/v1/plugins/{HARNESS}", key="chain-remove")
     t.check(d["status"] in (200, 202), "remove the plugin is accepted after the session is closed",
             f"status={d['status']} {d['text'][:140]}")
     if d["status"] in (200, 202):
         gone = False
         for _ in range(240):
-            g = hub.get("/v1/plugins/pi")
+            g = hub.get(f"/v1/plugins/{HARNESS}")
             if g["status"] == 404 or (g["json"] or {}).get("plugin", {}).get("state") == "absent":
                 gone = True; break
             time.sleep(0.25)
-        t.check(gone, "the removed plugin is gone", f"body={hub.get('/v1/plugins/pi')['text'][:140]}")
+        t.check(gone, "the removed plugin is gone", f"body={hub.get(f'/v1/plugins/{HARNESS}')['text'][:140]}")
 finally:
     ok = t.done()
     hub.cleanup()

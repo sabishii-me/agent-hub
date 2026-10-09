@@ -482,10 +482,12 @@ def register_provider(hub, pid=None):
         return None
     name = pid or prov.get("id") or "HOME-JP-prod"
     r = hub.post("/v1/model-providers", {"id": name, "url": prov["url"], "api": prov["api"], "token": prov["token"]})
-    # The hub owns the final id (a user provider lives in the `custom:` namespace): read it BACK
+    # The hub owns the final id (a user provider lives in the `_CUSTOM-` namespace): read it BACK
     # from the response - the caller must use the id the hub actually assigned.
     real_id = (((r.get("json") or {}).get("provider") or {}).get("id")) or name
-    return {"id": real_id, **prov}
+    # `prov` itself carries an `id` (the on-disk name); it must NOT clobber the hub-assigned id, so
+    # the real id is written LAST.
+    return {**prov, "id": real_id}
 
 
 def real_provider(env_var="HOME_JP_PROD_JSON"):

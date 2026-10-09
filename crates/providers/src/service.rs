@@ -130,6 +130,19 @@ impl Providers {
     /// and is always available - an endpoint plus a dialect is all it needs.
     pub const BUILTIN_TYPE: &'static str = "custom-compatible";
 
+    /// The namespace a USER's own provider id lives in. A shipped model-adapter type
+    /// OWNS its id (e.g. `deepseek`), so a user provider must never be able to shadow
+    /// it; every user id is prefixed with this. The prefix is deliberately made of
+    /// harness-SAFE characters (`_`, `-`, alphanumerics): a harness route key is a
+    /// path/name segment and cannot carry `:` (dsh sanitises it, which broke the
+    /// applied-route proof, docs/issues/20261008-120000). ONE definition, referenced
+    /// everywhere the id rule is applied - never re-spelled at a call site.
+    pub const CUSTOM_PREFIX: &'static str = "_CUSTOM-";
+
+    /// The legacy aliases accepted so an id already in the namespace is kept as-is
+    /// (idempotence): the current prefix and the historical `user:` spelling.
+    const CUSTOM_PREFIX_ALIASES: [&'static str; 2] = [Self::CUSTOM_PREFIX, "user:"];
+
     /// Resolve a provider type to its descriptor, or `None` when no installed
     /// plugin ships it (or no resolver is wired). A `None` version accepts the
     /// single shipped version of that id (the common case).
@@ -276,7 +289,7 @@ impl Providers {
         //  - an INSTALLED type (a shipped model adapter, e.g. `deepseek`) OWNS its id: the id IS the
         //    type's id. A caller cannot rename it, and cannot shadow the official one.
         //  - the built-in `custom-compatible` type is the USER's own provider: its id lives in the
-        //    `custom:` namespace, so a user naming it `deepseek` gets `custom:deepseek` and can
+        //    `_CUSTOM-` namespace, so a user naming it `deepseek` gets `_CUSTOM-deepseek` and can
         //    NEVER collide with the official `deepseek`.
         // No id is ever generated; nothing is random.
         let user_id = req.id.clone().filter(|s| !s.trim().is_empty());
@@ -293,15 +306,19 @@ impl Providers {
                 t.to_string()
             }
             _ => {
-                // The user's own provider: `custom:<name>`, the name REQUIRED. Idempotent: a name
-                // already in the namespace is kept as-is.
+                // The user's own provider: `<CUSTOM_PREFIX><name>`, the name REQUIRED. Idempotent: a
+                // name already in the namespace is kept as-is. The prefix is a constant (never
+                // re-spelled here) so the rule lives in ONE place.
                 let name = user_id.ok_or_else(|| {
-                    ProviderError::Validation("id is required: name this provider (it becomes `custom:<id>`)".into())
+                    ProviderError::Validation(format!(
+                        "id is required: name this provider (it becomes `{}<id>`)",
+                        Self::CUSTOM_PREFIX
+                    ))
                 })?;
-                if name.starts_with("custom:") || name.starts_with("user:") {
+                if Self::CUSTOM_PREFIX_ALIASES.iter().any(|p| name.starts_with(p)) {
                     name
                 } else {
-                    format!("custom:{name}")
+                    format!("{}{name}", Self::CUSTOM_PREFIX)
                 }
             }
         };
@@ -1092,3 +1109,4 @@ mod recovery_intent_tests {
     }
 
 }
+
