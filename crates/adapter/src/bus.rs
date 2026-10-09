@@ -126,6 +126,15 @@ impl RequestHandle {
         self.write_frame(&msg).await
     }
 
+    /// Send a NOTIFICATION to the adapter: a frame with a `method` and NO `id`, so
+    /// the adapter acts on it and does NOT reply (JSON-RPC 2.0 one-way). Used for
+    /// hub->adapter lifecycle events, e.g. telling a plugin it is being removed so
+    /// it releases what it started BEFORE the hub deletes its files.
+    pub async fn notify(&self, method: &str, params: Value) -> Result<(), BusError> {
+        let msg = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        self.write_frame(&msg).await
+    }
+
     /// Reply an ERROR to a reverse request (e.g. the session ended before a
     /// decision, or the request is refused).
     pub async fn reply_error(&self, id: &Value, code: i64, message: &str) -> Result<(), BusError> {

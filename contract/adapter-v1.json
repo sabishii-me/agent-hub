@@ -251,6 +251,13 @@
         "note": "Native non-model notification; info|warning|error; never converted into assistant text."
       }
     ],
+    "notifications": [
+      {
+        "method": "plugin/removing",
+        "params": [],
+        "note": "HUB -> adapter, one-way (no id, no reply). The plugin is being REMOVED and its files are about to be deleted. The plugin keeps ITSELF clean: on this event it releases anything it started that outlives it \u2014 a long-lived harness SERVICE it spawned and shares across sessions (a `dsh web`-style server), helper processes, temporary files \u2014 so nothing of the plugin's still holds its directory. It is the same teardown the adapter runs on stdin EOF; it is an event, not an RPC, because on a remove the hub may have no adapter to kill and the plugin must not depend on a session being open. A process that merely ATTACHED to a shared resource owns nothing and stops nothing; the OWNER releases it. The hub does not sequence the plugin's internals or know what it started (ARCHITECTURE 15/500: only adapter/ spawns processes); it only delivers the event during a remove."
+      }
+    ],
     "approval": {
       "method": "approval_need",
       "reply": [

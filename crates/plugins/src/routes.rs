@@ -359,7 +359,17 @@ async fn remove(
                 location,
                 serde_json::json!({ "id": id, "state": "removing" }),
                 async move {
-                    // Stop the harness's cached adapter FIRST: a prepared/running
+                    // Let the PLUGIN make itself clean before the hub deletes it: it
+                    // is being removed, so it releases what it started (the shared
+                    // harness service a `dsh web`-style server holds) — the same
+                    // teardown it runs on stdin EOF. This is the plugin's obligation
+                    // ("a plugin keeps itself clean"); the hub only delivers the
+                    // event, it does not sequence the plugin's internals.
+                    adapters.notify_removing(&id2).await;
+                    // Let the plugin's process act on the event and exit its owned
+                    // children before we cut it off.
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    // Stop the harness's cached adapter: a prepared/running
                     // adapter holds files under the plugin dir, so the delete fails
                     // with os error 32 (docs/issues/20261005-060000). Dropping the
                     // handle kills the child (kill_on_drop).

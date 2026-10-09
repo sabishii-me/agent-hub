@@ -428,6 +428,30 @@ impl Adapters {
         }
     }
 
+    /// Tell a plugin it is being REMOVED, so it releases what it started (a shared
+    /// harness service) before the hub deletes its files. One-way: it is an EVENT,
+    /// not an RPC — the hub does not wait for or require a reply. The plugin's own
+    /// process answers it by running its shutdown path (stop the service it owns),
+    /// exactly as it does on stdin EOF; there is nothing for a caller to sequence.
+    ///
+    /// Starts the adapter if none is running, so the event is delivered even when
+    /// no session is open (the harness may still be holding a service). Best-effort:
+    /// a plugin that cannot be started to receive it is not an error here — the
+    /// subsequent delete either succeeds (the files were already free) or fails
+    /// honestly.
+    pub async fn notify_removing(&self, id: &str) {
+        match self.ensure_started(id).await {
+            Ok(handle) => {
+                if let Err(e) = handle.notify("plugin/removing", json!({})).await {
+                    tracing::warn!(harness = %id, error = %e, "could not deliver plugin/removing");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(harness = %id, error = %e, "could not start the adapter to deliver plugin/removing");
+            }
+        }
+    }
+
     /// The `AGENT_HUB_*` environment for an adapter, plus the connection
     /// credentials, exactly as the contract and the old hub define it: the
     /// process environment with `AGENT_HUB_SECRET_KEY` removed, then the hub's
