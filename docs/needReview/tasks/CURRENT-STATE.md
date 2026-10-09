@@ -1,5 +1,29 @@
 # CURRENT STATE — read this first (durable handoff)
 
+## UPDATE 2026-10-09 — current task: adapt the dsh adapter to dsh 0.2.0 (+ clean plugin remove)
+
+**Read `docs/needReview/review/20261009-remove-must-release-plugin-resources.md` first.** It has the
+task state, commits, and the open decision. Summary:
+
+- **Task**: make the DeepSeek harness (`deepseek` plugin / `dsh`) work on its pinned runtime
+  **`@deepseek-ai/dsh 0.2.0-rc.2`**, driving the REAL adapter through `/v1`, then make plugin REMOVE
+  clean (stopping the dsh SERVICE the adapter starts).
+- **dsh 0.2.0 adapter adaptation: DONE + verified** (auth cookie, `ns/method` endpoints, `{args}`
+  payloads, `session/prompt` requestId, `remote.mux`+`session/follow`+`$events`, approvals
+  `$events/result`, tools recorded). Adapter commits `1f4bc97`,`34c57f9`,`6bb9eed`
+  (prts-harness-deepseek).
+- **deepseek whole-chain: 13/14.** Only `the removed plugin is gone` FAILS: remove does not stop the
+  detached `dsh web` service, so `remove_dir_all` returns `Access is denied`. This is a **design gap**
+  (a service lifetime the architecture never modelled — see the review doc), to be fixed with a
+  plugin-level RELEASE phase before delete. **Needs owner review of the contract shape.**
+- **Canonical runner (py, env-driven)**: `PI_PLUGIN_DIR=/e/AI/ideas/prts-harness-deepseek
+  PI_HARNESS_ID=deepseek PI_MODEL=gpt-6-astra python
+  tests/lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py`. Do NOT fork a new test
+  system; do NOT debug by hacking the test script.
+- **Guardrails**: no downgrade of the dsh pin; no external `taskkill`/`tasklist` from child processes
+  (endpoint protection flags it); provider ids live in `_CUSTOM-<name>` (a constant).
+
+
 Updated 2026-10-05, hub commit `19746ff` (branch `feat/hub-modular-redesign`). Working tree clean.
 
 ## The task (unchanged)
