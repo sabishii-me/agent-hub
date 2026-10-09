@@ -43,8 +43,8 @@ fwd = Forwarder(host, port)
 hub = Hub(plugins_src=PI)
 try:
     hub.start()
-    PROV = hub.post("/v1/model-providers", {"id": "HOME-JP-prod", "url": fwd.url, "api": prov["api"], "token": prov["token"]})
-    PROV = ((c.get("json") or {}).get("provider") or {}).get("id")
+    r = hub.post("/v1/model-providers", {"id": "HOME-JP-prod", "url": fwd.url, "api": prov["api"], "token": prov["token"]})
+    PROV = ((r.get("json") or {}).get("provider") or {}).get("id")
     r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV, "modelId": MODEL}, key="nd-s")
     sid = r["json"]["session"]["id"]
     s = hub.wait_status(sid, "active")

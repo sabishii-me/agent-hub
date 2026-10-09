@@ -14,7 +14,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
-from hub import Hub, hub_sha, register_provider, wait_turn, all_descendants, kill_pid  # noqa: E402
+from hub import Hub, hub_sha, register_provider, wait_turn, descendants_with_command, kill_pid  # noqa: E402
 from tally import Tally, combo, kind_of                          # noqa: E402
 
 PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
@@ -35,19 +35,30 @@ try:
     sid = r["json"]["session"]["id"]
     t.check(hub.wait_status(sid, "active").get("status") == "active", "the session is active")
 
-    tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "Count slowly from 1 to 500."}], "idempotencyKey": "kr-t"}, key="kr-t")
+    # The runtime process already exists once the session is active. Capture it NOW, before the turn:
+    # enumerating descendants costs ~1.5s (PowerShell CIM), longer than a fast harness's whole turn,
+    # so doing it after the prompt would let the turn finish before the kill landed (measured on dsh).
+    # The runtime is the node descendant that is NOT the adapter: pi runs its runtime as a node child,
+    # dsh runs its server (`bin.js web`) as a node child.
+    desc = descendants_with_command(hub.child.pid)
+    nodes = [(pid, cmd) for pid, nm, cmd in desc if "node" in (nm or "").lower()]
+    runtimes = [(pid, cmd) for pid, cmd in nodes if "adapter.cjs" not in (cmd or "")]
+    t.check(len(nodes) >= 1, "a real descendant node process is found", f"descendants={desc}")
+    t.check(len(runtimes) >= 1, "the harness RUNTIME (a node descendant that is not the adapter) is found",
+            f"nodes={nodes}")
+
+    tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": "Count slowly from 1 to 500, one number per line, and take your time."}], "idempotencyKey": "kr-t"}, key="kr-t")
     t.check(tr["status"] == 202, "the turn is accepted", f"status={tr['status']}")
     tid = tr["json"]["turn"]["id"]
     row = wait_turn(hub, sid, tid, {"running", "awaiting_approval", "awaiting_question"}, tries=160)
     t.check(row.get("state") in ("running", "awaiting_approval", "awaiting_question"),
             "the turn is running", f"state={row.get('state')}")
 
-    # Kill the DEEPEST node descendant (the pi runtime), leaving the adapter alive.
-    desc = all_descendants(hub.child.pid)
-    nodes = [pid for pid, nm in desc if "node" in (nm or "").lower()]
-    t.check(len(nodes) >= 1, "a real descendant node process is found", f"descendants={desc}")
-    if nodes:
-        kill_pid(nodes[-1])
+    # Kill the RUNTIME process - the harness - the instant the turn is running, leaving the ADAPTER
+    # alive (it is the process the hub owns and must survive).
+    if runtimes:
+        kill_pid(runtimes[-1][0])
+        kill_pid(runtimes[-1][0])
 
     end = wait_turn(hub, sid, tid, {"ended"}, tries=240)
     t.check(end.get("state") == "ended", "the turn settles after the runtime died (no hang)",

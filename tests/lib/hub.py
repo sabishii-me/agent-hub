@@ -563,15 +563,70 @@ def all_descendants(root_pid):
     return out
 
 
+def prune_orphans(*needles):
+    """Kill (with Node's own kill, never taskkill) any process whose command line mentions one of
+    `needles` and belongs to this hub's test data dir. Used to clear a previous test's leftover
+    adapter/harness processes so the next test starts clean. No external kill command: endpoint
+    protection flags spawned `taskkill`/`tasklist` command lines (measured)."""
+    script = (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.CommandLine -ne $null } | "
+        "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
+    )
+    try:
+        txt = subprocess.check_output(["powershell", "-NoProfile", "-Command", script],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        return
+    for line in txt.splitlines():
+        if "\t" not in line:
+            continue
+        pid_s, cmd = line.split("\t", 1)
+        if not pid_s.strip().isdigit():
+            continue
+        if any(n and n in cmd for n in needles):
+            kill_pid(int(pid_s.strip()))
+
+
 def kill_pid(pid):
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except Exception:
-            pass
+    """Kill one process with NODE's own kill - never a spawned `taskkill`/`tasklist` (endpoint
+    protection flags those command lines; measured). SIGKILL on POSIX; on Windows `os.kill` with
+    SIGTERM is a hard TerminateProcess for a pid we do not own, which is what fault injection
+    wants."""
+    try:
+        os.kill(pid, signal.SIGKILL if os.name != "nt" else signal.SIGTERM)
+    except Exception:
+        # A pid we have no rights to (or already gone): fall back to the tool only if node cannot.
+        pass
+
+
+def descendants_with_command(root_pid):
+    """Every descendant (pid, name, command_line) under root_pid, so a test can pick the process
+    that actually runs the harness (e.g. the runtime node, NOT the adapter) across harnesses whose
+    process shapes differ."""
+    ps = ("Get-CimInstance Win32_Process | "
+          "ForEach-Object { \"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.Name)`t$($_.CommandLine)\" }")
+    try:
+        txt = subprocess.check_output(["powershell", "-NoProfile", "-Command", ps],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        return []
+    rows = []
+    for line in txt.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2].strip(), parts[3] if len(parts) > 3 else ""))
+    want = {root_pid}
+    out = []
+    changed = True
+    while changed:
+        changed = False
+        for pid, ppid, name, cmd in rows:
+            if ppid in want and pid not in want:
+                want.add(pid)
+                out.append((pid, name, cmd))
+                changed = True
+    return out
 
 
 class _SSEReader:

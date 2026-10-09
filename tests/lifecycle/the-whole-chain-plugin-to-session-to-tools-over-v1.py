@@ -77,6 +77,11 @@ try:
     t.check(tid is not None, "the accepted turn names its id", f"body={tr['text'][:160]}")
     end = wait_turn(hub, sid, tid, {"ended"}, tries=480) if tid else {"state": "no-turn"}
     t.check(end.get("state") == "ended", "the turn reaches a terminal", f"state={end.get('state')}")
+    # The KIND matters: a turn the harness COMPLETED must be `completed`, not a fallback
+    # terminal. Without this, a `turn_end` the hub never matched (a missing clientMessageId)
+    # could pass as success while the hub settled it `failed` on a 5s timeout.
+    t.check(end.get("ended") == "completed", "the turn ended `completed` (the harness's own terminal)",
+            f"ended={end.get('ended')}")
 
     msgs = (hub.get(f"/v1/sessions/{sid}/messages")["json"] or {}).get("messages", [])
     text = " ".join(m.get("text") or "" for m in msgs if m.get("role") == "assistant")
