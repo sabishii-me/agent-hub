@@ -1,5 +1,59 @@
 # CURRENT STATE — read this first (durable handoff)
 
+## UPDATE 2026-10-10 — dsh 0.2.0 adapted, plugin-remove fixed, interrupt tests filling in
+
+### Where the task stands
+The task "adapt the deepseek (dsh) adapter to dsh 0.2.0 and make the checks real" is DONE; the
+current work is the **interrupt (fault-injection) test layer** being filled in against the real
+harnesses.
+
+- **dsh 0.2.0 adapter adaptation: DONE** (auth cookie, `ns/method` endpoints, `{args}` payloads,
+  `session/prompt` requestId, `remote.mux`+`session/follow`+`$events`, approvals via `$events/result`,
+  tools recorded, `turn_end` carries clientMessageId, `session/list` uses `_request`,
+  `agentPresets/select` uses flat `{agentId,agentPreset}`). Adapter repo `prts-harness-deepseek`.
+- **Plugin REMOVE fixed**: the hub delivers a one-way `plugin/removing` EVENT before deleting; the
+  plugin keeps itself clean (deepseek stops its shared dsh server; pi/jouzu stop their harness child).
+  Contract `coreCompliance.notifications`; bus `notify`; adapter-manager `notify_removing`.
+- **Whole-chain (over /v1, real adapters): pi/jouzu/deepseek all PASS** (deepseek 15/15 incl. the
+  `ended == completed` assertion).
+
+### Interrupt coverage (taxonomy `docs/needReview/issues/20261003-123000-interrupt-coverage-is-incomplete.md`)
+- **Covered (green on pi/jouzu; deepseek where the harness allows):** A1, A3, A6, A7, A8, A10,
+  P1, P2, P4, P5(start-time), P6, P7, C1, C2, C3, C6, C7.
+- **Still MISSING:** A2, A4, A5, A9(partial), P3, P5(mid-turn), P8, C4, C5. (A2/A4 need a half-dead
+  harness; P3 "close stdout but alive"; P8 "DB write fails"; C4 a late event across stop/reopen;
+  C5 a stop racing a concurrent turn admission.)
+- `tests/interrupt/` now has 17 files, all env-driven (`PI_PLUGIN_DIR`/`PI_HARNESS_ID`/`PI_MODEL`;
+  C7 also `PI_APPROVAL_PRESET`).
+
+### OPEN issues (real, recorded, NOT yet fixed)
+- **`20261010-000000`** — a pending approval blocked the pump's death signal so a dead adapter left
+  the session `active`. **FIXED** (handler now spawned).
+- **`20261010-001000`** — **deepseek ships no approval-gating preset**, so no approval can be raised
+  on it; C7 cannot run on deepseek (fails honestly). Open: needs a deepseek gating preset.
+- **`20261009-110000`** — a dead adapter is noticed late/unstably (the reader's ~1s EOF debounce is
+  deterministic; the async death handoff varies). **Non-defect in a clean env** (2.4s is normal,
+  design behaviour); the 20s cases were machine contention from orphan processes. The test now polls.
+  Recorded but treated as NOT a hub bug.
+- **`20261009-030000`** — detached dsh server outlived remove. **FIXED** (the remove event).
+- **`20261008-120000`** — hub demanded an unsanitised injected route name. (context: `_CUSTOM-` prefix)
+
+### Commits (hub `feat/hub-modular-redesign`)
+`632dea2` (_CUSTOM- + close stdin), `9e78b7e`/`957dcd5`/`6f2e49d` (remove event), `7e39188`/`1892c0b`
+(adapter turn/… fixes are in the adapter repo), `6d79640`/`40c73d7`/`15c63a6`/`b2b65ef`/`2bfee3b`
+(interrupt tests + the pump fix + coverage doc).
+
+### Canonical runners (py, env-driven — do NOT fork a new test system)
+- whole chain: `PI_PLUGIN_DIR=<repo> PI_HARNESS_ID=<pi|jouzu|deepseek> PI_MODEL=gpt-6-astra python tests/lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py`
+- interrupt: any `tests/interrupt/*.py` the same way. Clean state between runs: kill `agent-hub.exe`
+  and any `node` under `*test-home*`, then `rm -rf .test-home` (orphans make runs flaky).
+
+### Guardrails
+- Do NOT downgrade the dsh pin (`0.2.0-rc.2`). No external `taskkill`/`tasklist` from child processes
+  (endpoint protection flags it); product code uses Node's own `child.kill()`, tests use CIM + Node's
+  `os.kill`. Provider ids live in `_CUSTOM-<name>` (a const). A change to `contract/`/ADR needs the
+  OWNER's review BEFORE it is written. Never weaken a test to make it pass.
+
 ## UPDATE 2026-10-09 — current task: adapt the dsh adapter to dsh 0.2.0 (+ clean plugin remove)
 
 **Read `docs/needReview/review/20261009-remove-must-release-plugin-resources.md` first.** It has the
@@ -91,17 +145,20 @@ The host's real provider (`~/.pi/agent/models.json` -> `192.168.31.29:8990`) ans
 BLOCKED (upstream runtime cannot boot here). docs/tasks/dsh-blocked.md.
 
 ## Open issues (see docs/issues/INDEX.md)
-- `20261005-130000` [T0] closes the injection hole; verify against the PUBLISHED registry.
-- `20261005-100000` the registry is still a checked-in local file for tests (the harness now drives
-  the hub's own refresh/catalog; the official release is what is missing).
-- `20261005-150000` host provider 400; `20261004-060000/-070000` jouzu residual;
-  `20261003-122000` contract close/readonly; the unratified `turn_end` clientMessageId edit.
+Current, verified-relevant open items (the older 20261005 list is superseded — the registry is
+PUBLISHED and the chain runs; keep this list current):
+- `20261010-001000` — deepseek ships no approval-gating preset, so no approval can be raised on it
+  (C7 cannot run there). Needs a dsh gating preset.
+- `20261003-123000` — interrupt coverage still MISSING: A2, A4, A5, A9(partial), P3, P5(mid-turn),
+  P8, C4, C5.
+- `20261009-110000` — dead-adapter detection latency; NOT a hub defect in a clean env (the 1s is the
+  reader's EOF debounce, by design; the 20s cases were machine contention). Tests poll.
 
 ## What is next (in order)
-1. Publish the `registry` release of `sabishii-me/agent-hub` (the fixed asset name) and fix the host
-   provider. Then run the chain per docs/tasks/20261005-post-publication-acceptance.md — through the
-   hub's own mechanism, no test-side stand-in.
-2. Only then can the 33 UNVERIFIED files be run and the plugin-driver capability be established.
+1. Continue the interrupt layer: the MISSING cases above (A2/A4 half-dead harness, P3 close-stdout,
+   P8 DB-write-fails, C4 late event across stop/reopen, C5 stop racing a turn admission), each
+   env-driven and run on pi/jouzu/deepseek.
+2. Then re-run the WHOLE chain + interrupt suite on all three harnesses as a regression gate.
 
 ## Do NOT
 - do not publish the registry to make tests green; publication is for verifying the real chain;
