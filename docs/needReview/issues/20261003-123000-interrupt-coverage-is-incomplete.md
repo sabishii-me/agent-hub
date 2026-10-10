@@ -92,11 +92,19 @@ jouzu - a turn after close+reopen never reaches a terminal, `docs/issues/2026101
 (covered by `send-immediately-after-cancel.py`: a cancel in flight + an immediate turn -> defined
 outcome, no double-dispatch, not wedged).
 
-Still MISSING: **A2, A4, P3 (need a deliberately misbehaving harness: a cancel that is never
-answered, an adapter that closes stdout but stays alive), P5(mid-turn) (a provider that errors after
-the first token), P8 (the hub's DB write fails while settling), A9 (one file that walks EVERY
-terminal and re-checks reuse).** None of the still-missing cases is a known hub gap; A2/P3 are the
-only ones that genuinely need a fault-injection harness rather than a real adapter - do NOT build that
-until the real-harness cases are exhausted.
+Covered since: A9 (`a-session-is-reusable-after-every-terminal-path.py`: 13/13 pi,
+13/13 deepseek; RED on jouzu at the needs-repair reopen turn, the same 20261011-010000 hang).
+
+Still MISSING (with what each needs):
+- **A2** (a cancel delivered but never answered): needs a harness that ignores an abort.
+- **A4** (a cancel while the prompt runs, a stale snapshot says completed): same.
+- **P3** (the adapter closes stdout but stays alive): needs a harness that closes stdout and
+  keeps working.
+- **P5 mid-turn** (the provider errors AFTER the first token): needs a STATEFUL endpoint (succeed,
+  then error); the existing TCP forwarder (`tests/lib/tcpfwd.py`) only cuts the route (P7).
+- **P8** (the hub's DB write fails while settling): injectable by holding `BEGIN EXCLUSIVE` on the
+  live `hub.sqlite` at the settle instant - fragile (can wedge the hub), needs care.
+None is a known hub gap. A2/A4/P3 are the only ones that need a deliberately misbehaving harness;
+do NOT build that until the real-harness cases are exhausted (owner direction).
 Harness limits found while filling: deepseek ships no approval-gating preset, so C7 cannot run on it
 (`docs/issues/20261010-001000`).
