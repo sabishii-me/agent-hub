@@ -86,6 +86,17 @@ softened.
 Covered by a real, env-driven test (green on pi/jouzu; deepseek where the harness allows):
 A1, A3, A6, A7, A8, A10, P1, P2, P4, P5 (start-time), P6, P7, C1, C2, C3, C6, C7.
 
-Still MISSING: A2, A4, A5, A9(partial), P3, P5(mid-turn), P8, C4, C5.
+Covered since: A5 (`a-cancel-that-is-never-confirmed-is-swept.py`, 11/11 all three), C4
+(`a-late-event-from-an-old-turn-never-reaches-the-new-process.py`: 14/14 pi, 14/14 deepseek; RED on
+jouzu - a turn after close+reopen never reaches a terminal, `docs/issues/20261011-010000`), C5
+(covered by `send-immediately-after-cancel.py`: a cancel in flight + an immediate turn -> defined
+outcome, no double-dispatch, not wedged).
+
+Still MISSING: **A2, A4, P3 (need a deliberately misbehaving harness: a cancel that is never
+answered, an adapter that closes stdout but stays alive), P5(mid-turn) (a provider that errors after
+the first token), P8 (the hub's DB write fails while settling), A9 (one file that walks EVERY
+terminal and re-checks reuse).** None of the still-missing cases is a known hub gap; A2/P3 are the
+only ones that genuinely need a fault-injection harness rather than a real adapter - do NOT build that
+until the real-harness cases are exhausted.
 Harness limits found while filling: deepseek ships no approval-gating preset, so C7 cannot run on it
 (`docs/issues/20261010-001000`).
