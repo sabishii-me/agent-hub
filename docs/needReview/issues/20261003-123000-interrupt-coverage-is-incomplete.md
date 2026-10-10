@@ -80,3 +80,12 @@ softened.
 2. P3/P4/P8 (process fault, no auth).
 3. C1..C7 (concurrency / mixing, no auth).
 4. A1/A4 + P5/P6/P7 (live provider).
+
+## Progress (updated 2026-10-10)
+
+Covered by a real, env-driven test (green on pi/jouzu; deepseek where the harness allows):
+A1, A3, A6, A7, A8, A10, P1, P2, P4, P5 (start-time), P6, P7, C1, C2, C3, C6, C7.
+
+Still MISSING: A2, A4, A5, A9(partial), P3, P5(mid-turn), P8, C4, C5.
+Harness limits found while filling: deepseek ships no approval-gating preset, so C7 cannot run on it
+(`docs/issues/20261010-001000`).
