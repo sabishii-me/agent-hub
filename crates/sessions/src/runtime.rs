@@ -423,10 +423,23 @@ impl Sessions {
                     let id = n.id.clone().unwrap_or(Value::Null);
                     let method = n.method.clone();
                     if let Some(handler) = &pump_reverse {
-                        let result = handler(pump_sid.clone(), method, n.params.clone()).await;
-                        if let Some(result) = result {
-                            let _ = pump_reply.reply(&id, result).await;
-                        }
+                        // Answer the reverse request (e.g. `approval_need`) WITHOUT blocking the
+                        // pump loop. A pending approval waits on a human for an unbounded time;
+                        // if we awaited it HERE, the loop would stop draining and would never
+                        // reach the death signal below - so a dead adapter (during an unanswered
+                        // approval) left the session `active` forever
+                        // (docs/issues/20261010-000000). Spawn it: the loop stays live, and the
+                        // reply is still sent to the SAME request id.
+                        let handler = handler.clone();
+                        let reply = pump_reply.clone();
+                        let req_sid = pump_sid.clone();
+                        let params = n.params.clone();
+                        tokio::spawn(async move {
+                            let result = handler(req_sid, method, params).await;
+                            if let Some(result) = result {
+                                let _ = reply.reply(&id, result).await;
+                            }
+                        });
                     }
                     continue;
                 }
