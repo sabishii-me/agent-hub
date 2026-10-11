@@ -28,9 +28,10 @@ harnesses.
   C7 also `PI_APPROVAL_PRESET`).
 
 ### OPEN issues (real, recorded)
-- **`20261011-010000` [PRIORITY]** - jouzu: a turn after CLOSE+REOPEN never reaches a terminal
-  (hangs `running`). Real, reproducible on the real jouzu adapter (pi/deepseek 14/14, jouzu 13/14).
-  Blocks C4 and A9 on jouzu. **Next action: fix this.**
+- **`20261011-010000` [RECORDED - DO NOT FIX NOW]** - jouzu: a turn after CLOSE+REOPEN never starts
+  (pi accepts the prompt, no agent runs). Root-caused to the OLD pi version jouzu PINS; pi itself is
+  14/14 on the same flow (control run). jouzu is about to sync to the latest pi, so fixing it now is
+  wasted work. C4 and A9 stay RED on jouzu until then. Do NOT change the hub (verified not the hub).
 - **`20261010-001000`** - deepseek ships no approval-gating preset, so C7 cannot run on it.
 - **`20261009-110000`** - dead-adapter detection latency; NOT a hub defect in a clean env (the ~1s
   is the reader's EOF debounce, by design; the 20s cases were machine contention). Tests poll.
@@ -38,11 +39,11 @@ harnesses.
   `20261009-030000` (detached dsh server outlived remove), `20261009-090000`/`-100000`/`-101000`.
 
 ### The immediate next task
-**Investigate and fix `20261011-010000` (jouzu resume-turn-hang).** Likely place: jouzu settles a
-turn on `agent_settled` (not `turn_end`); after a RESUME the resumed pi may not emit it, so no
-terminal. Check the jouzu adapter's `session/start(resume)` + `agent_settled` path and the
-`clientMessageId` echo. Verified by `a-late-event-from-an-old-turn-never-reaches-the-new-process.py`
-and `a-session-is-reusable-after-every-terminal-path.py` on jouzu.
+**Continue the interrupt layer on the REAL harnesses** (owner direction: finish the real-harness
+cases before any fault-injection harness). Next up: **P5 (mid-turn)** - a provider that errors AFTER
+the first token (needs a stateful endpoint; the TCP forwarder only cuts the route = P7). Then P8
+(a careful `BEGIN EXCLUSIVE` lock of the live DB). A2/A4/P3 stay deferred (they need a misbehaving
+harness). The jouzu resume-hang is RECORDED and waits for jouzu's pi upgrade.
 
 ### Commits (hub `feat/hub-modular-redesign`)
 `632dea2` (_CUSTOM- + close stdin), `9e78b7e`/`957dcd5`/`6f2e49d` (remove event),

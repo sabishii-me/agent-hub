@@ -1,7 +1,12 @@
 # 20261011-010000 - jouzu: a turn after close+reopen never starts (pi accepts the prompt, no agent runs)
 
-**State:** OPEN (root-caused to the jouzu/pi RESUME path). Owner: the jouzu adapter / its pinned pi
-runtime.
+**State:** OPEN - RECORDED, DO NOT FIX NOW (blocked on the jouzu runtime upgrade).
+**Owner:** the jouzu adapter's PINNED pi runtime (an OLD version).
+
+**Owner's call (2026-10-11):** pi ITSELF does NOT hang - the same close+reopen+turn flow is 14/14 on
+the pi plugin. jouzu runs an OLDER pinned pi, and jouzu is about to sync to the latest pi, so fixing
+the resume behaviour here now would be thrown away. RECORD and WAIT for the jouzu upgrade. Do NOT
+change the hub (verified not the hub) and do NOT work around it in the adapter.
 **Severity:** after a session is CLOSED and REOPENED, the next turn is accepted and acknowledged but
 NO agent turn runs, so its terminal never arrives: the turn stays `running` forever and the session's
 occupancy is held. Blocks C4 and A9 on jouzu.
@@ -50,6 +55,12 @@ does not run an agent. Candidates:
   `continue`/`resume` RPC, or waiting for a specific readiness event rather than any answer);
 - or pi's rpc mode refuses to run a turn on a resumed session until some initialization completes.
 This must be chased in the jouzu adapter's `startPi` / the pinned pi runtime, NOT in the hub.
+
+## Control (owner asked): pi itself does NOT hang
+
+`a-late-event-from-an-old-turn-never-reaches-the-new-process.py` on the pi plugin: **14/14**. The
+same close->reopen->new-turn flow works. So the defect is specific to the pi version JOUZU pins, not
+the hub and not pi today.
 
 ## Disposition
 
