@@ -160,21 +160,15 @@ The host's real provider (`~/.pi/agent/models.json` -> `192.168.31.29:8990`) ans
 ### dsh
 BLOCKED (upstream runtime cannot boot here). docs/tasks/dsh-blocked.md.
 
-## Open issues (see docs/issues/INDEX.md)
-Current, verified-relevant open items (the older 20261005 list is superseded — the registry is
-PUBLISHED and the chain runs; keep this list current):
-- `20261010-001000` — deepseek ships no approval-gating preset, so no approval can be raised on it
-  (C7 cannot run there). Needs a dsh gating preset.
-- `20261003-123000` — interrupt coverage still MISSING: A2, A4, A5, A9(partial), P3, P5(mid-turn),
-  P8, C4, C5.
-- `20261009-110000` — dead-adapter detection latency; NOT a hub defect in a clean env (the 1s is the
-  reader's EOF debounce, by design; the 20s cases were machine contention). Tests poll.
-
-## What is next (in order)
-1. Continue the interrupt layer: the MISSING cases above (A2/A4 half-dead harness, P3 close-stdout,
-   P8 DB-write-fails, C4 late event across stop/reopen, C5 stop racing a turn admission), each
-   env-driven and run on pi/jouzu/deepseek.
-2. Then re-run the WHOLE chain + interrupt suite on all three harnesses as a regression gate.
+## Open issues / What is next
+SUPERSEDED by the top block (2026-10-11). The authoritative list is at the top of this file:
+- OPEN: `20261011-010000` (jouzu resume-hang; RECORD, wait for jouzu's pi upgrade),
+  `20261010-001000` (deepseek has no approval preset), `20261009-110000` (death latency; NOT a
+  clean-env defect), `20261003-123000` (interrupt cases still to add: A2, A4, P3, P5-mid, P8).
+- FINISHED: the whole chain on pi/jouzu/deepseek; plugin remove; the dsh 0.2.0 adaptation; and the
+  interrupt cases A1/A3/A5/A6/A7/A8/A9/A10, P1/P2/P4/P5-start/P6/P7, C1..C7.
+- NEXT: P5 (mid-turn provider error) and P8 (DB write fails while settling), on the REAL harnesses.
+  A2/A4/P3 stay deferred (they need a deliberately misbehaving harness).
 
 ## Do NOT
 - do not publish the registry to make tests green; publication is for verifying the real chain;
