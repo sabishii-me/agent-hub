@@ -18,30 +18,39 @@ harnesses.
   `ended == completed` assertion).
 
 ### Interrupt coverage (taxonomy `docs/needReview/issues/20261003-123000-interrupt-coverage-is-incomplete.md`)
-- **Covered (green on pi/jouzu; deepseek where the harness allows):** A1, A3, A6, A7, A8, A10,
-  P1, P2, P4, P5(start-time), P6, P7, C1, C2, C3, C6, C7.
-- **Still MISSING:** A2, A4, A5, A9(partial), P3, P5(mid-turn), P8, C4, C5. (A2/A4 need a half-dead
-  harness; P3 "close stdout but alive"; P8 "DB write fails"; C4 a late event across stop/reopen;
-  C5 a stop racing a concurrent turn admission.)
-- `tests/interrupt/` now has 17 files, all env-driven (`PI_PLUGIN_DIR`/`PI_HARNESS_ID`/`PI_MODEL`;
+- **Covered, green on pi/jouzu/deepseek:** A1, A3, A5, A6, A7, A8, A9*, A10, P1, P2, P4,
+  P5(start-time), P6, P7, C1, C2, C3, C4*, C5, C6, C7*(*C7 deepseek cannot: no approval preset;
+  *A9/C4 GREEN on pi+deepseek but RED on jouzu - the jouzu reopen hang below).
+- **Still MISSING:** A2, A4, P3 (need a deliberately misbehaving harness - DEFERRED per owner:
+  finish the real-harness cases first), P5(mid-turn) (needs a stateful endpoint), P8 (needs a
+  careful `BEGIN EXCLUSIVE` lock of the live DB).
+- `tests/interrupt/` now has 20 files, all env-driven (`PI_PLUGIN_DIR`/`PI_HARNESS_ID`/`PI_MODEL`;
   C7 also `PI_APPROVAL_PRESET`).
 
-### OPEN issues (real, recorded, NOT yet fixed)
-- **`20261010-000000`** — a pending approval blocked the pump's death signal so a dead adapter left
-  the session `active`. **FIXED** (handler now spawned).
-- **`20261010-001000`** — **deepseek ships no approval-gating preset**, so no approval can be raised
-  on it; C7 cannot run on deepseek (fails honestly). Open: needs a deepseek gating preset.
-- **`20261009-110000`** — a dead adapter is noticed late/unstably (the reader's ~1s EOF debounce is
-  deterministic; the async death handoff varies). **Non-defect in a clean env** (2.4s is normal,
-  design behaviour); the 20s cases were machine contention from orphan processes. The test now polls.
-  Recorded but treated as NOT a hub bug.
-- **`20261009-030000`** — detached dsh server outlived remove. **FIXED** (the remove event).
-- **`20261008-120000`** — hub demanded an unsanitised injected route name. (context: `_CUSTOM-` prefix)
+### OPEN issues (real, recorded)
+- **`20261011-010000` [PRIORITY]** - jouzu: a turn after CLOSE+REOPEN never reaches a terminal
+  (hangs `running`). Real, reproducible on the real jouzu adapter (pi/deepseek 14/14, jouzu 13/14).
+  Blocks C4 and A9 on jouzu. **Next action: fix this.**
+- **`20261010-001000`** - deepseek ships no approval-gating preset, so C7 cannot run on it.
+- **`20261009-110000`** - dead-adapter detection latency; NOT a hub defect in a clean env (the ~1s
+  is the reader's EOF debounce, by design; the 20s cases were machine contention). Tests poll.
+- FIXED this stretch: `20261010-000000` (pending approval blocked the death signal),
+  `20261009-030000` (detached dsh server outlived remove), `20261009-090000`/`-100000`/`-101000`.
+
+### The immediate next task
+**Investigate and fix `20261011-010000` (jouzu resume-turn-hang).** Likely place: jouzu settles a
+turn on `agent_settled` (not `turn_end`); after a RESUME the resumed pi may not emit it, so no
+terminal. Check the jouzu adapter's `session/start(resume)` + `agent_settled` path and the
+`clientMessageId` echo. Verified by `a-late-event-from-an-old-turn-never-reaches-the-new-process.py`
+and `a-session-is-reusable-after-every-terminal-path.py` on jouzu.
 
 ### Commits (hub `feat/hub-modular-redesign`)
-`632dea2` (_CUSTOM- + close stdin), `9e78b7e`/`957dcd5`/`6f2e49d` (remove event), `7e39188`/`1892c0b`
-(adapter turn/… fixes are in the adapter repo), `6d79640`/`40c73d7`/`15c63a6`/`b2b65ef`/`2bfee3b`
-(interrupt tests + the pump fix + coverage doc).
+`632dea2` (_CUSTOM- + close stdin), `9e78b7e`/`957dcd5`/`6f2e49d` (remove event),
+`6d79640`/`40c73d7`/`15c63a6`/`b2b65ef`/`2bfee3b`/`cae1b81`/`0d4b36a`/`6b5a486`/`3bef072`
+(interrupt tests A3/A5/A8/A9/A10 + C4/C6/C7, the pump fix, coverage docs).
+Adapter repos: `prts-harness-deepseek` (`1892c0b` turn_end clientMessageId + session/list `_request`,
+`ad0bcc1` agentPresets/select flat args), `prts-harness-pi`/`prts-harness-jouzu`
+(`plugin/removing` handling).
 
 ### Canonical runners (py, env-driven — do NOT fork a new test system)
 - whole chain: `PI_PLUGIN_DIR=<repo> PI_HARNESS_ID=<pi|jouzu|deepseek> PI_MODEL=gpt-6-astra python tests/lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py`
