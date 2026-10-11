@@ -1,6 +1,12 @@
 # CURRENT STATE — read this first (durable handoff)
 
-## UPDATE 2026-10-10 — dsh 0.2.0 adapted, plugin-remove fixed, interrupt tests filling in
+## UPDATE 2026-10-11 — interrupt layer ~2/3 done; jouzu resume-hang RECORDED (wait for its pi upgrade)
+
+### Verified last run (real harnesses, over /v1)
+- whole-chain: pi/jouzu/deepseek PASS (deepseek 15/15).
+- interrupt: **pi 20/20 files, deepseek 19/20** (C7 cannot run: no approval preset), **jouzu 18/20**
+  (C4 + A9 RED - the recorded resume-hang below).
+- Presets test: deepseek 8/8 (the `agentPresets/select` fix works).
 
 ### Where the task stands
 The task "adapt the deepseek (dsh) adapter to dsh 0.2.0 and make the checks real" is DONE; the
