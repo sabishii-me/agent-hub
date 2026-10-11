@@ -92,6 +92,8 @@ jouzu - a turn after close+reopen never reaches a terminal, `docs/issues/2026101
 (covered by `send-immediately-after-cancel.py`: a cancel in flight + an immediate turn -> defined
 outcome, no double-dispatch, not wedged).
 
+Covered since 2026-10-11: P5 mid-turn (a real stateful HTTP proxy cut, see above).
+
 Covered since: A9 (`a-session-is-reusable-after-every-terminal-path.py`: 13/13 pi,
 13/13 deepseek; RED on jouzu at the needs-repair reopen turn, the same 20261011-010000 hang).
 
@@ -100,8 +102,12 @@ Still MISSING (with what each needs):
 - **A4** (a cancel while the prompt runs, a stale snapshot says completed): same.
 - **P3** (the adapter closes stdout but stays alive): needs a harness that closes stdout and
   keeps working.
-- **P5 mid-turn** (the provider errors AFTER the first token): needs a STATEFUL endpoint (succeed,
-  then error); the existing TCP forwarder (`tests/lib/tcpfwd.py`) only cuts the route (P7).
+- ~~**P5 mid-turn**~~ DONE (`the-provider-errors-mid-turn-and-the-turn-settles.py`, `tests/lib/httpfault.py`):
+  a REAL HTTP proxy to the real provider cuts the `text/event-stream` after the first
+  `content_block_delta` (sticky, so a retry cannot pass). pi 9/9, deepseek 9/9; jouzu 8/9 - its OLD
+  pi runtime's own model call is answered 400 by the provider before the cut, so the injected fault
+  never fires (the same old-pi family as `20261011-010000`; the test's `cut_done` assertion catches
+  it honestly).
 - **P8** (the hub's DB write fails while settling): injectable by holding `BEGIN EXCLUSIVE` on the
   live `hub.sqlite` at the settle instant - fragile (can wedge the hub), needs care.
 None is a known hub gap. A2/A4/P3 are the only ones that need a deliberately misbehaving harness;

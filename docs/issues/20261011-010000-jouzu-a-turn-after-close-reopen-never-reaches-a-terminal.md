@@ -66,3 +66,20 @@ the hub and not pi today.
 
 Two tests stay RED on jouzu (real finding, not weakened): `a-late-event-from-an-old-turn...` (C4) and
 `a-session-is-reusable-after-every-terminal-path` (A9). They must pass once the resume path is fixed.
+
+## Addendum (20261011, while adding P5): the SAME old-pi family, a second symptom
+
+Building the P5 mid-turn test (a real HTTP proxy to the real provider that cuts the stream after
+the first token) surfaced a second jouzu symptom with the same root:
+
+- pi: 9/9, deepseek: 9/9 - the proxy cuts the stream mid-turn and the turn settles `failed`.
+- jouzu: the turn fails BEFORE the cut. Tracing the proxy shows the real provider answers the
+  runtime's `POST /v1/messages?beta=true` with **HTTP 400 Bad Request** (257 bytes). The proxy then
+  forwards a short body and the connection ends, so the injected cut never fires and the turn ends
+  `failed` for the WRONG reason (the runtime's request was rejected, not the injected fault). The
+  test's `cut_done` assertion catches this correctly (jouzu 8/9).
+
+This is the same OLD pinned pi runtime as the resume-hang: a model call from it is rejected by the
+provider. It is NOT the hub and NOT the test proxy (the proxy forwards the full 75671-byte body
+faithfully - verified). RECORD with the resume-hang; both should clear when jouzu syncs to the
+latest pi.

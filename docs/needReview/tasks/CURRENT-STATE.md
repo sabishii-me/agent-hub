@@ -1,11 +1,13 @@
 # CURRENT STATE — read this first (durable handoff)
 
-## UPDATE 2026-10-11 — interrupt layer ~2/3 done; jouzu resume-hang RECORDED (wait for its pi upgrade)
+## UPDATE 2026-10-11 (later) — P5 mid-turn DONE; jouzu resume-hang RECORDED (wait for its pi upgrade)
 
 ### Verified last run (real harnesses, over /v1)
 - whole-chain: pi/jouzu/deepseek PASS (deepseek 15/15).
-- interrupt: **pi 20/20 files, deepseek 19/20** (C7 cannot run: no approval preset), **jouzu 18/20**
-  (C4 + A9 RED - the recorded resume-hang below).
+- interrupt: **pi 21/21 files, deepseek 20/21** (C7 cannot run: no approval preset), **jouzu 19/21**
+  (C4 + A9 RED = the recorded resume-hang; P5 8/9 = jouzu's old-pi model call 400s before the cut).
+  New: **P5 mid-turn** (`the-provider-errors-mid-turn-and-the-turn-settles.py` + `tests/lib/httpfault.py`)
+  - a real HTTP proxy to the real provider cuts the SSE stream after the first token; pi 9/9, deepseek 9/9.
 - Presets test: deepseek 8/8 (the `agentPresets/select` fix works).
 
 ### Where the task stands
@@ -28,8 +30,8 @@ harnesses.
   P5(start-time), P6, P7, C1, C2, C3, C4*, C5, C6, C7*(*C7 deepseek cannot: no approval preset;
   *A9/C4 GREEN on pi+deepseek but RED on jouzu - the jouzu reopen hang below).
 - **Still MISSING:** A2, A4, P3 (need a deliberately misbehaving harness - DEFERRED per owner:
-  finish the real-harness cases first), P5(mid-turn) (needs a stateful endpoint), P8 (needs a
-  careful `BEGIN EXCLUSIVE` lock of the live DB).
+  finish the real-harness cases first), P8 (needs a careful `BEGIN EXCLUSIVE` lock of the live DB).
+  P5(mid-turn) is now DONE.
 - `tests/interrupt/` now has 20 files, all env-driven (`PI_PLUGIN_DIR`/`PI_HARNESS_ID`/`PI_MODEL`;
   C7 also `PI_APPROVAL_PRESET`).
 
@@ -45,11 +47,12 @@ harnesses.
   `20261009-030000` (detached dsh server outlived remove), `20261009-090000`/`-100000`/`-101000`.
 
 ### The immediate next task
-**Continue the interrupt layer on the REAL harnesses** (owner direction: finish the real-harness
-cases before any fault-injection harness). Next up: **P5 (mid-turn)** - a provider that errors AFTER
-the first token (needs a stateful endpoint; the TCP forwarder only cuts the route = P7). Then P8
-(a careful `BEGIN EXCLUSIVE` lock of the live DB). A2/A4/P3 stay deferred (they need a misbehaving
-harness). The jouzu resume-hang is RECORDED and waits for jouzu's pi upgrade.
+**P8** - the hub's DB write fails while settling a turn -> no dishonest terminal. The product path
+exists (`settle_turn`: record `terminal_intent`, retry the write, never publish on failure, leave it
+to reconcile) but has only unit coverage. Needs a REAL injection: hold `BEGIN EXCLUSIVE` on the live
+`hub.sqlite` at the settle instant - fragile (can wedge the hub), so it is its own careful task.
+A2/A4/P3 stay deferred (they need a misbehaving harness). The jouzu resume-hang (and P5's jouzu 400)
+are RECORDED and wait for jouzu's pi upgrade.
 
 ### Commits (hub `feat/hub-modular-redesign`)
 `632dea2` (_CUSTOM- + close stdin), `9e78b7e`/`957dcd5`/`6f2e49d` (remove event),
