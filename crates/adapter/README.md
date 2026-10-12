@@ -1,6 +1,6 @@
 # agent-hub-adapter
 
-The adapter domain (`ARCHITECTURE` §4, `contract/adapter-v1.json`): the hub owns the
+The adapter domain (`contract/adapter-v1.json`): the hub owns the
 adapter's **process**.
 
 - `bus.rs` - the **agent-bus** client: JSON-RPC 2.0 over the adapter's stdin/stdout,

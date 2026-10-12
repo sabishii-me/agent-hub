@@ -1,6 +1,6 @@
 # agent-hub-humans
 
-The humans domain (`ARCHITECTURE` §3): approvals and questions - a harness asking a person to
+The humans domain: approvals and questions - a harness asking a person to
 decide. The hub holds the pending decisions as control state; the adapter initiates
 (`approval_need` / a question) and the decision travels back as its reply.
 

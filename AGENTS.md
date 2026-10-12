@@ -1,73 +1,65 @@
 # AGENTS.md - agent-hub
 
-The rules for working in **this** repository. The orchestration repository (`prts-web`) holds
-the ADRs, reviewer tasks and cross-review reports; this repository is the **implementation**.
+The rules for working in **this** repository. This repository is the implementation: the
+Rust code and the `/v1` contract. It holds **no documentation** - no architecture file, no
+design notes, no issues log. Those live elsewhere.
 
-## The main task
+## The task
 
-**Implement the Rust agent-hub per the approved architecture, delivering real, usable `/v1`
-capabilities.** Work the vertical chain in `README.md` end to end. Do not treat a reviewer
-handoff (`prts-web/docs/tasks/TASK-048-hub-next-review.md`) or a review report
-(`PROVIDER-TURN-REVIEW-*.md`) as your task: they are correction input. Finish a capability, then
-pick the next one; do not wait for "continue".
+**Implement the agent-hub: real, usable `/v1` capabilities against the REAL adapters.**
 
-## Integrity (inherited from the project; ADR-0002)
+- A capability is DONE only when driven through `/v1` against a real adapter. A mock proves
+  only the hub's half; it is not acceptance.
+- Do not treat a bare "routes mounted" or "tests green" as done.
+- Finish a capability, then pick the next one; do not stop for a "continue".
 
-1. **Never render or record a conclusion stronger than the basis.** "Not run" is not "broken"
-   and is not "passes".
+## Integrity
+
+1. **Never render or record a conclusion stronger than the basis.** "Not run" is not
+   "broken" and is not "passes".
 2. **A claim of behaviour comes from a real run against `/v1`** - not a DOM string, not an
    echo, not an assertion that a status is `active`.
 3. **Fix at the root / contract boundary.** No local patches; no repair of a command the
    contract already names differently.
-4. **Honest unavailability beats a fake success.** An unbuilt capability answers `501`. A test
-   that cannot run prints SKIP and returns.
-5. **Explore first, then decide.** Do not ask two-choice questions when both are true; do not
-   ask when you can determine it.
+4. **Honest unavailability beats a fake success.** An unbuilt capability answers `501`. A
+   test that cannot run prints SKIP and returns; it is never reported green.
+5. **Explore first, then decide.** Do not ask two-choice questions when both are true; do
+   not ask when you can determine it.
 
 ## Boundaries
 
-- The hub is a **separate project**: changes require reporting. Branch `feat/hub-modular-redesign`;
-  PRs go through review, not direct to `main`.
-- **No blocking requests** (ADR-0009): long work is `202 + Location` and reports via the event
-  stream; nothing in request handling blocks the runtime.
-- **Mature components, not hand-rolled** (ADR-0010).
-- **The contract is the interface** (ADR-0011): express a change in `contract/` and only there.
+- The hub is a **separate project**: branch `feat/hub-modular-redesign`; PRs go through
+  review, not direct to `main`.
+- **No blocking requests**: long work is `202 + Location` and reports via the event stream;
+  nothing in request handling blocks the runtime.
+- **Mature components, not hand-rolled.**
+- **The contract is the interface**: a change is expressed in `contract/` and only there.
 - **Never** commit or overwrite uncommitted user work; never reset hard.
 
-## Harness acceptance is a MERGE GATE (owner, 2026-10-11)
+## Harness acceptance is a MERGE GATE
 
-**A harness (plugin/adapter) that does not pass the required tests may NOT be merged into the main
-branch.** This is a gate, not a preference.
+**A harness (plugin/adapter) that does not pass the required tests may NOT be merged into the
+main branch.**
 
-- **What must pass.** For a harness `H`, the whole-chain test and the interrupt suite, each run
-  against the REAL adapter with `PI_PLUGIN_DIR=<H's repo> PI_HARNESS_ID=<H>`:
-  - `tests/lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py` - all green;
-  - every `tests/interrupt/*.py` - all green on `H`.
-- **A RED case is a red harness.** It is fixed in the adapter, or blocked by a recorded issue, and
-  the harness does not merge while the case is RED.
-- **"Cannot express the case" is a RECORDED LIMIT, not a pass and not a skip.** When a harness
-  genuinely cannot reach a case (e.g. deepseek ships no approval-gating preset, so C7 cannot run),
-  the file records it and exits non-green; that is a known limit on the harness, listed in
-  `docs/needReview/issues/20261003-123000-interrupt-coverage-is-incomplete.md`, and it must be
-  resolved before the harness is accepted - not waved through.
-- **Never** make the gate green by weakening a test, skipping a case, or faking an adapter. A test
-  that would pass whatever happens is not a test.
-
-Corollary: a harness's RED case (like jouzu's resume-hang, `docs/issues/20261011-010000`) is a
-reason to HOLD that harness, not to relax the suite.
+- For a harness `H`, run the whole-chain test and every `tests/interrupt/*.py` against its
+  REAL adapter (`PI_PLUGIN_DIR=<H> PI_HARNESS_ID=<H>`): all green, or `H` does not merge.
+- A RED case is a red harness: fixed in the adapter, or blocked by a recorded issue; the
+  harness does not merge while the case is RED.
+- A case `H` genuinely cannot express is a recorded limit, not a pass and not a skip.
+- **Never** make the gate green by weakening a test, skipping a case, or faking an adapter.
 
 ## Authorization boundary
 
-Without explicit authorization, do **not**: read real credentials, import an apiKey, touch the
-real OS keychain, or make a real vendor/paid model call. That authorization blocks only the real
-call; it does not block implementation. Never substitute a fake provider or a fake green.
-Merge/push/publish follow their own authorization.
+Without explicit authorization, do **not**: read real credentials
+(`~/.pi/agent/models.json`), import an apiKey, touch the real OS keychain, or make a real
+vendor/paid model call. That authorization blocks only the real call; it does not block the
+implementation. Never substitute a fake provider or a fake green. Merge/push/publish follow
+their own authorization.
 
 ## Where things live
 
-- `docs/ARCHITECTURE.md` - the architecture; §17 the order of work, §18 status, §24 the
-  remaining surface. **§17 is the plan of record.**
-- `docs/tasks/*.md` - the implementation work records.
-- `crates/*` - the domains; `hub/` - the binary and the boot self-check.
-- Verification: `cargo build/test --workspace` (zero warnings), plus the gated real-hub tests
-  (`hub/tests/*.rs`) that spawn the actual binary.
+- `contract/` - the `/v1` contract, the adapter protocol, the error table. The interface.
+- `crates/` - the domains; `hub/` - the binary and the boot self-check.
+- `tests/` - the Python acceptance suite (env-driven, against a real hub and real adapters).
+- Verification: `cargo build --workspace` (zero warnings) and `cargo test --workspace`,
+  plus the gated real-hub tests that spawn the actual binary.

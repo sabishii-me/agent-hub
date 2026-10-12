@@ -1,6 +1,6 @@
 # agent-hub-extensions
 
-The extensions domain: the hub's side of the placement rule (`ARCHITECTURE` §6).
+The extensions domain: the hub's side of the placement rule.
 
 An extension is a directory a plugin ships (`<plugin>/extensions/<id>`). Before a harness runs,
 the hub **writes that harness's selected extension directories into its data dir**

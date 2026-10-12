@@ -1,6 +1,6 @@
 # agent-hub-contract
 
-The **single normalization authority** for the wire contract (ARCHITECTURE §9, task T1).
+The **single normalization authority** for the wire contract.
 
 `contract/v1.json` is a compact DSL, not JSON Schema. This crate turns it into valid
 **JSON Schema 2020-12** in one place, so no other component has to interpret the DSL and the

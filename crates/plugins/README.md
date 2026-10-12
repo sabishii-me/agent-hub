@@ -1,12 +1,12 @@
 # agent-hub-plugins
 
-The plugins domain (`ARCHITECTURE` §10, task T3): install, remove, prepare, and the
+The plugins domain: install, remove, prepare, and the
 listing, wired to the frame.
 
 - `state.rs` - the hub's **one verdict** on a plugin. Concurrent operations are ranked
   (`removing > installing > preparing > failed`), so a plugin is never reported in two
   states; `failed` recorded on disk outlives the operation.
-- `identity.rs` - logical **command identity** (`ARCHITECTURE` §11, R1): a resource id
+- `identity.rs` - logical **command identity**: a resource id
   locates and serializes; a command id tells a retry from a deliberate new command
   (install v1, then v2). Same key + same request replays; same key + different request
   conflicts; a new key is a new intent.

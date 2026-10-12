@@ -14,4 +14,4 @@ The hub's transport primitives, on axum/hyper/tokio. **Mechanisms, not product c
 `cargo test -p agent-hub-transport` exercises these primitives against a real listener. The
 `concurrency` file asserts only that N concurrent requests are answered, that two gated requests
 complete while a third is refused, and that nothing deadlocks. It does **not** demonstrate heavy
-operations or an idle-connection count (TASK-048 F05); the ADR-0009 numbers remain an open gate.
+operations or an idle-connection count; the concurrency numbers remain an open gate.
