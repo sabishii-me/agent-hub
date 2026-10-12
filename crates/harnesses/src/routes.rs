@@ -21,6 +21,9 @@ impl HarnessesState {
     pub fn new(harnesses: Harnesses, errors: ErrorRenderer) -> Self {
         HarnessesState { harnesses: Arc::new(harnesses), errors }
     }
+    pub fn new_shared(harnesses: Arc<Harnesses>, errors: ErrorRenderer) -> Self {
+        HarnessesState { harnesses, errors }
+    }
 }
 
 fn table() -> agent_hub_transport::RouteTable<HarnessesState> {

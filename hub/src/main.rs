@@ -168,10 +168,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             out
         }) as std::sync::Arc<dyn Fn() -> Vec<serde_json::Value> + Send + Sync>
     };
-    let harness_state = HarnessesState::new(
+    let harnesses_svc = std::sync::Arc::new(
         Harnesses::new(adapters.clone()).with_managed_models(managed_for_harnesses),
-        errors.clone(),
     );
+    let harness_state = HarnessesState::new_shared(harnesses_svc.clone(), errors.clone());
     // The DURABLE auth-operation store: the operation survives a restart.
     // Its own Db handle (opening the same file is how every domain shares it here).
     let auth_store = std::sync::Arc::new(agent_hub_providers::auth::AuthStore::new(
@@ -421,13 +421,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Every route requires the bearer token (o5: no anonymous discovery).
     let bearer = BearerToken::from_env_or_generate();
 
+    // The live facts `/v1/status` reports (identity is answered by the binary
+    // itself). Each closure reads the same value-free shape its list route serves.
+    let status_facts = {
+        let hs = harnesses_svc.clone();
+        let ps = providers.clone();
+        let cs = connections.clone();
+        let ss1 = sessions.clone();
+        let ss2 = sessions.clone();
+        agent_hub_transport::StatusFacts {
+            harnesses: Box::new(move || hs.list()),
+            providers: Box::new(move || {
+                ps.list()
+                    .map(|rows| {
+                        rows.into_iter()
+                            .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }),
+            connections: Box::new(move || {
+                cs.list()
+                    .map(|rows| {
+                        rows.into_iter()
+                            .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }),
+            session_count: Box::new(move || {
+                ss1.list().map(|s| s.len() as i64).unwrap_or(0)
+            }),
+            active_turns: Box::new(move || ss2.active_turn_count()),
+        }
+    };
+
     // One axum app: the transport surface plus the domain routes.
-    let transport = transport.with_meta(
-        selfcheck::surface_rows(),
-        contract_meta,
-        event_names,
-        openapi_text.to_string(),
-    );
+    let mut transport = transport
+        .with_meta(
+            selfcheck::surface_rows(),
+            contract_meta.clone(),
+            event_names,
+            openapi_text.to_string(),
+        )
+        .with_status_facts(status_facts);
+    transport.set_build_id(env!("HUB_BUILD_ID"));
+    // Facts read before `transport` moves into the router.
+    let started_at = transport.started_at.clone();
+    let bound_port_handle = transport.bound_port.clone();
     // A watch receiver so POST /v1/shutdown can ask the process to stop.
     let shutdown_rx = transport.shutdown.subscribe();
     let app = finish(routes(), transport)
@@ -445,14 +486,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::env::var("AGENT_HUB_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local = listener.local_addr()?;
+    // The bound port is a live fact `/v1/status` and the discovery record report.
+    bound_port_handle.store(local.port(), std::sync::atomic::Ordering::SeqCst);
 
-    // endpoint.json: the URL and bearer a client reads. Discovery is NOT
+    // endpoint.json: the full discovery record a client reads. Discovery is NOT
     // anonymous (o5), so the token is required on every route; the file is how a
-    // conforming client learns it.
+    // conforming client learns it. It carries the identity a spawning client
+    // matches against what it launched: `port`, `token`, `pid`, `protocol`,
+    // `buildId`, `startedAt` (`url` is kept as a convenience form of host+port).
     let endpoint = serde_json::json!({
-        "url": format!("http://{local}"),
+        "port": local.port(),
         "token": bearer.0,
         "pid": std::process::id(),
+        "url": format!("http://{local}"),
+        "protocol": { "name": contract_meta.protocol, "version": contract_meta.version },
+        "buildId": env!("HUB_BUILD_ID"),
+        "startedAt": started_at,
     });
     std::fs::write(
         data_dir.join("endpoint.json"),

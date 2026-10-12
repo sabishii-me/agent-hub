@@ -877,6 +877,12 @@ impl Sessions {
         Ok(self.db.list_sessions()?.iter().map(|r| self.view(r)).collect())
     }
 
+    /// In-flight turns (admitted, running, or being cancelled):
+    /// `GET /v1/status.activeTurns`.
+    pub fn active_turn_count(&self) -> i64 {
+        self.db.active_turn_count().unwrap_or(0)
+    }
+
     /// Close: stop the session's process and free its resources; the record stays
     /// and the status becomes `readonly`. Serialized with start/reopen on the same
     /// session (R4). If the process cannot be confirmed stopped, the error is

@@ -22,6 +22,7 @@ pub use table::RouteTable;
 pub use error::{DomainError, ErrorRenderer};
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use agent_hub_events::{Bus, CatchUp};
 use axum::{
@@ -135,6 +136,49 @@ pub struct Transport {
     pub openapi: Arc<String>,
     /// Fired by `POST /v1/shutdown` to ask the process to stop.
     pub shutdown: tokio::sync::watch::Sender<bool>,
+    /// The boot timestamp (ISO-8601, once, at construction): `/v1/status.startedAt`
+    /// and the discovery record report when THIS process started, not when the
+    /// request arrived.
+    pub started_at: String,
+    /// The port the listener actually bound (set once, after bind). `0` until then.
+    pub bound_port: Arc<AtomicU16>,
+    /// The build marker the binary was built from (`/v1/status.buildId`,
+    /// discovery record). Set once by the composition root from its own build.
+    pub build_id: Arc<String>,
+    /// The live facts `/v1/status` reports beyond identity: the harness/provider/
+    /// connection lists and the session/turn counts. The composition root installs
+    /// this because transport owns no store; when it is absent (probes, tests) the
+    /// lists are empty and the counts are 0 - never a lie, just nothing to report.
+    pub status_facts: Arc<StatusFacts>,
+}
+
+/// The live facts `GET /v1/status` reports, supplied by the composition root.
+/// Each field is already a value-free JSON value (the same shapes the list routes
+/// return); transport does not interpret them.
+pub struct StatusFacts {
+    /// `harnesses` - the installed harness list.
+    pub harnesses: Box<dyn Fn() -> Vec<serde_json::Value> + Send + Sync>,
+    /// `providers` - the value-free provider rows.
+    pub providers: Box<dyn Fn() -> Vec<serde_json::Value> + Send + Sync>,
+    /// `connections` - the value-free connection rows.
+    pub connections: Box<dyn Fn() -> Vec<serde_json::Value> + Send + Sync>,
+    /// `sessionCount` - the number of sessions the hub knows.
+    pub session_count: Box<dyn Fn() -> i64 + Send + Sync>,
+    /// `activeTurns` - sessions with a turn admitted, running, awaiting an answer,
+    /// or being cancelled.
+    pub active_turns: Box<dyn Fn() -> i64 + Send + Sync>,
+}
+
+impl Default for StatusFacts {
+    fn default() -> Self {
+        StatusFacts {
+            harnesses: Box::new(Vec::new),
+            providers: Box::new(Vec::new),
+            connections: Box::new(Vec::new),
+            session_count: Box::new(|| 0),
+            active_turns: Box::new(|| 0),
+        }
+    }
 }
 
 impl Transport {
@@ -148,7 +192,28 @@ impl Transport {
             events: Arc::new(Vec::new()),
             openapi: Arc::new(String::new()),
             shutdown,
+            status_facts: Arc::new(StatusFacts::default()),
+            started_at: now_rfc3339(),
+            bound_port: Arc::new(AtomicU16::new(0)),
+            build_id: Arc::new("unknown".into()),
         }
+    }
+
+    /// Record the build marker (called once by the composition root).
+    pub fn set_build_id(&mut self, id: impl Into<String>) {
+        self.build_id = Arc::new(id.into());
+    }
+
+    /// Record the port the listener bound (called by the composition root after
+    /// `bind`). `/v1/status.port` and the discovery record report it.
+    pub fn set_bound_port(&self, port: u16) {
+        self.bound_port.store(port, Ordering::SeqCst);
+    }
+
+    /// Install the live status facts (called once by the composition root).
+    pub fn with_status_facts(mut self, facts: StatusFacts) -> Self {
+        self.status_facts = Arc::new(facts);
+        self
     }
 
     /// Set the served-surface metadata (called once by the composition root).
@@ -199,9 +264,29 @@ pub fn base_router(state: Transport) -> Router {
 }
 
 async fn status(State(t): State<Transport>) -> impl IntoResponse {
+    // `/v1/status` reports EVERY property its contract declares (the identity a
+    // client uses to prove it is talking to its own child, plus what the hub is
+    // managing right now). Identity is answered from what the binary was BUILT
+    // with; the lists and counts come from the installed status facts.
+    let f = &t.status_facts;
     axum::Json(json!({
         "pid": std::process::id(),
-        "startedAt": now_rfc3339(),
+        "port": t.bound_port.load(Ordering::SeqCst),
+        "startedAt": t.started_at,
+        "version": env!("CARGO_PKG_VERSION"),
+        "buildId": t.build_id.as_str(),
+        "protocol": { "name": t.contract.protocol, "version": t.contract.version },
+        "contract": {
+            "file": t.contract.file,
+            "protocol": t.contract.protocol,
+            "version": t.contract.version,
+            "sha256": t.contract.sha256,
+        },
+        "harnesses": (f.harnesses)(),
+        "providers": (f.providers)(),
+        "connections": (f.connections)(),
+        "sessionCount": (f.session_count)(),
+        "activeTurns": (f.active_turns)(),
         "events": { "currentId": t.bus.current_id() }
     }))
 }
