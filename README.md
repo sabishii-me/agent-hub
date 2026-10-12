@@ -36,6 +36,15 @@ Three real adapters exist and must be reconnected (their committed SHAs are reco
 the review): pi, jouzu, dsh/deepseek. A capability is DONE only when driven through
 `/v1` against a real adapter; a capable mock proves the hub's half, not the capability.
 
+### Harness acceptance is a MERGE GATE
+
+**A harness that does not pass the required tests may NOT be merged into the main branch.** For a
+harness `H`, run the whole-chain test and every `tests/interrupt/*.py` against its REAL adapter
+(`PI_PLUGIN_DIR=<H> PI_HARNESS_ID=<H>`): all green, or the harness does not merge. A case `H`
+genuinely cannot express is a RECORDED LIMIT (listed in the interrupt-coverage issue), never a pass
+and never a skip. Never make the gate green by weakening a test, skipping a case, or faking an
+adapter. See `AGENTS.md` for the full rule.
+
 ### Open links (at the recorded SHA), by owner
 
 - **G3 (HUB+CONTRACT+PLUGIN)** provider TYPE authority: `GET /v1/model-providers/types`

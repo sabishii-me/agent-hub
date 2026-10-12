@@ -34,6 +34,28 @@ pick the next one; do not wait for "continue".
 - **The contract is the interface** (ADR-0011): express a change in `contract/` and only there.
 - **Never** commit or overwrite uncommitted user work; never reset hard.
 
+## Harness acceptance is a MERGE GATE (owner, 2026-10-11)
+
+**A harness (plugin/adapter) that does not pass the required tests may NOT be merged into the main
+branch.** This is a gate, not a preference.
+
+- **What must pass.** For a harness `H`, the whole-chain test and the interrupt suite, each run
+  against the REAL adapter with `PI_PLUGIN_DIR=<H's repo> PI_HARNESS_ID=<H>`:
+  - `tests/lifecycle/the-whole-chain-plugin-to-session-to-tools-over-v1.py` - all green;
+  - every `tests/interrupt/*.py` - all green on `H`.
+- **A RED case is a red harness.** It is fixed in the adapter, or blocked by a recorded issue, and
+  the harness does not merge while the case is RED.
+- **"Cannot express the case" is a RECORDED LIMIT, not a pass and not a skip.** When a harness
+  genuinely cannot reach a case (e.g. deepseek ships no approval-gating preset, so C7 cannot run),
+  the file records it and exits non-green; that is a known limit on the harness, listed in
+  `docs/needReview/issues/20261003-123000-interrupt-coverage-is-incomplete.md`, and it must be
+  resolved before the harness is accepted - not waved through.
+- **Never** make the gate green by weakening a test, skipping a case, or faking an adapter. A test
+  that would pass whatever happens is not a test.
+
+Corollary: a harness's RED case (like jouzu's resume-hang, `docs/issues/20261011-010000`) is a
+reason to HOLD that harness, not to relax the suite.
+
 ## Authorization boundary
 
 Without explicit authorization, do **not**: read real credentials, import an apiKey, touch the
