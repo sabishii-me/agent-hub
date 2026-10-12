@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "Official registry: the released harness-adapter artifacts (pi 0.1.10, jouzu 0.1.11, deepseek 0.1.10), each url+sha256 from the published release.",
+  "note": "Official registry: the released plugin artifacts (harness adapters + model-provider types), each url+sha256 from the published release.",
   "plugins": [
     {
       "id": "pi",
@@ -81,6 +81,20 @@
           "url": "https://github.com/sabishii-me/agent-hub-harness-adapter-deepseek/releases/download/v0.1.10/harness-adapter-deepseek-0.1.10.zip",
           "sha256": "1d1010013df0f617d104ab86ee88762b5c2b5cabe5fcd2028c2fdf0f3b1b0b61",
           "size": 98640
+        }
+      ]
+    },
+    {
+      "id": "deepseek-provider",
+      "pluginType": "model-provider",
+      "name": "DeepSeek (provider type)",
+      "summary": "The DeepSeek model service as a provider type: the type owns the endpoint (https://api.deepseek.com, openai-completions); the person supplies only the API key.",
+      "versions": [
+        {
+          "version": "1.0.1",
+          "url": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v1.0.1/model-provider-deepseek-provider-1.0.1.zip",
+          "sha256": "965b471f31741a86d23f71bdd51d6b3b498add35c7e5137a7e0f7e2fdbd9d6ed",
+          "size": 3228
         }
       ]
     }
