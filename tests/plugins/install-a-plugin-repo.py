@@ -82,7 +82,6 @@ class RepoHub:
             "AGENT_HUB_DATA_DIR": self.dir,
             "AGENT_HUB_PLUGINS_DIR": self.plugins,
             "AGENT_HUB_ADDR": "127.0.0.1:0",
-            "AGENT_HUB_CONTRACT_DIR": os.path.join(HUB_REPO, "contract"),
             "AGENT_HUB_REGISTRY_URL": self.mock.url(),
         })
         self._log = open(os.path.join(self.dir, "hub-stdout.log"), "w", encoding="utf-8")
