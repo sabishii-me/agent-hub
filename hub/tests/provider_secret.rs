@@ -43,7 +43,6 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
     let child = Command::new(exe)
         .env("AGENT_HUB_DATA_DIR", &data)
         .env("AGENT_HUB_ADDR", "127.0.0.1:0")
-        .env("AGENT_HUB_CONTRACT_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/../contract"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

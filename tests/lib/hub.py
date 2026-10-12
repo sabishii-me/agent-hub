@@ -160,7 +160,6 @@ class Hub:
             "AGENT_HUB_DATA_DIR": self.dir,
             "AGENT_HUB_PLUGINS_DIR": self.plugins,
             "AGENT_HUB_ADDR": "127.0.0.1:0",
-            "AGENT_HUB_CONTRACT_DIR": os.path.join(REPO, "contract"),
         })
         # ONE test file runs in EVERY environment; only the CONFIGURATION differs. The harness
         # applies the environment's registry setup: in dev it injects a MOCK registry (real zips,

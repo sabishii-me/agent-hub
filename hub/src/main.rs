@@ -51,41 +51,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bus = Bus::new(1024, 256);
     let transport = Transport::new(bus.clone(), Admission::new(64));
 
-    // The error master table is the single source of truth for every failure
-    // code; the transport maps a code to its status.
-    let contract_dir: PathBuf = std::env::var("AGENT_HUB_CONTRACT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contract"));
-    let error_table = agent_hub_contract::ErrorTable::load(&contract_dir.join("errors.json"))
-        .map_err(|e| format!("load contract/errors.json: {e}"))?;
-    // Every code a domain can return must be declared in the contract table
-    //; a domain inventing a code refuses to start.
-    let declared_codes = [
-        // plugins
-        "not_found", "plugin_remove_failed", "plugin_in_use", "plugin_dir_busy",
-        "plugin_archive_invalid", "idempotency_conflict", "plugin_install_failed",
-        "internal_error",
-        // sessions
-        "unknown_session", "session_closed", "session_busy", "validation_failed",
-        // providers
-        "provider_not_found", "already_exists", "provider_catalog_failed",
-    ];
-    selfcheck::check_error_codes(&declared_codes, &error_table)
-        .map_err(|e| format!("self-check failed: {e}"))?;
-
-    // The surface check: serving a route the contract does
-    // NOT declare is a refusal to start; a contract route not mounted yet is
-    // unfinished work (reported by check_surface, not fatal).
-    let contract_raw = std::fs::read_to_string(contract_dir.join("v1.json"))
-        .map_err(|e| format!("read contract/v1.json: {e}"))?;
-    let contract_v1: serde_json::Value = serde_json::from_str(&contract_raw)
-        .map_err(|e| format!("parse contract/v1.json: {e}"))?;
-    let mounted = selfcheck::mounted_surface();
-    selfcheck::check_surface(&mounted, &contract_v1)
-        .map_err(|e| format!("self-check failed: {e}"))?;
+    // The contract is EMBEDDED in the binary (`include_str!`): it is the hub's own
+    // interface, a compile-time constant. There is no runtime lookup, no path, and
+    // no configuration - a shipped binary is self-sufficient and cannot drift from
+    // the contract it was built with. The cross-checks that the mounted surface and
+    // the error codes agree with this contract are BUILD-TIME TESTS (`cargo test`),
+    // not something the serving binary re-proves on every start.
+    let contract_raw: &str = include_str!("../../contract/v1.json");
+    let errors_raw: &str = include_str!("../../contract/errors.json");
+    let openapi_text: &str = include_str!("../../contract/openapi.json");
+    let error_table = agent_hub_contract::ErrorTable::parse(errors_raw)
+        .map_err(|e| format!("contract/errors.json: {e}"))?;
+    let contract_v1: serde_json::Value = serde_json::from_str(contract_raw)
+        .map_err(|e| format!("contract/v1.json: {e}"))?;
     // The served-surface metadata for `/v1/surface` and `/v1/openapi.json`: the
-    // contract identity (with its sha256), the mounted routes, the event names and
-    // the generated OpenAPI - all read from the same files the self-check uses.
+    // contract identity (with its sha256), the mounted routes and the event names.
     let contract_sha = {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -107,7 +87,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect()
         })
         .unwrap_or_default();
-    let openapi_text = std::fs::read_to_string(contract_dir.join("openapi.json")).unwrap_or_default();
 
     let errors = ErrorRenderer::new(error_table);
 
@@ -447,7 +426,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         selfcheck::surface_rows(),
         contract_meta,
         event_names,
-        openapi_text,
+        openapi_text.to_string(),
     );
     // A watch receiver so POST /v1/shutdown can ask the process to stop.
     let shutdown_rx = transport.shutdown.subscribe();
