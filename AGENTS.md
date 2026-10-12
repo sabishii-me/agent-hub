@@ -50,6 +50,13 @@ main branch.**
 
 ## Authorization boundary
 
+**Never hardcode a secret.** No token, API key, password, or private key is written into
+source, a test, a fixture, a default, or a commit message - not even as a fallback value
+(`process.env.KEY || '<literal>'`). A secret always comes from the environment or the OS
+keychain; a test that needs one reads it from an env var and FAILS (never skips, never
+falls back) when it is absent. A literal `sk-...` in the tree is a leak: it must be revoked
+and removed, not trusted.
+
 Without explicit authorization, do **not**: read real credentials
 (`~/.pi/agent/models.json`), import an apiKey, touch the real OS keychain, or make a real
 vendor/paid model call. That authorization blocks only the real call; it does not block the
