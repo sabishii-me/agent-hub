@@ -1,0 +1,21 @@
+//! The plugins domain: install, remove, prepare
+//! and the listing, wired to the frame.
+//!
+//! The lifecycle's recovery is `agent-hub-db`'s; this crate owns the routes, the
+//! one-verdict state (`state.rs`), the logical command identity (`identity.rs`),
+//! and the `hub.plugins.changed` announcements.
+
+pub mod identity;
+pub mod manifest;
+pub mod registry;
+pub mod routes;
+pub mod runtime;
+pub mod service;
+pub mod source;
+pub mod state;
+
+pub use identity::{CommandIds, Idempotency};
+pub use manifest::{Manifest, PluginView};
+pub use service::{InstallIntent, PluginError, Plugins, RemoveIntent};
+pub use source::{ArtifactSpec, Source, SourceError};
+pub use state::{Op, Ops};

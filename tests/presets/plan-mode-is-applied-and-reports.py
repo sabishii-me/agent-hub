@@ -1,0 +1,93 @@
+# TC-PRESETS-002
+# `plan` is a session policy knob (PATCH /v1/sessions/{id} {plan:true|false}). The contract
+# distinguishes TWO fields: `plan` (the REQUESTED state) and `appliedPlan` (what the ADAPTER
+# actually applied - "proof"). This file tests both, separately, and does NOT claim runtime
+# behaviour:
+#  (A)  the hub RECORDS the requested plan        -> `plan`
+#  (B)  the adapter's APPLIED plan is reported    -> `appliedPlan`
+#  (B2) switch OFF: both fields read false
+#  (C)  plan actually CONSTRAINS runtime behaviour -> UNVERIFIED (BLOCKED; no contract-pinned
+#       observable, and it is not inferred from the fields above)
+#
+# FACT:    PATCH plan sets `plan` (request) and the adapter reports `appliedPlan` (applied);
+#          runtime behavioural enforcement is NOT claimed
+# SOURCE:; contract/v1.json session `plan` vs `appliedPlan`
+# EXPOSES: a plan knob whose request is stored but never applied (A passes, B fails)
+# (A test that would pass whatever happens is not a test: this block names the fact it
+#  proves and where that fact comes from; the assertions below are that exact fact.)
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+from hub import Hub, hub_sha, register_provider, wait_turn      # noqa: E402
+from tally import Tally, combo, kind_of              # noqa: E402
+
+PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
+HARNESS = os.environ.get("PI_HARNESS_ID", "pi")
+MODEL = os.environ.get("PI_MODEL", "deepseek-flash")
+
+t = Tally("presets/plan")
+combo(hub_sha(), kind_of(PI))
+if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin at {PI}"):
+    t.done(); sys.exit(1)
+
+hub = Hub(plugins_src=PI)
+try:
+    hub.start()
+    PROV = register_provider(hub)
+    t.require(PROV is not None, "a real provider is registered", "no real provider")
+    r = hub.post("/v1/sessions", {"harnessId": HARNESS, "modelProviderId": PROV["id"], "modelId": MODEL}, key="pl-s")
+    sid = r["json"]["session"]["id"]
+    s = hub.wait_status(sid, "active")
+    t.check(s.get("status") == "active", "the session is active", f"status={s.get('status')} err={s.get('startError')}")
+
+    # (A) CONFIG READ/WRITE: the hub records the REQUESTED plan (`plan`). This proves storage, not
+    # application.
+    p = hub.patch(f"/v1/sessions/{sid}", {"plan": True})
+    t.check(p["status"] < 300, "PATCH plan:true is accepted", f"status={p['status']} {p['text'][:160]}")
+    sess = (p["json"] or {}).get("session", (p["json"] or {}))
+    t.check(sess.get("plan") is True,
+            "(A) the hub RECORDS the requested plan:true (`plan` - a stored request, not application)",
+            f"plan={sess.get('plan')}")
+
+    # (B) APPLIED REPORT: the contract's field for what the ADAPTER applied is `appliedPlan` ("proof"),
+    # distinct from `plan` ("the request"). Assert the APPLIED field, not the request field.
+    sess2 = (hub.get(f"/v1/sessions/{sid}")["json"] or {}).get("session", {})
+    applied = sess2.get("appliedPlan")
+    t.check(applied is True,
+            "(B) the adapter's APPLIED plan is reported true (`appliedPlan` - the contract's proof field)",
+            f"appliedPlan={applied} plan={sess2.get('plan')} err={sess2.get('startError')}")
+
+    # (C) ACTUAL RUNTIME BEHAVIOUR under plan (e.g. a write is refused/hidden). This needs a
+    # behaviour the contract makes observable; we do NOT infer it from `plan`/`appliedPlan` and do
+    # NOT fabricate it.
+    # (C) plan ACTUALLY constrains runtime behaviour: under plan, a write tool is not available, so
+    # asking the model to WRITE A FILE must leave the file ABSENT. That is a fact about the
+    # filesystem, not the `plan` field - a real observable.
+    target = os.path.join(hub.dir, "plan-should-not-write.txt")
+    if os.path.exists(target):
+        os.remove(target)
+    tr = hub.post(f"/v1/sessions/{sid}/turns",
+                  {"content": [{"type": "text", "text":
+                    f"Use your write tool to create a file at {target} containing HELLO."}],
+                   "idempotencyKey": "plan-write"}, key="plan-write")
+    t.check(tr["status"] == 202, "(C) under plan, a write request is admitted as a turn",
+            f"status={tr['status']} {tr['text'][:140]}")
+    tid = (tr["json"] or {}).get("turn", {}).get("id")
+    if tid:
+        wait_turn(hub, sid, tid, {"ended"}, tries=480)
+    t.check(not os.path.exists(target),
+            "(C) plan CONSTRAINS runtime: the write tool is unavailable, so the file is NOT created",
+            f"the file exists at {target} - plan did not gate a write")
+
+    # (B2) Switch OFF and confirm the adapter reports appliedPlan false.
+    p2 = hub.patch(f"/v1/sessions/{sid}", {"plan": False}, key="plan-off")
+    t.check(p2["status"] < 300, "PATCH plan:false is accepted", f"status={p2['status']} {p2['text'][:160]}")
+    sess3 = (hub.get(f"/v1/sessions/{sid}")["json"] or {}).get("session", {})
+    t.check(sess3.get("plan") is False and sess3.get("appliedPlan") is False,
+            "(B2) plan:false is recorded AND the adapter reports appliedPlan false",
+            f"plan={sess3.get('plan')} appliedPlan={sess3.get('appliedPlan')}")
+finally:
+    ok = t.done()
+    hub.cleanup()
+sys.exit(0 if ok else 1)
