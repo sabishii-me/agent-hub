@@ -111,20 +111,6 @@
           "size": 1897
         }
       ]
-    },
-    {
-      "id": "compatible-provider",
-      "pluginType": "model-provider",
-      "name": "Custom compatible service",
-      "summary": "A caller-named compatible endpoint (the built-in custom-compatible type restated as a plugin): no fixed endpoint; the person supplies url + api + token.",
-      "versions": [
-        {
-          "version": "1.0.0",
-          "url": "https://github.com/sabishii-me/agent-hub-model-provider-compatible/releases/download/v1.0.0/model-provider-compatible-provider-1.0.0.zip",
-          "sha256": "dc5fcb94cf4dc1cc80eb935a73c5b4bc5958e7defeacb8bea7a45ba1545b3cfa",
-          "size": 2128
-        }
-      ]
     }
   ]
 }
