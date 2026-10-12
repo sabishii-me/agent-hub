@@ -71,10 +71,19 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
     assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["provider"]["tokenConfigured"], true);
+    // The TYPE assigns the id, never the caller (ARCHITECTURE 5; the built-in
+    // `custom-compatible` type names a user provider in the `_CUSTOM-` namespace).
+    // So the id to address this provider by is the one the hub RETURNED, not the
+    // one the request asked for - read it, never assume it.
+    let pid = created["provider"]["id"]
+        .as_str()
+        .expect("create returns the assigned provider id")
+        .to_string();
+    assert_eq!(pid, "_CUSTOM-acme", "a caller-named provider lives in the _CUSTOM- namespace");
 
     // GET reflects the credential from the AUTHORITATIVE store (not a stale flag).
     let got: serde_json::Value = client
-        .get(format!("{base}/v1/model-providers/acme"))
+        .get(format!("{base}/v1/model-providers/{pid}"))
         .header("authorization", format!("Bearer {token}"))
         .send()
         .await
@@ -91,7 +100,7 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
 
     // Logout deletes it.
     let out: serde_json::Value = client
-        .post(format!("{base}/v1/model-providers/acme/logout"))
+        .post(format!("{base}/v1/model-providers/{pid}/logout"))
         .header("authorization", format!("Bearer {token}"))
         .send()
         .await
