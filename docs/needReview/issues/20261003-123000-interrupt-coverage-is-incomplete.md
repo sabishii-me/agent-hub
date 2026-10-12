@@ -92,7 +92,8 @@ jouzu - a turn after close+reopen never reaches a terminal, `docs/issues/2026101
 (covered by `send-immediately-after-cancel.py`: a cancel in flight + an immediate turn -> defined
 outcome, no double-dispatch, not wedged).
 
-Covered since 2026-10-11: P5 mid-turn (a real stateful HTTP proxy cut, see above).
+Covered since 2026-10-11: P5 mid-turn (a real stateful HTTP proxy cut, see above); P8 (a real
+`BEGIN EXCLUSIVE` lock on the live store through the settle, boot-reconciled - see above).
 
 Covered since: A9 (`a-session-is-reusable-after-every-terminal-path.py`: 13/13 pi,
 13/13 deepseek; RED on jouzu at the needs-repair reopen turn, the same 20261011-010000 hang).
@@ -108,8 +109,11 @@ Still MISSING (with what each needs):
   pi runtime's own model call is answered 400 by the provider before the cut, so the injected fault
   never fires (the same old-pi family as `20261011-010000`; the test's `cut_done` assertion catches
   it honestly).
-- **P8** (the hub's DB write fails while settling): injectable by holding `BEGIN EXCLUSIVE` on the
-  live `hub.sqlite` at the settle instant - fragile (can wedge the hub), needs care.
+- ~~**P8**~~ DONE (`a-db-write-failure-while-settling-never-lies.py`): holds a REAL `BEGIN EXCLUSIVE`
+  lock on the live `hub.sqlite` through the settle, so BOTH the terminal-intent write and the
+  terminal write fail. Proves the hub never announces a terminal the store does not hold (API and
+  store agree, never a false `completed`), and a boot reconciles the open turn `failed`. pi/deepseek/
+  jouzu 7/7 each.
 None is a known hub gap. A2/A4/P3 are the only ones that need a deliberately misbehaving harness;
 do NOT build that until the real-harness cases are exhausted (owner direction).
 Harness limits found while filling: deepseek ships no approval-gating preset, so C7 cannot run on it

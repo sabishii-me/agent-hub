@@ -1,13 +1,15 @@
 # CURRENT STATE — read this first (durable handoff)
 
-## UPDATE 2026-10-11 (later) — P5 mid-turn DONE; jouzu resume-hang RECORDED (wait for its pi upgrade)
+## UPDATE 2026-10-11 (later) — P5 mid-turn + P8 DB-write-fail DONE; only A2/A4/P3 remain (deferred)
 
 ### Verified last run (real harnesses, over /v1)
 - whole-chain: pi/jouzu/deepseek PASS (deepseek 15/15).
-- interrupt: **pi 21/21 files, deepseek 20/21** (C7 cannot run: no approval preset), **jouzu 19/21**
+- interrupt: **pi 22/22 files, deepseek 21/22** (C7 cannot run: no approval preset), **jouzu 20/22**
   (C4 + A9 RED = the recorded resume-hang; P5 8/9 = jouzu's old-pi model call 400s before the cut).
-  New: **P5 mid-turn** (`the-provider-errors-mid-turn-and-the-turn-settles.py` + `tests/lib/httpfault.py`)
-  - a real HTTP proxy to the real provider cuts the SSE stream after the first token; pi 9/9, deepseek 9/9.
+  New since: **P5 mid-turn** (`the-provider-errors-mid-turn-and-the-turn-settles.py` +
+  `tests/lib/httpfault.py`, a real HTTP proxy cuts the SSE stream after the first token - pi/deepseek
+  9/9) and **P8** (`a-db-write-failure-while-settling-never-lies.py`, a real `BEGIN EXCLUSIVE` lock on
+  the live store through the settle - pi/deepseek/jouzu 7/7).
 - Presets test: deepseek 8/8 (the `agentPresets/select` fix works).
 
 ### Where the task stands
@@ -29,9 +31,11 @@ harnesses.
 - **Covered, green on pi/jouzu/deepseek:** A1, A3, A5, A6, A7, A8, A9*, A10, P1, P2, P4,
   P5(start-time), P6, P7, C1, C2, C3, C4*, C5, C6, C7*(*C7 deepseek cannot: no approval preset;
   *A9/C4 GREEN on pi+deepseek but RED on jouzu - the jouzu reopen hang below).
-- **Still MISSING:** A2, A4, P3 (need a deliberately misbehaving harness - DEFERRED per owner:
-  finish the real-harness cases first), P8 (needs a careful `BEGIN EXCLUSIVE` lock of the live DB).
-  P5(mid-turn) is now DONE.
+- **Still MISSING:** ONLY A2, A4, P3 - each needs a deliberately misbehaving harness (a cancel
+  delivered but never answered; a stale snapshot after a cancel-while-running; an adapter that
+  closes stdout but stays alive). DEFERRED per owner until the real-harness cases are exhausted -
+  they now ARE, so these are the next candidates if a misbehaving harness is authorised. P5(mid-turn)
+  and P8 are DONE.
 - `tests/interrupt/` now has 20 files, all env-driven (`PI_PLUGIN_DIR`/`PI_HARNESS_ID`/`PI_MODEL`;
   C7 also `PI_APPROVAL_PRESET`).
 
@@ -47,12 +51,12 @@ harnesses.
   `20261009-030000` (detached dsh server outlived remove), `20261009-090000`/`-100000`/`-101000`.
 
 ### The immediate next task
-**P8** - the hub's DB write fails while settling a turn -> no dishonest terminal. The product path
-exists (`settle_turn`: record `terminal_intent`, retry the write, never publish on failure, leave it
-to reconcile) but has only unit coverage. Needs a REAL injection: hold `BEGIN EXCLUSIVE` on the live
-`hub.sqlite` at the settle instant - fragile (can wedge the hub), so it is its own careful task.
-A2/A4/P3 stay deferred (they need a misbehaving harness). The jouzu resume-hang (and P5's jouzu 400)
-are RECORDED and wait for jouzu's pi upgrade.
+**Only A2/A4/P3 remain** in the interrupt taxonomy. Each needs a deliberately misbehaving harness
+(a cancel delivered but never answered; a stale snapshot after a cancel-while-running; an adapter
+that closes stdout but stays alive) - owner said build that LAST, and the real-harness cases are now
+exhausted, so this is the next decision point. The jouzu resume-hang (and P5's jouzu 400) are
+RECORDED and wait for jouzu's pi upgrade. Otherwise: re-run the whole chain + the full interrupt
+suite on all three harnesses as a regression gate.
 
 ### Commits (hub `feat/hub-modular-redesign`)
 `632dea2` (_CUSTOM- + close stdin), `9e78b7e`/`957dcd5`/`6f2e49d` (remove event),
