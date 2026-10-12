@@ -4,7 +4,7 @@
 # stay `active` with no process behind it. Real: real adapters, real process kills.
 #
 # FACT:    killing the adapters under two concurrent sessions leaves BOTH honest (none stays active, none wedges)
-# SOURCE:  ARCHITECTURE s21 N2 (no live process behind a broken row); docs/issues/20261005-020000
+# SOURCE: (no live process behind a broken row)
 # EXPOSES: one session's death hiding another's, or a multi-session harness that leaves a session wedged
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

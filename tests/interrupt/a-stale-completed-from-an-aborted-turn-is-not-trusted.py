@@ -8,7 +8,7 @@
 # deliberately reports an aborted turn as `ok`.
 #
 # FACT:    an aborted turn's stale `completed` is not trusted; the turn is not a clean completed
-# SOURCE:  ARCHITECTURE s21 (a cancel's terminal is the harness's to prove, but a completed after an abort is not a proof of success); contract/adapter-v1.json (turn_end.state)
+# SOURCE: (a cancel's terminal is the harness's to prove, but a completed after an abort is not a proof of success); contract/adapter-v1.json (turn_end.state)
 # EXPOSES: a stale completed snapshot from a harness being believed after a cancel
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

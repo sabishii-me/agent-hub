@@ -1,4 +1,4 @@
-//! Session and turn rows (`ARCHITECTURE` §6: the hub's **control state**, kept
+//! Session and turn rows ( the hub's **control state**, kept
 //! distinct from a harness's native conversation and the id/ref mapping).
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   start_error            TEXT
 );
 
--- The durable command -> result-resource association (ARCHITECTURE 11, R1):
+-- The durable command -> result-resource association (R1):
 -- reserved BEFORE any side effect, so a retry finds the original and a restart
 -- keeps the link. `fingerprint` is the full semantic request.
 CREATE TABLE IF NOT EXISTS session_commands (
@@ -432,11 +432,11 @@ impl crate::Db {
     /// Atomically claim the DISPATCH of a turn: `admitted` -> `running`, and only
     /// if the turn is STILL `admitted` (no cancel won the race) and non-terminal.
     /// Returns true for the caller that won; a `cancelling`/terminal turn returns
-    /// false, so the winner is exactly one of dispatch or cancel (TASK-048 F4).
+    /// false, so the winner is exactly one of dispatch or cancel.
     /// Atomically claim `admitted` -> `running`, RECORDING the process generation
     /// that will run it. A later cancel compares the CURRENT generation to this
     /// value, so an abort is bound to the process the turn actually dispatched on
-    /// (TASK-048 F4/S2).
+
     pub fn claim_running(&self, id: &str, process_generation: u64) -> Result<bool, DbError> {
         let conn = self.lock();
         let n = conn.execute(
@@ -462,10 +462,10 @@ impl crate::Db {
     pub fn set_turn_state(&self, id: &str, state: &str) -> Result<bool, DbError> {
         let conn = self.lock();
         // Entering `cancelling` records WHEN, so a core-side cancel timeout can see
-        // an unconfirmed stop (TASK-048 F4).
+        // an unconfirmed stop.
         let n = if state == "cancelling" {
             // A cancel wins over a not-yet-dispatched turn too (admitted), so it is
-            // an atomic alternative to claim_running (TASK-048 F4).
+            // an atomic alternative to claim_running.
             conn.execute(
                 "UPDATE turns SET state = ?2, cancel_requested_at = ?3 WHERE id = ?1 AND ended IS NULL AND state IN ('admitted','running','cancelling')",
                 params![id, state, crate::now_utc()],
@@ -490,7 +490,7 @@ impl crate::Db {
     /// `cancelling` turn on a real action (adapter-v1:387).
     /// `(id, session_id, state)` of `cancelling` turns. NO time filter: whether a
     /// cancel can still be confirmed is decided by PROCESS LIVENESS in the caller
-    /// (docs/issues/20261004-030000) - a normal cancel confirms in tens of ms and
+    /// - a normal cancel confirms in tens of ms and
     /// must never be raced by a clock. There is no execution deadline for a
     /// `running` turn (a turn runs until the harness ends it).
     pub fn cancelling_turns(&self) -> Result<Vec<(String, String, String)>, DbError> {
@@ -520,7 +520,7 @@ impl crate::Db {
 
     /// Record the INTENDED terminal for a turn before attempting to write it. If
     /// the terminal write then fails, this durable intent lets a later reconcile
-    /// finish the job instead of forgetting the known terminal (TASK-048 S3).
+    /// finish the job instead of forgetting the known terminal.
     pub fn set_terminal_intent(&self, id: &str, intent: &str) -> Result<(), DbError> {
         let conn = self.lock();
         conn.execute(

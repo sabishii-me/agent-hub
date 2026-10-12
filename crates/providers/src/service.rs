@@ -1,4 +1,4 @@
-//! The providers domain (`ARCHITECTURE` §5): provider relationship state in the
+//! The providers domain: provider relationship state in the
 //! database, the credential in the OS secret store (a reference, never a value),
 //! the model selection and the catalog fetch.
 
@@ -93,13 +93,13 @@ pub struct Providers {
     pub namespace: String,
     /// One lock per provider id: operations that touch BOTH the row and the
     /// secret store are serialised, so a create cannot interleave with a delete
-    /// and leave an orphan credential (TASK-048 P1). The DB mutex only protects a
+    /// and leave an orphan credential. The DB mutex only protects a
     /// single SQL call; this covers the whole two-store operation.
     locks: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The ONE provider-TYPE authority: given `(type id, version)`, resolve the
     /// descriptor an installed plugin ships, or `None` when no plugin ships it. Used
     /// by create validation, availability and grant admission, so the list, the
-    /// store and execution never disagree (TASK-048 G3). None = no plugins root
+    /// store and execution never disagree. None = no plugins root
     /// wired (types cannot be validated).
     type_resolver: Option<Arc<dyn Fn(&str, Option<u32>) -> Option<crate::types::TypeDescriptor> + Send + Sync>>,
 }
@@ -135,7 +135,7 @@ impl Providers {
     /// it; every user id is prefixed with this. The prefix is deliberately made of
     /// harness-SAFE characters (`_`, `-`, alphanumerics): a harness route key is a
     /// path/name segment and cannot carry `:` (dsh sanitises it, which broke the
-    /// applied-route proof, docs/issues/20261008-120000). ONE definition, referenced
+    /// applied-route proof). ONE definition, referenced
     /// everywhere the id rule is applied - never re-spelled at a call site.
     pub const CUSTOM_PREFIX: &'static str = "_CUSTOM-";
 
@@ -182,7 +182,7 @@ impl Providers {
     /// EXCLUDES `secret_ref`, which recovery itself sets: including it would make a
     /// create never match its own intent. Recorded in the journal so recovery can
     /// prove a row is THIS operation's result, not an unrelated update that reached
-    /// the same revision (TASK-048 F1-current).
+    /// the same revision.
     fn config_digest(rec: &ProviderRecord) -> String {
         let decl = serde_json::to_string(&rec.declarations).unwrap_or_default();
         // A simple, dependency-free digest; collisions are not security-critical
@@ -206,7 +206,7 @@ impl Providers {
     /// row's OWN stored reference. A row with no reference is simply not
     /// configured: we do NOT fall back to a re-derived key, so a rebuilt provider
     /// with the same id can never re-acquire a previous instance's credential
-    /// (TASK-048 F1). A read ERROR is surfaced, never read as "absent".
+    ///. A read ERROR is surfaced, never read as "absent".
     fn with_configured(&self, mut r: ProviderRecord) -> Result<ProviderRecord, ProviderError> {
         let has = match &r.secret_ref {
             Some(reference) => self
@@ -244,7 +244,7 @@ impl Providers {
             return Err(ProviderError::NoSecretStore);
         }
         // The TYPE authority: an explicit type/version the hub cannot resolve is
-        // refused BEFORE any row or secret write (TASK-048 G3). A provider naming no
+        // refused BEFORE any row or secret write. A provider naming no
         // type uses the built-in default and is accepted.
         if let Some(t) = req.provider_type.as_deref() {
             if !self.type_available(Some(t), req.provider_type_version) {
@@ -285,7 +285,7 @@ impl Providers {
                 }
             }
         }
-        // The ID rule (docs/issues/20261008-090000):
+        // The ID rule:
         //  - an INSTALLED type (a shipped model adapter, e.g. `deepseek`) OWNS its id: the id IS the
         //    type's id. A caller cannot rename it, and cannot shadow the official one.
         //  - the built-in `custom-compatible` type is the USER's own provider: its id lives in the
@@ -342,7 +342,7 @@ impl Providers {
         .with_defaults();
         // 1b. An unresolved credential transition for this id blocks a REBUILD: a
         //     create over a pending op would leave a row whose ownership the journal
-        //     still describes (TASK-048 F1).
+        // still describes.
         if self.store.has_pending_op(&id)? {
             return Err(ProviderError::RevisionConflict(format!(
                 "provider `{id}` has an unresolved credential transition; resolve it before creating"
@@ -383,7 +383,7 @@ impl Providers {
                 // The credential exists but the row does not point at it. Try to
                 // remove it; if THAT fails, the journal entry is KEPT so the next
                 // boot retries - we never claim a clean state we did not reach
-                // (TASK-048 F1).
+
                 match self.secrets.delete(&self.secret_ref(&id)) {
                     Ok(()) => {
                         let _ = self.store.delete(&id);
@@ -408,7 +408,7 @@ impl Providers {
     /// its credential while an unresolved credential transition stands. This is the
     /// single admission check every such entry uses; the provider lock makes the
     /// check and the operation one step. A create for a fresh id has no pending op,
-    /// so it is unaffected (TASK-048 F1-current).
+    /// so it is unaffected.
     fn admit_no_pending(&self, id: &str) -> Result<(), ProviderError> {
         if self.store.has_pending_op(id)? {
             return Err(ProviderError::Unresolved(format!(
@@ -455,7 +455,7 @@ impl Providers {
             rec.revision += 1;
         }
         // The intended row state AFTER this operation saves. Recovery confirms the
-        // credential ONLY when the row matches THIS (TASK-048 F1): a row at a
+        // credential ONLY when the row matches THIS: a row at a
         // different revision means the save never landed, so we must not bless the
         // credential with it.
         let intended_incarnation = rec.incarnation.clone();
@@ -605,7 +605,7 @@ impl Providers {
         let _guard = lock.lock().await;
         // A refresh CONSUMES the credential (it sends it as a bearer) and rewrites
         // the row: it must not run over an unresolved transition, or it could send a
-        // new token to an old URL (TASK-048 F1-current).
+        // new token to an old URL.
         self.admit_no_pending(id)?;
         let read = self.store.get(id)?;
         let url = read
@@ -623,7 +623,7 @@ impl Providers {
         // Network await: the row may change under us (a delete+recreate, a patch).
         let models = catalog::fetch(read.api.as_deref(), &url, token.as_deref()).await?;
         // Re-read and REFUSE to write back over a different incarnation/revision:
-        // the object we fetched for is gone (TASK-048 F2). Confirm the reference
+        // the object we fetched for is gone. Confirm the reference
         // is unchanged too, so we never attach a new token's route to an old fetch.
         let current = self.store.get(id)?;
         if current.incarnation != read.incarnation || current.revision != read.revision {
@@ -663,7 +663,7 @@ impl Providers {
     /// ONLY when every necessary step is confirmed. A failure or an unknown state
     /// (an unreadable credential, an unreadable row) keeps the entry, so the next
     /// boot tries again and the orphan remains visible. Nothing is ever claimed
-    /// recovered on a guess (TASK-048 F1).
+    /// recovered on a guess.
     pub fn recover_pending(&self) {
         let pending = match self.store.pending_ops() {
             Ok(v) => v,
@@ -693,7 +693,7 @@ impl Providers {
     /// any error leaves the entry in place. It may only CONFIRM a credential when
     /// the row STILL matches the state the operation intended to write; a row that
     /// changed under a failed write must not be handed a mismatched credential
-    /// (TASK-048 F1).
+
     fn recover_one(&self, p: &agent_hub_db::PendingOp) -> Result<(), ProviderError> {
         let (provider, op, secret_ref) = (p.provider.as_str(), p.op.as_str(), p.secret_ref.as_str());
         if op == "delete" {
@@ -727,7 +727,7 @@ impl Providers {
             // revision AND the CONFIG DIGEST proves the row is THIS operation's
             // result: an unrelated update that happens to reach the same revision
             // (a URL patch, a selection change) has a different digest and must NOT
-            // be read as this op's commit (TASK-048 F1-current).
+            // be read as this op's commit.
             let intent_matches = |r: &ProviderRecord| {
                 Some(r.incarnation.as_str()) == p.expected_incarnation.as_deref()
                     && Some(r.revision) == p.expected_revision
@@ -854,7 +854,7 @@ impl Providers {
     pub async fn resolve_grant(&self, id: &str) -> Result<ResolvedGrant, ProviderError> {
         // The provider lock makes the CONFIG and the CREDENTIAL one consistent
         // snapshot: a concurrent delete+recreate or a URL/token patch cannot hand
-        // out an old endpoint with a new token (TASK-048 F2).
+        // out an old endpoint with a new token.
         let lock = self.lock_for(id);
         let _guard = lock.lock().await;
         if self.store.has_pending_op(id)? {
@@ -865,7 +865,7 @@ impl Providers {
         let rec = self.store.get(id)?;
         // The TYPE authority at GRANT admission: a provider naming a type no
         // installed plugin ships is readable but UNUSABLE - it cannot grant (the
-        // contract: "a record naming one stays readable but unusable", TASK-048 G3).
+        // contract: "a record naming one stays readable but unusable" G3).
         if !self.type_available(rec.provider_type.as_deref(), rec.provider_type_version) {
             return Err(ProviderError::Validation(format!(
                 "provider `{id}` names type `{}`, which no installed plugin ships; it is unusable",
@@ -877,7 +877,7 @@ impl Providers {
             .clone()
             .ok_or_else(|| ProviderError::Validation(format!("provider `{id}` has no url")))?;
         // The credential location is the ROW's reference. A row with none is
-        // simply unauthorized - never a re-derived key (TASK-048 F1/F5).
+        // simply unauthorized - never a re-derived key.
         let value = match &rec.secret_ref {
             Some(reference) => self
                 .secrets
@@ -983,7 +983,7 @@ mod recovery_intent_tests {
     /// Recovery confirms the credential ONLY when the row matches the intended
     /// POST-write revision. When a patch's row save did NOT land (the row is still
     /// at the old revision), recovery DROPS the credential rather than attaching a
-    /// new token to the old URL (TASK-048 F1).
+    /// new token to the old URL.
     #[tokio::test]
     async fn recovery_drops_a_credential_whose_row_save_did_not_land() {
         let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::probe(format!(

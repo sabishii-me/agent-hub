@@ -1,4 +1,4 @@
-//! The single place an error becomes an HTTP response (ARCHITECTURE §13.7).
+//! The single place an error becomes an HTTP response.
 //!
 //! A domain returns a [`DomainError`] - a contract error **code** plus a detail
 //! string - and never an HTTP status. The transport looks the code up in

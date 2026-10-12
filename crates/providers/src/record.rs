@@ -1,4 +1,4 @@
-//! A **model provider is data** (`ARCHITECTURE` §5): one JSON file in the hub's
+//! A **model provider is data**: one JSON file in the hub's
 //! data dir (`providers/<id>.json`). The hub owns HTTP, auth, the catalog fetch
 //! and the field mapping; **no plugin runs code inside the hub's process**.
 
@@ -40,7 +40,7 @@ pub struct ProviderRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<String>,
     /// The incarnation read from the database: a save is guarded by it, so a stale
-    /// record cannot overwrite a rebuilt provider (TASK-048 F2). Empty for a new
+    /// record cannot overwrite a rebuilt provider. Empty for a new
     /// record (the insert mints one).
     #[serde(default)]
     pub incarnation: String,

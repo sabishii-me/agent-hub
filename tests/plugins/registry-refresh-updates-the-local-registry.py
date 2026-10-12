@@ -11,10 +11,9 @@
 #          succeeds (2xx) and GET /v1/plugins/catalog restates exactly that registry.
 # SOURCE:  crates/plugins/src/service.rs:144-172 (refresh_registry, all six cases),
 #          99-143 (catalog); crates/plugins/src/routes.rs:89-101; transport/src/error.rs
-#          render (body {"error":CODE,"detail":...}); contract/errors.json;
-#          ARCHITECTURE.md:691-692; owner direction 2026-10-05.
+#          render (body {"error":CODE,"detail":...}); contract/errors.json.
 # EXPOSES: any registry failure that returns a 500; a code that is not the registry's own
-#          (today: plugin_install_failed, false + retryable — docs/issues/20261005-110000);
+
 #          or a refresh wired to a file the catalog does not read.
 import http.server
 import json
@@ -30,7 +29,7 @@ from tally import Tally, combo        # noqa: E402
 t = Tally("plugins/registry-refresh")
 combo(hub_sha())
 
-CODE = "registry_unavailable"        # the code the owner requires (issue 20261005-110000)
+CODE = "registry_unavailable"        # the registry's own code, not a generic 500
 GOOD = {"schema": 1, "plugins": [{"id": "src-only", "pluginType": "harness-adapter",
                                   "name": "Src Only", "versions": []}]}
 

@@ -1,4 +1,4 @@
-//! The agent-bus client (`ARCHITECTURE` §4, `contract/adapter-v1.json`).
+//! The agent-bus client.
 //!
 //! The hub owns the adapter's **process**: it spawns it, speaks JSON-RPC 2.0
 //! over its stdin/stdout (one LF-terminated UTF-8 line per message), correlates
@@ -64,7 +64,7 @@ pub struct RequestHandle {
     alive: Arc<AtomicBool>,
     /// The child process, shared with the bus, so a caller holding only a handle can
     /// KILL it. Needed before removing a plugin: a live adapter holds the plugin's
-    /// files, so the delete fails until it is stopped (docs/issues/20261005-060000).
+    /// files, so the delete fails until it is stopped.
     child: Arc<tokio::sync::Mutex<Child>>,
 }
 
@@ -160,7 +160,7 @@ impl RequestHandle {
     /// WRITE the request frame and return the receiver for its reply, WITHOUT
     /// awaiting it. A caller that must serialize DELIVERY (a turn's prompt vs a
     /// cancel's abort) can hold a lock across the write and then release it before
-    /// the long wait for the answer (TASK-048 F4).
+    /// the long wait for the answer.
     pub async fn send(
         &self,
         method: &str,
@@ -247,7 +247,7 @@ impl AgentBus {
                 // Distinguish a real END OF STREAM (the adapter is gone) from a
                 // transient read error: `while let Ok(Some(..))` treated an IO error
                 // as "closed", which detached a LIVE adapter and failed a delivered
-                // abort (TASK-048 rework). Only `Ok(None)` (EOF) or a repeated error
+                // abort. Only `Ok(None)` (EOF) or a repeated error
                 // after the child has exited ends the read.
                 let line = match lines.next_line().await {
                     Ok(Some(line)) => {
@@ -258,7 +258,7 @@ impl AgentBus {
                         // END OF STREAM. Confirmed by re-reading: a transient EOF (a
                         // pipe read racing the adapter's own flush) must NOT be
                         // mistaken for "the adapter exited", or a LIVE adapter gets
-                        // detached and a delivered abort fails (TASK-048 rework).
+                        // detached and a delivered abort fails.
                         // Only a SUSTAINED EOF means the adapter is gone.
                         eof_streak += 1;
                         if eof_streak <= EOF_RETRIES {
@@ -303,7 +303,7 @@ impl AgentBus {
                                 .unwrap_or("adapter error")
                                 .to_string();
                             // Keep the adapter's typed `data` (its contract code), so
-                            // the identity is not lost (TASK-048 F5).
+                            // the identity is not lost.
                             let data = err.get("data").cloned().unwrap_or(Value::Null);
                             let _ = sender.send(Err(BusError::Rpc { code, message, data }));
                         } else {
@@ -344,7 +344,7 @@ impl AgentBus {
     /// not scan for processes by name.
     pub async fn shutdown(&mut self) -> Result<(), BusError> {
         // The shared child is locked for the kill. A child that has ALREADY exited
-        // is a CONFIRMED stop (TASK-048 S3). A stdout EOF alone is NOT proof of
+        // is a CONFIRMED stop. A stdout EOF alone is NOT proof of
         // exit, so we consult the child itself. Kill, then WAIT: the exit is only
         // confirmed when `wait` returns.
         //
@@ -352,7 +352,7 @@ impl AgentBus {
         // core"). An adapter may OWN child processes and data under the plugin dir;
         // a hard kill skips that, and a detached harness server would survive and
         // keep the plugin's files locked (measured: a remove then fails with
-        // `Access is denied`, docs/issues/20261009-030000). Give it a short grace
+        // `Access is denied`). Give it a short grace
         // period, then force.
         self.requests.close_stdin().await;
         let mut child = self.child.lock().await;

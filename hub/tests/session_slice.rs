@@ -1,6 +1,6 @@
 //! The session slice through the REAL hub: spawn the `agent-hub` binary against a
 //! temporary data dir and drive the OFFICIAL `/v1` surface (auth, boot, install,
-//! the whole app) - not a sessions-only router (TASK-048 N6/R5).
+//! the whole app) - not a sessions-only router.
 //!
 //! Gated on `AGENT_HUB_TEST_PLUGIN_DIR` (a plugin dir with its runtime in place)
 //! and `AGENT_HUB_TEST_HARNESS` (default `pi`). Without a plugin dir the test

@@ -1,4 +1,4 @@
-//! The adapter domain (`ARCHITECTURE` §4, `contract/adapter-v1.json`).
+//! The adapter domain.
 //!
 //! The hub owns the adapter's **process** and speaks the agent-bus protocol
 //! (JSON-RPC 2.0 over stdin/stdout, one LF-terminated line per message). A

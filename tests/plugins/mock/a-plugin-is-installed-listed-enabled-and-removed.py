@@ -6,7 +6,7 @@
 #
 # FACT:    a plugin is INSTALLED through POST /v1/plugins, reaches `ready`, and is really
 #          REMOVED through DELETE /v1/plugins/{id}; a deployment dir is refused (409)
-# SOURCE:  contract/v1.json POST/GET/DELETE /v1/plugins; ARCHITECTURE s21 N3
+# SOURCE: contract/v1.json POST/GET/DELETE /v1/plugins
 # EXPOSES: an install that never lands, a remove that leaves the plugin (or removes a
 #          deployment dir), or a prepare that reports ready without a runtime
 import os
@@ -61,7 +61,7 @@ try:
     t.check(g["status"] == 200 and (g["json"] or {}).get("plugin", {}).get("id") == "pi",
             "GET /v1/plugins/{id} reads the installed plugin", f"status={g['status']}")
 
-    # INSTALL PREPARES THE RUNTIME itself (docs/issues/20261007-200000): there is no separate
+    # INSTALL PREPARES THE RUNTIME itself: there is no separate
     # `prepare` command. `ready` must MEAN the runtime is on disk - a fact about the filesystem.
     pj = (g["json"] or {}).get("plugin", {})
     t.check(pj.get("state") == "ready", "install ends `ready` (the install IS the prepare)", f"state={pj.get('state')}")

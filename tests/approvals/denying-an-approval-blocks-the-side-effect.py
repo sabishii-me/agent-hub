@@ -4,7 +4,7 @@
 # real approval round-trip. Exposes the case where a preset's gate does not really gate.
 #
 # FACT:    a DENIED approval prevents the tool's side effect
-# SOURCE:  ARCHITECTURE s22; contract/v1.json POST /v1/sessions/{id}/approvals/{aid}
+# SOURCE:; contract/v1.json POST /v1/sessions/{id}/approvals/{aid}
 # EXPOSES: a gate that records the denial but lets the write happen anyway
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

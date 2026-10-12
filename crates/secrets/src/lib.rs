@@ -1,4 +1,4 @@
-//! The minimal secret store (`ARCHITECTURE` §2): credentials live in the **OS
+//! The minimal secret store: credentials live in the **OS
 //! keychain** (`keyring`), never in a plaintext file.
 //!
 //! Each secret is one keychain entry under the service `agent-hub`, named by a

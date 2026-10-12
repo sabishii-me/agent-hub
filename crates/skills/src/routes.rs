@@ -3,10 +3,10 @@
 //! A skill is a DIRECTORY the hub holds under `<DATA_DIR>/skills` (contract:
 //! `GET /v1/skills`). The hub is a COURIER: it stores bytes and never interprets
 //! them (`PUT .../files`). Placement is the hub's and is NOT an authorization
-//! boundary (ARCHITECTURE §7).
+//! boundary.
 //!
 //! The earlier hub-authored store with its own install state is the excluded model
-//! (TASK-048 C2). This file serves the contract's directory model and nothing more:
+//!. This file serves the contract's directory model and nothing more:
 //! list / delete / read a file / write a file. A path that escapes the skills dir is
 //! REFUSED, not sanitised (contract).
 

@@ -3,7 +3,7 @@
 //! A registry is the deployer's allow-list: the set of plugins the hub may install, each id
 //! pinned to one release (url + sha256). For that to mean anything, the hub must NOT let a
 //! caller — or an environment variable — point the hub at a DIFFERENT registry. Otherwise
-//! anyone can serve a fake registry and inject any plugin (docs/issues/20261005-130000).
+//! anyone can serve a fake registry and inject any plugin.
 //!
 //! So the registry ADDRESS is fixed at build time:
 //!
@@ -21,7 +21,7 @@
 /// It is the `registry` release asset of the hub's OWN repository - a fixed artifact name on
 /// a fixed tag (`registry`), so the address never moves when the catalog changes. The release
 /// is published only by the maintainer; the hub never takes a registry address from a caller or
-/// the environment (docs/issues/20261005-130000).
+/// the environment.
 pub const OFFICIAL_REGISTRY_URL: &str =
     "https://github.com/sabishii-me/agent-hub/releases/download/registry/registry.json";
 

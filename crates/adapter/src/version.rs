@@ -1,4 +1,4 @@
-//! The plugin/host version boundary (ADR-0008): a back-end plugin declares a
+//! The plugin/host version boundary: a back-end plugin declares a
 //! `minHubVersion` and the host ACTIVATES it only when the host's own version is at
 //! least that. One lower bound, no upper bound, no compatibility matrix. A plugin
 //! below the requirement is NOT activated and the reason is reported.
@@ -26,7 +26,7 @@ pub fn satisfies(required: &str, actual: &str) -> bool {
 
 /// The refusal reason for a plugin that requires a NEWER hub, or `None` when it is
 /// acceptable (no requirement, or the hub is new enough). The message names both
-/// versions so the reason is self-explanatory (ADR-0002/0008).
+/// versions so the reason is self-explanatory.
 pub fn refusal(min_hub_version: Option<&str>) -> Option<String> {
     let required = min_hub_version?;
     if satisfies(required, HUB_VERSION) {

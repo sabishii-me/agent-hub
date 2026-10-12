@@ -1,7 +1,7 @@
 //! Provider-TYPE descriptors, as DATA: the hub reads a descriptor a model-provider
 //! plugin ships and maps it - it never imports or runs plugin code in-process
-//! (ARCHITECTURE 5). A type no plugin ships stays absent; a descriptor that cannot be
-//! honoured is reported in `broken[]`, never a 500 (TASK-048; `GET /v1/model-providers/types`).
+//!. A type no plugin ships stays absent; a descriptor that cannot be
+//! honoured is reported in `broken[]`, never a 500.
 //!
 //! Location: a plugin directory whose `manifest.json` declares
 //! `pluginType: "model-provider"` ships its descriptor in `provider.json` beside the

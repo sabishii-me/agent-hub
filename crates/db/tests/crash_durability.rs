@@ -1,4 +1,4 @@
-//! T3: durability across a **real process crash** (ARCHITECTURE §10).
+//! T3: durability across a **real process crash**.
 //!
 //! The `t3-kill-writer` helper records an install boundary and then
 //! `std::process::abort()`s - no Drop, no SQLite close, no WAL checkpoint. The

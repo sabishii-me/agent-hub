@@ -4,7 +4,7 @@
 # No provider is needed (no model turn), so this runs without AUTH.
 #
 # FACT:    create->active, close->readonly, reopen->active, fork yields a distinct active session and leaves the source UNCHANGED
-# SOURCE:  contract/v1.json close/reopen/fork; ARCHITECTURE s21
+# SOURCE: contract/v1.json close/reopen/fork
 # EXPOSES: a fork that disturbs its source, or a lifecycle step that wedges
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

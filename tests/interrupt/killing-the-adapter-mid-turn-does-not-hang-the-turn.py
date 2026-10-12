@@ -5,7 +5,7 @@
 # adapter - only its process is killed (real fault injection, the hub is never bypassed).
 #
 # FACT:    an adapter killed MID-TURN settles the turn (failed), and the session does not keep claiming active
-# SOURCE:  ARCHITECTURE s21 N2; docs/issues/20261005-020000
+# SOURCE:
 # EXPOSES: a turn left running, or a processless session stuck active
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
@@ -52,8 +52,8 @@ try:
     end = wait_turn(hub, sid, tid, {"ended"}, tries=240)
     t.check(end.get("state") == "ended", "the turn settles after the adapter died (no hang)",
             f"state={end.get('state')} ended={end.get('ended')}")
-    # Killed mid-turn, no cancel: the turn died on its own -> `failed` (ARCHITECTURE
-    # §21 N2). The old `in (failed,interrupted,cancelled)` accepted terminals the
+    # Killed mid-turn, no cancel: the turn died on its own -> `failed`.
+    # The old `in (failed,interrupted,cancelled)` accepted terminals the
     # situation cannot produce.
     t.check(end.get("ended") == "failed",
             "a turn whose adapter died mid-turn ends `failed`",
@@ -64,7 +64,7 @@ try:
     g = hub.get(f"/v1/sessions/{sid}")
     st = (g["json"] or {}).get("session", {}).get("status")
     # The file's own docstring: "the session must not keep claiming `active`". The old
-    # assertion accepted `active` and hid the defect (docs/issues/20261005-020000).
+    # assertion accepted `active` and hid the defect.
     t.check(st != "active",
             "the session does NOT keep claiming `active` with no process behind it",
             f"status={st} (a processless session reporting `active` is the defect)")

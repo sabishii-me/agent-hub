@@ -1,5 +1,5 @@
 //! The plugins domain: install, remove, prepare, and the listing
-//! (`ARCHITECTURE` §10, task T3, wired to the frame).
+
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,7 @@ pub enum PluginError {
     /// so the code is `conflict`, not `idempotency_conflict`.
     #[error("plugin `{0}` already has an operation in progress")]
     InProgress(String),
-    /// The source is not in the official registry (docs/issues/20261005-130000): the trust
+    /// The source is not in the official registry: the trust
     /// anchor does not list it, so it is refused before anything is fetched.
     #[error("the source is not in the official registry: {0}")]
     NotInRegistry(String),
@@ -40,7 +40,7 @@ pub enum PluginError {
     // The detail MUST name WHICH registry failure happened: a caller and a test can
     // only distinguish "not set" from "the address did not answer" from "the body is
     // not a registry" by this string, and the code is the same for all of them
-    // (docs/issues/20261005-110000).
+
     #[error("{0}")]
     RegistryUrlMissing(String),
     #[error(transparent)]
@@ -69,7 +69,7 @@ impl PluginError {
             PluginError::Source(e) => e.code(),
             // A registry failure is NOT an install failure: nothing was installed, the
             // registry could not be read. A false, retryable code here would make a
-            // client retry a request that can never succeed (docs/issues/20261005-110000).
+            // client retry a request that can never succeed.
             PluginError::RegistryUrlMissing(_) => "registry_unavailable",
             PluginError::Db(_) | PluginError::Io(_) => "internal_error",
         }
@@ -98,7 +98,7 @@ pub struct Plugins {
     /// DIFFERENT ids proceed concurrently; two ops on the SAME id conflict (contract: refused or
     /// joined).
     op_locks: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
-    /// The loaded official registry (docs/issues/20261005-130000). Loaded once at construction
+    /// The loaded official registry. Loaded once at construction
     /// and replaced by a refresh; the INSTALL path reconciles a caller's source against this, so
     /// a source the registry does not list is refused before anything is fetched. `None` = not
     /// loaded (no registry available): then NO install is authorized.
@@ -269,7 +269,7 @@ impl Plugins {
     /// Reconcile a caller's source against the loaded registry. Returns Ok(()) when the source
     /// is authorized (an artifact whose url AND sha256 match a registry release), or an error
     /// naming why it is not. A git source carries no sha256, so it cannot match a release-zip
-    /// registry -> refused (docs/issues/20261005-130000).
+    /// registry -> refused.
     fn authorized(&self, source: &crate::source::Source) -> Result<(), PluginError> {
         // If the registry EXISTS but could not be read/parsed, the problem is the REGISTRY, not
         // the SOURCE: answer `registry_unavailable` (502), never `plugin_not_in_registry` (403).
@@ -315,7 +315,7 @@ impl Plugins {
     /// remove may proceed. It is called BEFORE any lock/staging so the answer is a clean 409,
     /// never a 404 ("not found") or a 502 (a staging collision).
     /// The id has an operation IN FLIGHT right now. `Failed` is a persistent VERDICT, not an
-    /// operation - a failed plugin must be retryable (docs/issues/20261007-210000), so `Failed`
+    /// operation - a failed plugin must be retryable, so `Failed`
     /// does NOT make the id busy. Without this a failure wedged the id forever: every later
     /// install/remove answered 409 because the `Failed` op never left.
     fn busy(&self, id: &str) -> bool {
@@ -401,7 +401,7 @@ impl Plugins {
     /// Read one plugin (the resource a `202 Location` names).
     pub fn get(&self, id: &str) -> Result<PluginView, PluginError> {
         // A hub-installed plugin has a row; a deployment directory does not. But an operation in
-        // flight (docs/issues/20261007-183000) means the resource is REAL before the bytes land:
+        // flight means the resource is REAL before the bytes land:
         // a 202 Location names it and a client must be able to read it, as `installing`, WHILE it
         // fetches. Without this the resource was 404 during the whole download and then jumped to
         // `ready` - the state machine lied.
@@ -472,7 +472,7 @@ impl Plugins {
             // The contract: `runtimeReady` is a FACT about the filesystem - the
             // manifest's command exists under the plugin dir - not a claim about the
             // harness working. It was hardcoded `false`, so a SUCCESSFUL prepare read
-            // as not-ready (docs/issues/20261005-090000).
+            // as not-ready.
             runtime_ready: runtime_command_present(&target, manifest.as_ref()),
             state: self.state_of(id),
             prepare: None,
@@ -495,7 +495,7 @@ impl Plugins {
         command_id: &str,
         source: &crate::source::Source,
     ) -> Result<InstallIntent, PluginError> {
-        // AUTHORIZATION FIRST (docs/issues/20261005-130000): a source must be listed by the
+        // AUTHORIZATION FIRST: a source must be listed by the
         // official registry (url AND sha256) before ANY work - no clone, no download, no
         // staging. This is what stops a caller installing code the registry never approved.
         self.authorized(source)?;
@@ -574,7 +574,7 @@ impl Plugins {
             .ok(),
             crate::source::Source::Git { .. } => None,
         };
-        // `installing` was claimed ATOMICALLY above; ANNOUNCE it now (docs/issues/20261007-183000):
+        // `installing` was claimed ATOMICALLY above; ANNOUNCE it now:
         // the contract says a 202 Location names a resource readable, in `installing`, WHILE it
         // fetches. The download runs in the detached `finish_install`.
         self.announce(&id);
@@ -605,7 +605,7 @@ impl Plugins {
         artifact_json: Option<String>,
     ) -> Result<(), PluginError> {
         // DOWNLOAD + STAGE here, in the detached task, so the route could already answer
-        // 202 + `installing` (docs/issues/20261007-183000). The per-id lock guards the staging.
+        // 202 + `installing`. The per-id lock guards the staging.
         let source_dir = self.staging_dir(id);
         let id_lock = self.id_lock(id);
         let _op = id_lock.lock().expect("id lock");
@@ -689,7 +689,7 @@ impl Plugins {
                 // The adapter LANDED, but the harness is NOT usable yet: its runtime (the command
                 // the manifest pins) is materialised by the adapter's `runtime/prepare`. Enter
                 // `preparing` and DO NOT announce `ready` here - the caller prepares next and only
-                // then clears the op (docs/issues/20261007-190000). Announcing `ready` now would be
+                // then clears the op. Announcing `ready` now would be
                 // a false ready: the declared runtime command is not on disk.
                 self.enter(id, Op::Preparing);
                 self.announce(id);
@@ -736,7 +736,7 @@ impl Plugins {
         }
         // A harness with OPEN sessions is refused rather than yanked out from under them
         // (contract/openapi.json DELETE /v1/plugins/{id} -> 409 `plugin_in_use`, naming them;
-        // docs/issues/20261008-063000).
+
         match self.db.open_sessions_for(id) {
             Ok(open) if !open.is_empty() => {
                 self.leave(id, Op::Removing);
@@ -748,7 +748,7 @@ impl Plugins {
                 return Err(PluginError::Db(e));
             }
         }
-        // Distinguish THREE cases, so the message never lies (docs/issues/20261005-140000):
+        // Distinguish THREE cases, so the message never lies:
         //  - a hub-installed plugin (a row with installed_at) -> allowed;
         //  - a DEPLOYMENT directory (no row, but a directory with a manifest exists) ->
         //    NotInstalledByHub (409 `conflict`), naming it a deployment directory;
@@ -800,7 +800,7 @@ impl Plugins {
     /// still holds its files). It must NOT stay `removing` forever - the caller can
     /// never learn it failed and the resource lies. Leave `Removing`, record
     /// `failed` with the reason, and announce. The plugin dir is still on disk, so
-    /// the verdict is `failed` (docs/issues/20261005-060000).
+    /// the verdict is `failed`.
     pub fn fail_remove(&self, id: &str, reason: &str) {
         self.leave(id, Op::Removing);
         self.enter(id, Op::Failed);

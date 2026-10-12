@@ -1,5 +1,5 @@
 # TC-PLUGINS-002
-# Install must RECONCILE the caller's source against the registry (docs/issues/20261005-130000):
+# Install must RECONCILE the caller's source against the registry:
 # an artifact whose url AND sha256 match a registry release is AUTHORIZED; anything else is
 # refused with 403 plugin_not_in_registry, and NOTHING is fetched or landed. The sha256 is the
 # anchor: matching the url alone would let a proxied url serve different bytes.
@@ -11,7 +11,7 @@
 #            no registry loaded                               -> any source refused.
 # SOURCE:  crates/plugins/src/service.rs (begin_install -> authorized -> Registry::authorizes);
 #          crates/plugins/src/registry.rs (authorizes: url AND sha256);
-#          contract/errors.json (plugin_not_in_registry 403); docs/issues/20261005-130000.
+# contract/errors.json (plugin_not_in_registry 403)
 # EXPOSES: an unlisted source installed (the injection hole); a url-only match accepted (a proxied
 #          url would pass); or a listed release wrongly refused.
 import json

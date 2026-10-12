@@ -1,4 +1,4 @@
-//! Catalog fetch over HTTP (`ARCHITECTURE` §5): the hub owns the request, the
+//! Catalog fetch over HTTP: the hub owns the request, the
 //! dialect and the field mapping. A failure keeps the previous catalog and
 //! reports the error; it never clears the selection.
 

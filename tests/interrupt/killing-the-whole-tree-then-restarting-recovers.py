@@ -6,7 +6,7 @@
 # reopened and used again. Real: taskkill the tree; restart the real binary on the same dir.
 #
 # FACT:    a full power-cut (whole tree) restarts, reconciles the session to needs-repair, and reopens on the stored ref
-# SOURCE:  ARCHITECTURE s21 N2
+# SOURCE:
 # EXPOSES: a restart that falsely claims active, or a session that cannot be reopened
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

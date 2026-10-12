@@ -1,4 +1,4 @@
-//! **The hub's instance identity** (`ARCHITECTURE` §8). A secret store is keyed by
+//! **The hub's instance identity**. A secret store is keyed by
 //! a namespace; that namespace must be a **persistent property of the data
 //! directory**, not something recomputed from its path. A path can move; an id
 //! cannot. So the id is a row, created once and then never recomputed:

@@ -1,6 +1,6 @@
-//! The hub's transport (`ARCHITECTURE` §9, task T6): an axum/hyper server whose
+//! The hub's transport: an axum/hyper server whose
 //! request paths never block the runtime, plus the HTTP vocabulary for long
-//! operations (`202` + `Location`) and the SSE stream (`ARCHITECTURE` §11).
+//! operations (`202` + `Location`) and the SSE stream.
 //!
 //! This crate is **infrastructure only**; domains mount onto [`Router`] and
 //! publish to the [`Bus`]. It gives:
@@ -44,7 +44,7 @@ impl Accepted {
         Accepted { location: location.into(), body }
     }
 
-    /// A **detached** long operation (ARCHITECTURE §13.2, ADR-0009): answer
+    /// A **detached** long operation: answer
     /// `202 + Location` at once and run `work` on a task. The connection is
     /// never held. The result is the resource's own state, reported on the
     /// event stream.
@@ -279,7 +279,7 @@ async fn sse(State(t): State<Transport>, headers: HeaderMap) -> axum::response::
     };
 
     // axum's Sse owns the `event:`/`data:`/`id:` framing (a maintained
-    // component), not hand-written strings (TASK-048 C5).
+    // component), not hand-written strings.
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 

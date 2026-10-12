@@ -1,4 +1,4 @@
-//! The humans domain (`ARCHITECTURE` §3): approvals and questions - a harness
+//! The humans domain: approvals and questions - a harness
 //! asking a person to decide.
 //!
 //! The hub holds the pending decisions as **control state**. The adapter
@@ -68,7 +68,7 @@ pub struct Humans {
     counter: std::sync::atomic::AtomicU64,
     /// One waiter per pending approval: the reverse request raised by the adapter
     /// (`approval_need`) waits here, and `/v1` resolution fires it so the decision
-    /// reaches the SAME adapter request (TASK-048 G1).
+    /// reaches the SAME adapter request.
     approval_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Approval>>>,
     /// The same for a question (`question_need`).
     question_waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Question>>>,

@@ -1,5 +1,5 @@
 //! Provider rows: the hub-managed model providers as **relationship state in the
-//! database** (`ARCHITECTURE` §5, §8). A provider's endpoint, protocol, model
+//! database**. A provider's endpoint, protocol, model
 //! declarations, selection and cached catalog live here; its **credential** does
 //! NOT - only a **secret reference** (a keychain key), never a value.
 
@@ -24,7 +24,7 @@ pub struct ProviderRow {
     pub secret_ref: Option<String>,
     /// A fresh id minted on every INSERT: a row read before a delete+recreate of
     /// the same id has a DIFFERENT incarnation, so a stale save is refused
-    /// (TASK-048 F2: an old refresh cannot overwrite a rebuilt provider).
+
     pub incarnation: String,
     /// The cached catalog: `{fetchedAt, revision, models}` or null.
     pub catalog: Option<serde_json::Value>,
@@ -89,7 +89,7 @@ impl crate::Db {
     /// Save a provider row, **guarded by its incarnation**: the UPDATE matches
     /// only when the row currently has the SAME incarnation the caller read. A
     /// row read before a delete+recreate of the same id has a different
-    /// incarnation and the save is refused with `Conflict` (TASK-048 F2), so a
+    /// incarnation and the save is refused with `Conflict`, so a
     /// stale object can never overwrite a rebuilt one.
     pub fn save_provider(&self, p: &ProviderRow) -> Result<(), DbError> {
         let conn = self.lock();
@@ -165,7 +165,7 @@ fn write_provider(conn: &Connection, p: &ProviderRow) -> Result<(), rusqlite::Er
     Ok(())
 }
 
-/// **The credential-transition journal** (`ARCHITECTURE` §8). A provider's
+/// **The credential-transition journal**. A provider's
 /// credential lives in a store (the keychain) that is NOT in the same
 /// transaction as the row. Any operation that touches both records its intent
 /// here FIRST, so a crash between the two stores leaves a **visible, recoverable**
@@ -203,13 +203,13 @@ CREATE TABLE IF NOT EXISTS provider_ops (
         /// `Some(2)` = the row state the op intended to WRITE (post-write intent);
         /// `None`/`Some(1)` = a LEGACY entry written before the intent was the
         /// post-write state (its revision is the PRE-write one). Recovery must not
-        /// interpret a legacy revision with the new semantics (TASK-048 F1).
+        /// interpret a legacy revision with the new semantics.
         pub intent_version: Option<i64>,
         /// A stable digest of the row's CONFIGURATION the op intended to save
         /// (`url`/`api`/`declarations`/`secret_ref`). Recovery matches ONLY when the
         /// CURRENT row's digest equals this: an unrelated update that happens to
         /// reach the same revision must NOT be read as this op's commit
-        /// (TASK-048 F1-current).
+
         pub expected_config: Option<String>,
     }
 
@@ -221,7 +221,7 @@ pub const INTENT_VERSION: i64 = 2;
 impl crate::Db {
     /// Record an in-flight credential transition. It REFUSES (Conflict) when a
     /// pending op already exists for this provider: an unrelated write must never
-    /// overwrite an unresolved intent (TASK-048 F1). The caller resolves the
+    /// overwrite an unresolved intent. The caller resolves the
     /// pending op first (boot sweep or an explicit resolution), then begins.
     ///
     /// The insert and the duplicate check are one transaction.

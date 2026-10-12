@@ -1,4 +1,4 @@
-//! The plugins domain (`ARCHITECTURE` §10, task T3): install, remove, prepare
+//! The plugins domain: install, remove, prepare
 //! and the listing, wired to the frame.
 //!
 //! The lifecycle's recovery is `agent-hub-db`'s; this crate owns the routes, the

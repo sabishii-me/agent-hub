@@ -4,7 +4,7 @@
 # preset that is not applied must not be reported as applied - the two facts are separate.
 #
 # FACT:    a harness presets are enumerable, and a session created with a preset reports it APPLIED; an unknown preset fails the start
-# SOURCE:  ARCHITECTURE s22; contract/v1.json GET /v1/harnesses/{id}/presets + POST /v1/sessions
+# SOURCE:; contract/v1.json GET /v1/harnesses/{id}/presets + POST /v1/sessions
 # EXPOSES: a preset reported applied but not in force, or an unknown preset yielding active
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

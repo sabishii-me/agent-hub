@@ -2,7 +2,7 @@
 //!
 //! A long operation (install, remove) is **detached**: the route answers
 //! `202 Accepted` + `Location` at once and the work runs on a task
-//! (ARCHITECTURE §13.2, ADR-0009). Errors are a contract **code**; the transport
+//!. Errors are a contract **code**; the transport
 //! maps the code to a status (`ErrorRenderer`), never this module.
 
 use std::sync::Arc;
@@ -38,7 +38,7 @@ impl PluginsState {
     }
 }
 
-/// Build the router AND its surface from one declaration (TASK-048 C5): the
+/// Build the router AND its surface from one declaration: the
 /// `RouteTable` records each `"METHOD /path"` as it mounts, so the boot
 /// self-check's list cannot drift from the actual routes.
 fn table() -> agent_hub_transport::RouteTable<PluginsState> {
@@ -149,7 +149,7 @@ pub fn surface() -> Vec<String> {
     table().surface()
 }
 
-/// The client's logical command identity (ARCHITECTURE §11, R1). A retry carries
+/// The client's logical command identity. A retry carries
 /// the same `Idempotency-Key`, so the hub must recognize it and not run twice.
 /// An absent key is a fresh intent.
 fn command_id(headers: &HeaderMap) -> String {
@@ -235,7 +235,7 @@ async fn install(
 ) -> Response {
     // A body that does not match the shape is a CLIENT error, and the contract demands a
     // CODE, not axum's own 422 text: every route failure carries {"error": CODE, "detail"}
-    // (docs/issues/20261005-141000).
+
     let Json(body) = match body {
         Ok(b) => b,
         Err(rej) => {
@@ -270,7 +270,7 @@ async fn install(
             let adapters = s.adapters.clone();
             let location = format!("/v1/plugins/{id}");
             // The landing does synchronous fs + SQLite work; it MUST run on the
-            // blocking pool, not on the async runtime (TASK-048 F06).
+            // blocking pool, not on the async runtime.
             Accepted::detached(
                 location,
                 serde_json::json!({ "pluginId": id, "state": "installing" }),
@@ -371,7 +371,7 @@ async fn remove(
                     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
                     // Stop the harness's cached adapter: a prepared/running
                     // adapter holds files under the plugin dir, so the delete fails
-                    // with os error 32 (docs/issues/20261005-060000). Dropping the
+                    // with os error 32. Dropping the
                     // handle kills the child (kill_on_drop).
                     adapters.stop_harness(&id2).await;
                     // Give the OS a moment to release the files the child held.

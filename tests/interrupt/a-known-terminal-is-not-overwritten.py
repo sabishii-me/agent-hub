@@ -4,7 +4,7 @@
 # ONCE; a second pass must see the committed terminal and leave it alone. Real: real adapter.
 #
 # FACT:    a known terminal is committed once and is not overwritten by a later reconciliation
-# SOURCE:  ARCHITECTURE s21 (settle_turn commits the terminal once, SQL WHERE ended IS NULL); contract/v1.json turn.ended
+# SOURCE: (settle_turn commits the terminal once, SQL WHERE ended IS NULL); contract/v1.json turn.ended
 # EXPOSES: a settled turn's terminal silently rewritten (e.g. cancelled -> interrupted/failed)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

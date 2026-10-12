@@ -1,6 +1,6 @@
 # TC-PLUGIN-CONFLICT: concurrent commands on the SAME plugin
 #
-# The contract (ARCHITECTURE §10): a conflicting command on the SAME plugin is REFUSED (409);
+# The contract: a conflicting command on the SAME plugin is REFUSED (409);
 # different plugins are independent. The owner's rule, exactly:
 #   - while a plugin is INSTALLING, it must NOT be installable again   -> 409 conflict;
 #   - while a plugin is INSTALLING, it must NOT be removable by itself -> 409 conflict;

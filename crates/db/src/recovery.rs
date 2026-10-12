@@ -1,4 +1,4 @@
-//! Plugin install/replace **recovery** (`ARCHITECTURE` §10, task T3).
+//! Plugin install/replace **recovery**.
 //!
 //! An install is two renames plus a DB commit, over a directory tree and a row.
 //! Each move is preceded by a durable step, so a boot sweep can finish or roll

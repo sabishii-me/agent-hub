@@ -4,9 +4,9 @@
 //! secret store (`agent-hub-secrets`), never in the record file; `logout` deletes
 //! it; the catalog fetch authenticates with it; the provider-TYPE surface reads each
 //! plugin's `provider.json` as DATA; and the auth surface runs the device-code flow
-//! the type declares (ADR-0012) with a durable operation. No route here is a stub.
+//! the type declares with a durable operation. No route here is a stub.
 //!
-//! A provider is DATA (`ARCHITECTURE` §5); the hub owns the request, the auth, the
+//! A provider is DATA; the hub owns the request, the auth, the
 //! catalog fetch and the field mapping.
 
 use std::sync::Arc;
@@ -95,7 +95,7 @@ fn err(s: &ProvidersState, e: ProviderError) -> Response {
 /// The provider object returned: **no credential, only whether one is stored**.
 /// The provider object returned: **no credential, only whether one is stored**.
 /// `type_available` comes from the ONE type authority, so availability is not
-/// inferred from a field being present (TASK-048 G3).
+/// inferred from a field being present.
 fn view(rec: &crate::record::ProviderRecord, type_available: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(rec).unwrap_or(serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
@@ -234,7 +234,7 @@ async fn list_models(State(s): State<ProvidersState>) -> Response {
 /// `GET /v1/model-providers/types`: the provider types installed plugins ship, as
 /// DATA. A type no plugin ships stays absent; a descriptor that cannot be honoured
 /// is `broken[]` (never a 500). The hub reads the descriptor; it never runs plugin
-/// code (ARCHITECTURE 5).
+/// code.
 async fn list_types(State(s): State<ProvidersState>) -> Response {
     let catalog = crate::types::TypeCatalog::scan(&s.plugins_root);
     Json(catalog.to_json()).into_response()
@@ -269,7 +269,7 @@ async fn start_auth(
     };
     // NO SIDE EFFECT on a refusal: a type with no interactive method is refused
     // BEFORE any operation is created. The operation exists ONLY when a real flow
-    // executor is about to start (TASK-048 G4).
+    // executor is about to start.
     if crate::auth::AuthStore::interactive_method(&desc).is_none() {
         return s.errors.render(&DomainError::new(
             "unsupported",

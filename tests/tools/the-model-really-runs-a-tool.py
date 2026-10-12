@@ -4,7 +4,7 @@
 # carry the file's content. A chat-only "pong" cannot pass this. Needs a REAL provider.
 #
 # FACT:    the model REALLY runs a tool: the transcript shows a real tool call and a fact only running it could reveal
-# SOURCE:  contract/v1.json session messages/tools; ARCHITECTURE s7
+# SOURCE: contract/v1.json session messages/tools
 # EXPOSES: a model that answers without running the tool
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

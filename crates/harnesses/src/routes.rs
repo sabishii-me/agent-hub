@@ -156,7 +156,7 @@ async fn conn_validate(
 
 /// The adapter's `connections/delete` takes `["id", "expectedRevision?"]` — NOT
 /// `connectionId`. Passing the wrong key made a real adapter (which finds no `p.id`)
-/// idempotently return success WITHOUT deleting (TASK-048 G2).
+/// idempotently return success WITHOUT deleting.
 async fn conn_delete(
     State(s): State<HarnessesState>,
     AxumPath((id, cid)): AxumPath<(String, String)>,

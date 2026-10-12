@@ -1,4 +1,4 @@
-//! The boot self-check (ARCHITECTURE §13.4, §13.7).
+//! The boot self-check.
 //!
 //! Two seams are held at boot, before the hub serves:
 //!
@@ -30,7 +30,7 @@ pub fn check_error_codes(declared: &[&str], table: &agent_hub_contract::ErrorTab
 
 /// The mounted surface, COLLECTED from each module's `surface()`. There is one
 /// source per module (beside its `route(...)` calls), so the check cannot drift
-/// from the router by editing a separate central table (TASK-048 C5).
+/// from the router by editing a separate central table.
 pub fn mounted_surface() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     out.extend(agent_hub_transport::surface());
@@ -60,7 +60,7 @@ pub fn check_surface(mounted: &BTreeSet<String>, contract: &serde_json::Value) -
     }
     // The dangerous direction is serving a route the contract does NOT declare:
     // that is a refusal to start. A contract route not mounted yet is unfinished
-    // work (ARCHITECTURE 18), reported but not fatal.
+    // work, reported but not fatal.
     let extra: Vec<&String> = mounted.difference(&expected).collect();
     if !extra.is_empty() {
         return Err(format!(

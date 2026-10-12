@@ -7,7 +7,7 @@
 # and the next BOOT must reconcile the open turn honestly (`failed`) - never `completed`.
 #
 # FACT:    a DB write failure while settling leaves the turn un-settled and honest, and a boot settles it `failed`
-# SOURCE:  TASK-048 F4/S3 (settle_turn records terminal_intent, retries, never publishes on failure); ARCHITECTURE s21
+# SOURCE:/S3 (settle_turn records terminal_intent, retries, never publishes on failure)
 # EXPOSES: a terminal announced the store does not hold, or a turn stuck `completed` after a failed write
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

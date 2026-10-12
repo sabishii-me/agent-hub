@@ -1,4 +1,4 @@
-//! The **single normalization authority** for the wire contract (`ARCHITECTURE` §9, task T1).
+//! The **single normalization authority** for the wire contract.
 //!
 //! `contract/v1.json` is a *compact DSL*, not JSON Schema:
 //! request/response fragments are written as short type strings, e.g.
@@ -339,7 +339,7 @@ fn build_operation(ep: &Value, path: &str) -> Result<Value, NormalizeError> {
         } else {
             normalize_fragment(resp, &format!("{path}.response"))?.schema
         };
-        // A long command answers `202 Accepted` + `Location` (ADR-0009, §13.2);
+        // A long command answers `202 Accepted` + `Location`;
         // the body names the resource and the Location header points at it.
         let accepted = ep.get("accepted").and_then(Value::as_bool).unwrap_or(false);
         let code = if accepted { "202" } else { "200" };

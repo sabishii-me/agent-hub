@@ -1,4 +1,4 @@
-//! The extensions domain: the hub's side of the placement rule (`ARCHITECTURE` §6).
+//! The extensions domain: the hub's side of the placement rule.
 //!
 //! An extension is a directory a plugin ships (`<plugin>/extensions/<id>`). Before
 //! a harness runs, the hub **writes that harness's selected extension directories
@@ -6,7 +6,7 @@
 //! places them where its harness reads them with **discovery off**. The hub owns
 //! the placement; the adapter only points the harness at it.
 //!
-//! Placement is **not** an authorization boundary (`ARCHITECTURE` §7): it keeps the
+//! Placement is **not** an authorization boundary: it keeps the
 //! agent from editing a trust-bearing extension through its workspace; it does not
 //! confine a same-principal agent.
 
@@ -65,7 +65,7 @@ pub fn install_for_harness(
     std::fs::create_dir_all(&base)?;
 
     // Build a COMPLETE, IMMUTABLE SNAPSHOT of the selected set, then hand that
-    // snapshot's path to the adapter for this start (TASK-048 S5/N4). No reader
+    // snapshot's path to the adapter for this start. No reader
     // ever observes a partially-updated tree: the snapshot is written under a
     // private name and only named as the returned path once it is complete. The
     // caller points the adapter at THIS path, so concurrent starts each get a
@@ -100,7 +100,7 @@ pub fn install_for_harness(
     // Hand the adapter THIS snapshot's path directly: it is COMPLETE and
     // IMMUTABLE, so the reader never races a replacement and never sees a mixed or
     // missing set. There is no shared mutable name to swap, hence no window
-    // (TASK-048 S5). Older snapshots are swept by COUNT: keep the newest few so a
+    //. Older snapshots are swept by COUNT: keep the newest few so a
     // still-running adapter's snapshot is not deleted under it, drop the rest.
     sweep_old_snapshots(&snapshots, &snapshot);
 
@@ -111,7 +111,7 @@ pub fn install_for_harness(
 /// after start; nothing holds one for an hour. The point of an AGE bound (not a
 /// COUNT) is that a count can never cover an unbounded number of concurrent
 /// starts: with `keep = 8`, the 9th concurrent start deleted the 1st session's
-/// snapshot before its harness had loaded it (docs/issues/20261005-040000). An age
+/// snapshot before its harness had loaded it. An age
 /// bound deletes only what no live session can still be using.
 const SNAPSHOT_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 

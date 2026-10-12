@@ -1,4 +1,4 @@
-//! The sessions domain (`ARCHITECTURE` §6, §11): the hub's control state over
+//! The sessions domain: the hub's control state over
 //! sessions, with a REAL adapter process per session.
 //!
 //! `create` is a **long command** (§11, R1): it durably reserves the command ->
@@ -42,7 +42,7 @@ pub enum SessionError {
     RepairFailed(String),
     /// A provider resolution failure with its OWN contract code (e.g.
     /// `provider_unauthorized`), so the identity survives to the response
-    /// (TASK-048 F5).
+
     #[error("{message}")]
     Provider { code: String, message: String },
     #[error(transparent)]
@@ -66,11 +66,11 @@ impl SessionError {
 
     /// Map an adapter interaction failure: when the adapter ANSWERED with a typed
     /// refusal that names a contract code, keep that identity; otherwise it is a
-    /// start/transport failure (TASK-048 F5).
+    /// start/transport failure.
     pub fn from_start(e: crate::runtime::StartError) -> Self {
         if let crate::runtime::StartError::Refused { data, message, .. } = &e {
             // Map the adapter's code to a CONTRACT code at this owning boundary, so
-            // the machine identity survives to the HTTP/resource result (TASK-048
+            // the machine identity survives to the HTTP/resource result (
             // F5/S4). `code()` then returns it verbatim.
             let contract = crate::runtime::adapter_code_to_contract(data);
             return SessionError::Provider {
@@ -266,7 +266,7 @@ pub struct Sessions {
     /// `session/abort` are serialized on it, so the prompt frame is either wholly
     /// written before the abort, or the cancel wins the row and the prompt never
     /// sends. Held ONLY across claim + the frame write, never across the long wait
-    /// for an answer (TASK-048 F4).
+    /// for an answer.
     dispatch: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
     /// Turns a cancel was requested for (the run settles them as cancelled).
     cancelled: Mutex<std::collections::HashSet<String>>,
@@ -275,7 +275,7 @@ pub struct Sessions {
     /// Sessions whose adapter is in an UNKNOWN configuration (a config/set whose
     /// outcome is unconfirmed, or a stop that failed). No turn may be accepted
     /// while this holds, independent of the durable row: it is the authoritative
-    /// in-memory execution gate (TASK-048 F3).
+    /// in-memory execution gate.
     quarantined: Mutex<std::collections::HashSet<String>>,
 }
 
@@ -329,7 +329,7 @@ impl Sessions {
     /// The runtime signals `(sid, generation)` when the adapter's stdout closes.
     /// If the generation still matches the live one (nobody stopped/reopened/repair ed
     /// it on purpose) and the row is still `active`, the session is reconciled
-    /// honestly via `quarantine_session` (the ARCHITECTURE 21 N2 rule, applied live):
+    /// honestly via `quarantine_session`:
     /// an adapter that is gone can NOT leave a session `active`. Call once, on an
     /// `Arc<Self>`, at composition time.
     pub fn spawn_death_watcher(self: std::sync::Arc<Self>) {
@@ -603,7 +603,7 @@ impl Sessions {
         }
         // Placement (deleting/creating the shared harness dir) is BLOCKING file
         // work. Run it off the async runtime, so it never stalls other sessions'
-        // tasks (TASK-048 N4). The accept path already did a cheap existence check
+        // tasks. The accept path already did a cheap existence check
         // and no side effect.
         let harness = {
             let this = self.clone();
@@ -686,7 +686,7 @@ impl Sessions {
     /// or a DB write failure) leaves the adapter in an UNKNOWN configuration. The
     /// session must not keep serving prompts against its old applied identity: stop
     /// the process and mark it `needs-repair`, so the next use reopens and re-grants
-    /// (TASK-048 F3).
+
     /// Apply ONE policy knob (`plan`/`review`) through `config/set` with a bounded
     /// wait. `Ok(true)` = the adapter confirmed the value; `Ok(false)` = it
     /// answered but did not confirm; `Err` = the outcome is UNKNOWN and the session
@@ -714,7 +714,7 @@ impl Sessions {
                     // config/set already RAN, so the session's effective
                     // configuration is now UNKNOWN. Fail closed (quarantine)
                     // rather than return a plain validation error and keep
-                    // serving a session we cannot describe (TASK-048 F3).
+                    // serving a session we cannot describe.
                     Err(self
                         .quarantine_session(
                             id,
@@ -731,7 +731,7 @@ impl Sessions {
 
     async fn quarantine_session(&self, sid: &str, reason: &str) -> SessionError {
         // Block FIRST: the in-memory gate is authoritative even if the stop or the
-        // DB write fails (TASK-048 F3).
+        // DB write fails.
         self.quarantined.lock().await.insert(sid.to_string());
         let stopped = self.runtime.stop(sid).await.is_ok();
         if !stopped {
@@ -743,7 +743,7 @@ impl Sessions {
                 row.start_error = Some(reason.to_string());
                 row.updated_at = now_utc();
                 // Publish ONLY after the DB confirms: the stream must never
-                // announce a state the store does not hold (TASK-048 F5). If the
+                // announce a state the store does not hold. If the
                 // write fails, the in-memory gate still blocks; we log and do not
                 // publish (no state-change event without a persisted change).
                 match self.db.update_session(&row) {
@@ -813,7 +813,7 @@ impl Sessions {
         // FIRST: apply every turn's recorded terminal INTENT (a known terminal whose
         // write failed). The intent is committed before the terminal, so it is the
         // durable basis for finishing a settlement the store did not accept
-        // (TASK-048 S3).
+
         for (turn_id, _session_id, intent) in self.db.pending_terminal_intents()? {
             let parsed: serde_json::Value = serde_json::from_str(&intent).unwrap_or_default();
             let ended = parsed.get("ended").and_then(|v| v.as_str()).unwrap_or("failed");
@@ -940,10 +940,10 @@ impl Sessions {
         // policy knobs: allowed during a running turn. Each is a bounded control
         // request: a config that may have APPLIED but was never confirmed leaves the
         // session in an unknown configuration, so it fails CLOSED (quarantine); a
-        // non-answer must never hang the handler (ADR-0009).
+        // non-answer must never hang the handler.
         if let Some(v) = req.plan {
             // On failure `apply_policy_knob` already quarantined the session; the
-            // error propagates (TASK-048 F3).
+            // error propagates.
             self.apply_policy_knob(id, "plan", serde_json::json!(v)).await?;
             row.plan = Some(v);
             row.applied_plan = Some(v);
@@ -1026,20 +1026,20 @@ impl Sessions {
                         // Restart + resume and CONTINUE the composite PATCH: any other
                         // field (e.g. thinkingLevel) still runs against the FRESH
                         // process. Do not early-return and drop the rest of the
-                        // command (TASK-048 G5).
+                        // command.
                         self.restart_for_preset(id, &mut row, new_preset.clone(), new_provider.clone(), new_model.clone())
                             .await?;
                         // `ensure_running_locked` wrote the CONFIRMED applied identity
                         // (preset included) into the DB; re-read so the final save
                         // below does not overwrite it with the stale local row
-                        // (TASK-048 G5).
+
                         if let Ok(Some(fresh)) = self.db.session(id) {
                             row = fresh;
                         }
                         break 'model_block;
                     }
                     // Any other typed refusal: quarantine (fail closed) but KEEP its
-                    // contract code (TASK-048 F5).
+                    // contract code.
                     self.quarantine_session(id, &typed.to_string()).await;
                     return Err(typed);
                 }
@@ -1050,7 +1050,7 @@ impl Sessions {
             let ar = applied.get("connectionId").and_then(|v| v.as_str()).map(str::to_string);
             // `applied.connectionId` is the RESOLVED NATIVE ROUTE. The contract
             // names an injected provider `hub-<id>`; a bare id is NOT that route,
-            // so it is refused (TASK-048 F3). With no requested provider, a
+            // so it is refused. With no requested provider, a
             // non-empty route is still required.
             // A route is required ONLY when a managed provider was requested. With
             // no provider the harness uses its own native config, so a bare
@@ -1114,7 +1114,7 @@ impl Sessions {
         // value as null + a warning, never as applied). An adapter that did not
         // answer at all is an UNKNOWN outcome: the config may have applied, so
         // fail CLOSED (quarantine) rather than keep serving a session whose
-        // configuration we cannot state (TASK-048 F3/F5).
+        // configuration we cannot state.
         if let Some(level) = &req.thinking_level {
             row.thinking_level = Some(level.clone());
             let call = self.runtime.request(
@@ -1144,7 +1144,7 @@ impl Sessions {
                     // `validation-failed` -> `400 validation_failed`) and KEEP the session serving.
                     // Only an UNKNOWN outcome (no answer: a transport failure or a crash) leaves the
                     // effective configuration uncertain - that remains a fail-closed quarantine
-                    // (TASK-048 F3/F5).
+
                     if matches!(e, crate::runtime::StartError::Refused { .. }) {
                         return Err(SessionError::from_start(e));
                     }
@@ -1170,7 +1170,7 @@ impl Sessions {
     /// the mechanism for a harness that reads its preset only at spawn. The hub
     /// stops the running process, records the requested preset, and lets
     /// `ensure_running_locked` start a fresh process with `session/start(resume)`
-    /// carrying the new `config.presetId` (TASK-048 A2). The conversation is resumed,
+    /// carrying the new `config.presetId`. The conversation is resumed,
     /// so the session stays usable. `ensure_running_locked` sets `active` only after
     /// a full success; a failure leaves the session `needs-repair`, never a wedged
     /// half-state.
@@ -1201,7 +1201,7 @@ impl Sessions {
         if let Err(e) = self.ensure_running_locked(id, false).await {
             // The restart did NOT prove a live process. The old one is stopped, so
             // the session MUST NOT keep claiming `active`: mark it needs-repair
-            // (in memory AND durably) and report the failure honestly (TASK-048 G5).
+            // (in memory AND durably) and report the failure honestly.
             self.quarantined.lock().await.insert(id.to_string());
             if let Ok(Some(mut r)) = self.db.session(id) {
                 r.status = "needs-repair".into();
@@ -1434,7 +1434,7 @@ impl Sessions {
                 let _ = self.db.update_session(&row);
                 // Keep the adapter's typed identity when it ANSWERED (a provider
                 // refusal has its own contract code); a transport failure is a
-                // start failure (TASK-048 F5).
+                // start failure.
                 return Err(SessionError::from_start(e));
             }
         };
@@ -1658,7 +1658,7 @@ impl Sessions {
     ) -> Result<TurnOutcome, SessionError> {
         // Admission takes the SAME session lock a PATCH holds for its whole
         // grant/config transition, so a turn cannot be admitted while a config
-        // switch is in flight (TASK-048 F3).
+        // switch is in flight.
         let lock = self.lock_for(session_id).await;
         let _guard = lock.lock().await;
         if req.idempotency_key.trim().is_empty() {
@@ -1688,7 +1688,7 @@ impl Sessions {
             ));
         }
         // Admit the turn: identity AND busy are ONE atomic decision. A refused
-        // admission leaves no `admitted` row (TASK-048 P1).
+        // admission leaves no `admitted` row.
         let turn_id = new_id("t");
         match self.db.admit_turn(session_id, &req.idempotency_key, &intent, &turn_id)? {
             agent_hub_db::TurnAdmission::Reserved => {}
@@ -1705,7 +1705,7 @@ impl Sessions {
             agent_hub_db::TurnAdmission::Busy(_) => {
                 // The contract: a deliberate second turn while one runs is 409
                 // `session_busy` (the same code every busy knob returns), never a
-                // 400 validation_failed (docs/issues/20261003-160000).
+                // 400 validation_failed.
                 return Err(SessionError::Busy);
             }
         }
@@ -1728,7 +1728,7 @@ impl Sessions {
         // frame must be WHOLLY written before any abort, or the cancel wins the row
         // first and the prompt never sends. This closes the window where a cancel
         // wrote `cancelling` + sent an abort while the prompt had not yet been
-        // delivered (TASK-048 F4).
+        // delivered.
         //
         // The lock is held ONLY across the claim + the frame write; the long wait
         // for the prompt's answer happens OUTSIDE it, so a cancel never waits for a
@@ -1742,10 +1742,10 @@ impl Sessions {
             // Re-check under the delivery lock: a cancel that already won left the
             // turn `cancelling`, so the claim fails and we never send a prompt. A
             // DB ERROR is NOT "someone else won": log it and fail the turn rather
-            // than silently treat a store failure as a cancellation (TASK-048 F4).
+            // than silently treat a store failure as a cancellation.
             // Capture the process generation and RECORD it with the claim, in one
             // step: the abort later compares against THIS value, so it is bound to
-            // the process the turn dispatched on (TASK-048 F4/S2).
+            // the process the turn dispatched on.
             let process_gen = self.runtime.generation(&session_id);
             let claimed = match self.db.claim_running(&turn_id, process_gen) {
                 Ok(v) => v,
@@ -1776,14 +1776,14 @@ impl Sessions {
             // Register interest in THIS turn's terminal BEFORE sending the prompt,
             // so the adapter's `turn_end` (which travels the same stdout pipe) is
             // never missed. The pump task delivers it; we await it below - no
-            // cross-task poll, no ordering guess (docs/issues/20261004-040000).
+            // cross-task poll, no ordering guess.
             terminal_rx_opt = Some(self.runtime.watch_terminal(&turn_id));
             // Bind the prompt to the SAME process generation we recorded with the
             // claim: if a stop/reopen/repair replaced the process between the
             // generation read and this send, the prompt would reach a process the
             // turn was NOT claimed against (and whose abort is bound elsewhere).
             // `send_if_generation` takes the requests lock, so it cannot interleave
-            // with a process replacement (TASK-048 / the prompt-binding remainder).
+            // with a process replacement.
             match self
                 .runtime
                 .send_if_generation(&session_id, process_gen, "session/prompt", params)
@@ -1801,7 +1801,7 @@ impl Sessions {
                     // The write failed with the adapter ALIVE: delivery is UNKNOWN,
                     // so the prompt may still run. Do NOT settle; leave the turn
                     // `running` for the execution/cancel timeout to resolve
-                    // (TASK-048 F4 - restore the unknown-result protection).
+
                     drop(_delivering);
                     tracing::warn!(
                         turn = %turn_id,
@@ -1825,7 +1825,7 @@ impl Sessions {
         // ok|aborted|failed`), NOT the prompt RPC result - the contract puts the
         // state on the event; the prompt result only means "the call returned"
         // (adapter-v1 `events`). An empty `{}` prompt result is a normal return,
-        // never a `failed` turn (F1, docs/issues/20261003-120000).
+        // never a `failed` turn.
         match result {
             Ok(_result) => {
                 // Wait for THIS turn's terminal event. The prompt RPC returned,
@@ -1834,7 +1834,7 @@ impl Sessions {
                 // gone it will never come, and if it is alive but late we still wait
                 // (a turn ends when the harness says so, and a normal turn delivered
                 // its event on the same pipe). The prompt RPC result is NOT the
-                // terminal (F1, docs/issues/20261003-120000).
+                // terminal.
                 let raw = match tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     terminal_rx,
@@ -1868,7 +1868,7 @@ impl Sessions {
                 // execution it was asked for did not run, so the turn is settled.
                 // A TRANSPORT error with the process still alive proves nothing
                 // about execution - leave it `running` for the execution timeout
-                // (TASK-048 F4), never fabricate a terminal from a write error.
+                //, never fabricate a terminal from a write error.
                 let adapter_answered = matches!(e, crate::runtime::StartError::Refused { .. });
                 if !adapter_answered && self.runtime.is_running(&session_id) {
                     tracing::warn!(
@@ -1890,12 +1890,12 @@ impl Sessions {
     /// publishes, so the streamed fact and the stored row cannot disagree.
     async fn settle_turn(&self, turn_id: &str, ended: &str, cause: Option<&str>) {
         // Commit the terminal in the DATABASE first, retrying a transient failure
-        // so a known terminal is not left un-persisted (TASK-048 F4). We publish
+        // so a known terminal is not left un-persisted. We publish
         // ONLY after the database confirms, so the stream never announces a fact
         // the store does not hold.
         // Record the INTENDED terminal durably FIRST, so if the terminal write
         // below fails, a later reconcile (boot or the sweep) applies it instead of
-        // losing the known terminal (TASK-048 S3).
+        // losing the known terminal.
         let intent = serde_json::json!({ "ended": ended, "cause": cause }).to_string();
         if let Err(e) = self.db.set_terminal_intent(turn_id, &intent) {
             tracing::error!(turn = %turn_id, error = %e, "could not record the terminal intent; the terminal write below may be lost");
@@ -1930,7 +1930,7 @@ impl Sessions {
     /// returned a terminal (a delivered-but-unconfirmed abort, or a crash). The
     /// turn is settled `interrupted` - the honest answer when we cannot prove it
     /// stopped - so `busy` is released deliberately, not by a send failure
-    /// (TASK-048 F4).
+
     pub async fn reconcile_stalled_cancels(&self) -> Result<usize, SessionError> {
         let mut n = 0;
         // (a) A cancelling turn in a session with NO live process: the cancel can
@@ -1962,14 +1962,14 @@ impl Sessions {
             // arrive (a normal cancel confirms in tens of ms), so we KEEP WAITING
             // and touch nothing. Only when the process is GONE is the cancel
             // genuinely unconfirmable, and the session must be repairable before
-            // reuse (docs/issues/20261004-030000).
+            // reuse.
             if self.runtime.is_running(&session_id) {
                 continue;
             }
             // Serialize against admission/dispatch and RE-CHECK the target: the sweep
             // saw a row in an earlier query, and the turn may have finished and a NEW
             // turn may have started. Stopping by a stale snapshot could kill the new
-            // turn's process (TASK-048 F4).
+            // turn's process.
             let lock = self.lock_for(&session_id).await;
             let _guard = lock.lock().await;
             // The OLD turn must still be the ACTIVE one, still non-terminal, and
@@ -1984,7 +1984,7 @@ impl Sessions {
             }
             // STOP the adapter and require the stop to be CONFIRMED before releasing
             // the occupancy: an unconfirmed stop must not let a new turn run on a
-            // live adapter (TASK-048 F4).
+            // live adapter.
             if self.runtime.stop(&session_id).await.is_err() {
                 // Could not confirm the stop: KEEP the occupancy (do not settle) and
                 // try again next tick. The session stays blocked for new turns
@@ -2001,7 +2001,7 @@ impl Sessions {
                     row.updated_at = now_utc();
                     if let Err(e) = self.db.update_session(&row) {
                         // The in-memory gate still blocks; log the failed persist
-                        // rather than pretend the store agrees (TASK-048 F5).
+                        // rather than pretend the store agrees.
                         tracing::error!(
                             session = %session_id,
                             error = %e,
@@ -2081,7 +2081,7 @@ impl Sessions {
         // session over the adapter's own resume. `truncate`/`tombstone` would
         // require hub-SIDE history surgery the contract does NOT define as an
         // adapter method, so they are REFUSED honestly rather than previewed as
-        // steps the hub never performs (TASK-048 P2).
+        // steps the hub never performs.
         if mode != "native" {
             return Err(SessionError::Validation(format!(
                 "repair mode `{mode}` is not implemented; only `native` (re-establish over session/start(resume)) is available"
@@ -2155,7 +2155,7 @@ impl Sessions {
         // admission/dispatch), but the lock is RELEASED before the abort request:
         // the abort waits for the adapter, and holding the lock across that wait
         // would deadlock the timeout sweep that must rescue a non-answering adapter
-        // (TASK-048 F4/P3).
+
         let active_id = {
             let lock = self.lock_for(session_id).await;
             let _guard = lock.lock().await;
@@ -2166,7 +2166,7 @@ impl Sessions {
                     // state. The contract makes cancel idempotent and "without error"
                     // for a terminal (or non-running) state, so an idle session is a
                     // 200 with the turn state `idle` - never a 400 (F5,
-                    // docs/issues/20261003-140000). The session must exist.
+                    //). The session must exist.
                     if self.db.session(session_id)?.is_none() {
                         return Err(SessionError::NotFound(session_id.into()));
                     }
@@ -2217,7 +2217,7 @@ impl Sessions {
             // Bind the abort to the process the turn DISPATCHED on (recorded at
             // claim time), NOT the current generation: if the process was replaced
             // (stop/reopen/repair) since, the send refuses - an old abort must never
-            // reach a new process (TASK-048 F4/S2). A turn with no recorded
+            // reach a new process. A turn with no recorded
             // generation (cancelled before dispatch) has nothing to abort.
             let generation = match self.db.turn_process_gen(&active_id)? {
                 Some(g) => g,

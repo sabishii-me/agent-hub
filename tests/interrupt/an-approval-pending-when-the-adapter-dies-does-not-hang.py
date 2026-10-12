@@ -4,7 +4,7 @@
 # and the session does not keep claiming active. Real: real adapter, real approval, real kill.
 #
 # FACT:    an approval pending when the adapter dies does not hang the turn; it settles and the session is honest
-# SOURCE:  ARCHITECTURE s22 + s21 N2; contract/v1.json GET /v1/sessions/{id}/approvals
+# SOURCE: + s21 N2; contract/v1.json GET /v1/sessions/{id}/approvals
 # EXPOSES: a turn stuck awaiting an approval whose adapter is gone (a hang)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

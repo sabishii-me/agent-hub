@@ -5,7 +5,7 @@
 # settle HONESTLY (not hang, never `completed`), and the hub must keep answering.
 #
 # FACT:    a network drop mid-turn settles the turn (failed), never a clean completed; the hub survives
-# SOURCE:  ARCHITECTURE s21 N2; contract/v1.json turn.ended
+# SOURCE:; contract/v1.json turn.ended
 # EXPOSES: a dropped network reported as a completed turn, or a frozen hub
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
@@ -69,7 +69,7 @@ try:
         t.check(end.get("ended") != "completed", "a dropped network is never a clean `completed`",
                 f"ended={end.get('ended')}")
         # No cancel and no restart: the turn died on its own, so the terminal is
-        # `failed` (ARCHITECTURE §21 N2 reserves `interrupted` for a turn that was
+        # `failed` ( reserves `interrupted` for a turn that was
         # `cancelling`; `cancelled` needs a confirmed cancel - neither happened here).
         t.check(end.get("ended") == "failed",
                 "a turn killed by a network drop ends `failed`",

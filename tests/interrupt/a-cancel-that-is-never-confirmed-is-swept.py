@@ -5,7 +5,7 @@
 # Real: a real adapter, a real kill; the sweep is the hub's, on its real tick.
 #
 # FACT:    a cancel whose adapter died before confirming is swept to `interrupted` and the session becomes repairable
-# SOURCE:  ARCHITECTURE s21 (settle_unconfirmed_cancels / reconcile_stalled_cancels, TASK-048 F4); contract/v1.json turn.ended
+# SOURCE:; contract/v1.json turn.ended
 # EXPOSES: a turn stuck `cancelling` forever when the adapter that owed the confirmation is gone
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

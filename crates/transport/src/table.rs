@@ -1,5 +1,5 @@
 //! One declaration per route: the router and the surface come from the SAME
-//! registration (TASK-048 C5).
+//! registration.
 //!
 //! A domain registers routes with `.get(path, handler)`, `.post(path, handler)`,
 //! etc. The table records the method and path **as it registers them** and merges

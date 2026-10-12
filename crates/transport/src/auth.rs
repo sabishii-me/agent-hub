@@ -1,4 +1,4 @@
-//! Inbound bearer authentication (`ARCHITECTURE` §7, o5).
+//! Inbound bearer authentication.
 //!
 //! The hub is loopback, and a client holds the token from `endpoint.json`. Every
 //! route requires it: there is **no anonymous discovery** (o5). A missing or wrong
@@ -16,7 +16,7 @@ use axum::Json;
 
 /// A constant-time equality, so a token check does not leak the token by timing.
 /// The property comes from `subtle` (a maintained constant-time crate), not from
-/// a hand-written loop the compiler is free to reorder (TASK-048 C5).
+/// a hand-written loop the compiler is free to reorder.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
     a.ct_eq(b).into()
@@ -53,7 +53,7 @@ impl BearerToken {
         use std::fmt::Write;
         let mut buf = [0u8; 32];
         // Not hand-rolled: the OS random source (getrandom). Infrastructure is a
-        // crate, not a smear (ARCHITECTURE §2).
+        // crate, not a smear.
         getrandom::fill(&mut buf).expect("OS randomness");
         let mut s = String::with_capacity(64);
         for b in buf {

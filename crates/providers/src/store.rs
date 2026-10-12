@@ -1,5 +1,5 @@
 //! The provider store: **the database** owns a provider's relationship state
-//! (`ARCHITECTURE` §5, §8). A provider's endpoint, protocol, declarations,
+//!. A provider's endpoint, protocol, declarations,
 //! selection and cached catalog are rows; its **credential** is only a keychain
 //! reference, never a value in a row or a file.
 

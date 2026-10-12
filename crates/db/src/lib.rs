@@ -1,4 +1,4 @@
-//! The hub's data layer (`ARCHITECTURE` §8, task T3): a `rusqlite`-backed store
+//! The hub's data layer: a `rusqlite`-backed store
 //! and the plugin install/replace **recovery rules** from §10.
 //!
 //! A plugin install touches two stores that are **not** one transaction: a
@@ -67,7 +67,7 @@ pub enum DbError {
     #[error("{0}")]
     Conflict(String),
     /// The on-disk database is a format this hub does not serve: it is refused,
-    /// never migrated or overwritten (no-legacy: ARCHITECTURE 1).
+    /// never migrated or overwritten.
     #[error("unsupported database format: {0}")]
     UnsupportedFormat(String),
 }
@@ -91,7 +91,7 @@ pub struct PluginRow {
 }
 
 /// The store. One `Connection` behind a mutex; long work must **not** hold the
-/// lock (ARCHITECTURE §12: DB locks are not held across long work).
+/// lock.
 pub struct Db {
     conn: std::sync::Mutex<Connection>,
 }
@@ -107,7 +107,7 @@ impl Db {
 
     /// The CURRENT on-disk schema version. Bump ONLY with a deliberate format
     /// change. There is no migration and no compatibility: a database whose version
-    /// is neither 0-and-empty nor this value is REFUSED (ARCHITECTURE 1: from
+    /// is neither 0-and-empty nor this value is REFUSED ( from
     /// scratch, no migration).
     pub const SCHEMA_VERSION: i64 = 1;
 

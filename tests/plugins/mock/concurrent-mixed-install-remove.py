@@ -6,7 +6,7 @@
 #
 # FACT:    concurrent mixed install/remove on >=2 plugins keeps each plugin's state
 #          INDEPENDENT (no cross-talk) and CONVERGES (no stuck op)
-# SOURCE:  contract/v1.json (state per plugin id); ARCHITECTURE s10 (resource identity =
+# SOURCE: contract/v1.json (state per plugin id) (resource identity =
 #          the plugin id; a conflicting command is refused or joined)
 # EXPOSES: an operation on A that changes B's state, an event carrying the wrong id, or a
 #          sequence that leaves a plugin stuck in installing/removing

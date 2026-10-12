@@ -1,11 +1,11 @@
-//! Durable hub-level authorization operations (ADR-0012). An auth sub-operation is a
+//! Durable hub-level authorization operations. An auth sub-operation is a
 //! real resource that OUTLIVES the starting request and SURVIVES a restart
-//! (ARCHITECTURE §438): its state is read from the database, not from process memory.
+//!: its state is read from the database, not from process memory.
 //!
 //! The row holds only what the contract's `authOperation` names: the status, the step
 //! shown while pending, the error, and the account. The platform's raw flow data (the
 //! device_code the hub polls with) is NOT part of the contract and is kept in the
-//! `flow` column as opaque, hub-private state (ADR-0011: implementation is private).
+//! `flow` column as opaque, hub-private state.
 
 use rusqlite::params;
 

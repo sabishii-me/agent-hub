@@ -6,8 +6,8 @@
 #
 # FACT:    a hub killed mid-remove restarts to a CONSISTENT state and finishes the removal
 #          (no half state, no phantom record)
-# SOURCE:  ARCHITECTURE s10 (plugin install/replace recovery, the boundary table);
-#          docs/issues/20261005-060000
+# SOURCE: (plugin install/replace recovery, the boundary table);
+
 # EXPOSES: a crash that leaves a plugin directory without its record (or the reverse) - a
 #          silent half-state after a power cut
 import os

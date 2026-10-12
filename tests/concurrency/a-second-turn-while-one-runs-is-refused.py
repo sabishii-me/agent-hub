@@ -6,8 +6,8 @@
 # turn on the real pi adapter.
 #
 # FACT:    a second turn while one RUNS is refused 409 session_busy, never queued
-# SOURCE:  contract/v1.json POST /v1/sessions/{id}/turns; ARCHITECTURE s12
-# EXPOSES: a queued or parallel second turn on one process (20261003-160000)
+# SOURCE: contract/v1.json POST /v1/sessions/{id}/turns
+# EXPOSES: a queued or parallel second turn on one process
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os

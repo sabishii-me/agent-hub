@@ -65,7 +65,7 @@ try:
             "a missing plugin is NOT described as a deployment directory",
             f"detail={detail!r}")
 
-    # `prepare` is NOT a separate command (docs/issues/20261007-200000): install prepares the
+    # `prepare` is NOT a separate command: install prepares the
     # runtime itself. The old endpoint must be GONE - the router answers 404 (no such route) or
     # 405 (method not allowed on a known path), never a domain not_found for a plugin.
     r = hub.post("/v1/plugins/nope/prepare")

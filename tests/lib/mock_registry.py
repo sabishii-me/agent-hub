@@ -10,8 +10,7 @@ here says MOCK so it can never be read as the official registry.
 Two modes:
   - no-auth: anyone GETs /registry.json.
   - token:  GET requires `Authorization: Bearer <token>`; without it -> 401. (The hub's
-            registry fetch does NOT send a token today - see
-            docs/needReview/test-gap-registry-and-install.md.)
+            registry fetch does NOT send a token today.)
 """
 import hashlib
 import http.server

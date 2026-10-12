@@ -1,4 +1,4 @@
-//! The hub's event stream (`ARCHITECTURE` §11, task T4): a monotonic sequence
+//! The hub's event stream: a monotonic sequence
 //! with a bounded replay window, and subscribers that converge under drop,
 //! overflow and restart.
 //!
@@ -13,7 +13,7 @@
 //!   the resource says what is true);
 //! - each subscriber gets a **bounded** channel; a slow subscriber that
 //!   overflows is marked as needing a re-read rather than blocking the
-//!   publisher (`ADR-0009`: no request path blocks).
+//! publisher.
 
 use serde::Serialize;
 

@@ -5,8 +5,8 @@
 # forever. The adapter is the REAL pi adapter (no fake): only the process is killed.
 #
 # FACT:    killing the adapter CHILD does not leave the session claiming active; a later turn is refused, not hung
-# SOURCE:  ARCHITECTURE s21 N2 (no process behind the row); docs/issues/20261005-020000
-# EXPOSES: a session that keeps active with no process (20261005-020000)
+# SOURCE: (no process behind the row)
+# EXPOSES: a session that keeps active with no process
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os
@@ -45,7 +45,7 @@ try:
     # The hub must be honest: it must NOT keep reporting `active` for a session whose adapter
     # process is gone (the docstring's claim). POLL for it rather than sleeping a fixed 1.5s: the
     # property is "active is not left standing", and how fast the hub notices is a separate
-    # question (docs/issues/20261009-110000: measured ~6.6s, too slow, being fixed). A fixed sleep
+    # question. A fixed sleep
     # made this timing-dependent (sometimes 5/6, sometimes 6/6). Bound the poll so a hub that NEVER
     # reconciles still fails.
     st = None

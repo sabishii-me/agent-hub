@@ -1,5 +1,5 @@
-//! The session runtime: one real adapter process **per session** (`ARCHITECTURE`
-//! §6), started with `session/start` then configured with `config/set`.
+//! The session runtime: one real adapter process **per session**,
+//! started with `session/start` then configured with `config/set`.
 //!
 //! A session is NOT the harness-level adapter the `adapter` crate manages. That
 //! manager keeps one process per *harness*; a session owns its **own** process,
@@ -8,7 +8,7 @@
 //! and the session becomes `readonly`.
 //!
 //! `active` is reported **only** when the handshake AND the config both really
-//! succeeded. There is no path that writes `active` on a row alone (TASK-048 F01).
+//! succeeded. There is no path that writes `active` on a row alone.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -161,24 +161,24 @@ pub struct Sessions {
     /// A per-session PROCESS GENERATION: bumped on every start and every stop.
     /// A caller that must act on a SPECIFIC process (a cancel's abort) captures
     /// the generation under the delivery lock and refuses to act if the process
-    /// was replaced (stop/reopen) since (TASK-048 F4).
+    /// was replaced (stop/reopen) since.
     generations: Mutex<std::collections::HashMap<String, u64>>,
     /// A per-TURN terminal waiter keyed by the turn's identity (`clientMessageId`).
     /// The pump task DELIVERS the `turn_end` state to the awaiting turn, so the turn
     /// never polls a shared cell across tasks (that read raced the write and settled
-    /// `failed`; docs/issues/20261004-040000). Keyed by turn, NEVER by session.
+    /// `failed`). Keyed by turn, NEVER by session.
     terminals: std::sync::Arc<Mutex<std::collections::HashMap<String, oneshot::Sender<String>>>>,
     /// The REVERSE-REQUEST handler (the adapter asks the hub): given
     /// `(sid, method, params)`, it returns the JSON-RPC `result` to send back (or
     /// `None` to leave a plain notification alone). The composition root wires this
-    /// to Humans for `approval_need`/`question_need` (TASK-048 G1).
+    /// to Humans for `approval_need`/`question_need`.
     reverse: std::sync::Mutex<Option<ReverseHandler>>,
     /// Adapter-death signals: sent by a session's pump task when its adapter's
     /// stdout closes (the adapter process exited). Carries `(sid, generation)` so
     /// the consumer can tell an UNINTENDED death (generation unchanged) from a
     /// stop/reopen/repair that bumped the generation on purpose. The composition
     /// root consumes this to reconcile the session honestly: an adapter that is
-    /// gone must never leave a session `active` (ARCHITECTURE 21 N2, applied live).
+    /// gone must never leave a session `active`.
     deaths: tokio::sync::mpsc::UnboundedSender<(String, u64)>,
     deaths_rx: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<(String, u64)>>>,
 }
@@ -354,7 +354,7 @@ impl Sessions {
             )));
         }
 
-        // Confirm the adapter applied WHAT WE ASKED (TASK-048 F3). If the adapter
+        // Confirm the adapter applied WHAT WE ASKED. If the adapter
         // answers a different provider/model - or no `applied` at all - the
         // session is NOT started: an unconfirmed identity is never recorded as
         // applied.
@@ -372,7 +372,7 @@ impl Sessions {
             // `applied.connectionId` is its RESOLVED NATIVE ROUTE (`session/start`
             // receives the resolved route from the hub). A BARE id is NOT the
             // resolved route, so accepting it would be an unauthorized alias
-            // (TASK-048 F3): require the injected name.
+            //: require the injected name.
             let want = want_provider.unwrap_or("");
             let ok_route = match applied_route.as_deref() {
                 Some(r) => !r.is_empty() && r == format!("hub-{want}"),
@@ -428,7 +428,7 @@ impl Sessions {
                         // if we awaited it HERE, the loop would stop draining and would never
                         // reach the death signal below - so a dead adapter (during an unanswered
                         // approval) left the session `active` forever
-                        // (docs/issues/20261010-000000). Spawn it: the loop stays live, and the
+                        //. Spawn it: the loop stays live, and the
                         // reply is still sent to the SAME request id.
                         let handler = handler.clone();
                         let reply = pump_reply.clone();
@@ -482,7 +482,7 @@ impl Sessions {
             // The adapter's stdout closed: the adapter process is GONE. This is the
             // ONLY channel the hub had to that harness, so the session can no longer
             // be served: signal the death so the session is reconciled off `active`
-            // (ARCHITECTURE 21 N2, applied live). The generation says whether anyone
+            //. The generation says whether anyone
             // stopped it on purpose (a bump by stop/reopen/repair means: NOT a death).
             let gen = pump_generation.load(std::sync::atomic::Ordering::Relaxed);
             let _ = pump_deaths.send((pump_sid.clone(), gen));
@@ -505,7 +505,7 @@ impl Sessions {
         // Publish the handle AND the generation in ONE critical section: a
         // `send_if_generation` takes the SAME `requests` lock, so it can never
         // observe the new handle with the old generation (or vice versa)
-        // (TASK-048 F4/S2).
+
         {
             let mut reqs = self.requests.lock().expect("requests");
             reqs.insert(sid.clone(), bus_requests.clone());
@@ -543,7 +543,7 @@ impl Sessions {
         // Take the CLONEABLE request handle under a SHORT lock, then release it.
         // Holding the session mutex across a full prompt (which ends only when the
         // turn does) would make abort/stop wait for the turn - the turn could
-        // never be interrupted (TASK-048 P1).
+        // never be interrupted.
         let requests = self
             .requests
             .lock()
@@ -623,7 +623,7 @@ impl Sessions {
     /// Write a request frame to a session's process ONLY IF its generation still
     /// matches `expected`. This binds a delivery to a SPECIFIC process: a cancel
     /// captured against process generation G refuses to send if the process was
-    /// replaced since, so an old abort can never reach a NEW process (TASK-048 F4).
+    /// replaced since, so an old abort can never reach a NEW process.
     ///
     /// The generation is read and the handle is taken under the SAME `requests`
     /// lock, and every `start`/`stop` bumps the generation AND mutates the handle
@@ -790,7 +790,7 @@ impl StartError {
 /// The owning adapter->contract error mapping. The adapter's vocabulary is the
 /// hyphenated set in `contract/adapter-v1.json` `errors`; the hub's is the
 /// underscored `contract/errors.json`. This is the ONE place they are reconciled
-/// (TASK-048 F5/S4).
+
 pub fn adapter_code_to_contract(data: &Value) -> &'static str {
     let code = data.get("code").and_then(|c| c.as_str()).unwrap_or("");
     match code {
@@ -906,7 +906,7 @@ mod env_tests {
 
 /// The outcome of WRITING a request frame. The distinction matters: a caller must
 /// not settle a turn on a write error when delivery is UNKNOWN, because the
-/// execution may still run (TASK-048 F4).
+/// execution may still run.
 pub enum SendError {
     /// The frame was NOT written (no live process, a stale generation, a closed
     /// pipe before any byte): the request definitely did not run.
@@ -940,7 +940,7 @@ fn bus_error(e: agent_hub_adapter::BusError, what: &str) -> StartError {
 }
 
 /// Map a bus error into a StartError, KEEPING the adapter's typed `data.code`
-/// when it answered, so the identity survives (TASK-048 F5).
+/// when it answered, so the identity survives.
 pub fn map_bus_err(e: agent_hub_adapter::BusError) -> StartError {
     match e {
         agent_hub_adapter::BusError::Rpc { code, message, data } => {
@@ -956,7 +956,7 @@ mod code_map_tests {
     use serde_json::json;
 
     /// The owning adapter->contract mapping is explicit and complete for the
-    /// adapter's declared vocabulary (TASK-048 F5/S4).
+    /// adapter's declared vocabulary.
     #[test]
     fn adapter_codes_map_to_contract_codes() {
         let m = |c: &str| adapter_code_to_contract(&json!({ "code": c }));

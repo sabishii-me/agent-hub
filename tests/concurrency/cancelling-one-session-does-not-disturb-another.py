@@ -5,7 +5,7 @@
 # turns on two real sessions.
 #
 # FACT:    cancelling one session does not disturb another running concurrently
-# SOURCE:  ARCHITECTURE s12; contract/v1.json POST /v1/sessions/{id}/cancel
+# SOURCE:; contract/v1.json POST /v1/sessions/{id}/cancel
 # EXPOSES: cross-talk: a cancel touching a sibling session
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

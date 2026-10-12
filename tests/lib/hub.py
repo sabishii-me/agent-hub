@@ -475,7 +475,7 @@ def wait_turn(hub, sid, tid, states, tries=240, interval=0.25):
 def register_provider(hub, pid=None):
     """Register the REAL provider from ~/.pi/agent/models.json under a STABLE id, and return its
     identity. The id is the provider's own name (`HOME-JP-prod`, from the file) unless the caller
-    names one - the hub does NOT generate ids (docs/issues/20261008-090000). Returns None when the
+    names one - the hub does NOT generate an id. Returns None when the
     host has no real provider (a missing real dependency FAILS, never skips)."""
     prov = real_provider()
     if not prov:

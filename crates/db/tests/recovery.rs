@@ -1,4 +1,4 @@
-//! T3 acceptance: crash at each install boundary, then recover (ARCHITECTURE §10).
+//! T3 acceptance: crash at each install boundary, then recover.
 //!
 //! Each test uses **real directories** and a **real SQLite file**, kills the
 //! forward install at one boundary, and asserts what recovery leaves - the §10

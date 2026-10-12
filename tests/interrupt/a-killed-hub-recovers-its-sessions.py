@@ -4,7 +4,7 @@
 # binary, kills it with taskkill /T /F, restarts on the SAME data dir, and reads the truth.
 #
 # FACT:    a hub killed with no cleanup restarts, reconciles an orphaned active session to needs-repair, and still serves
-# SOURCE:  ARCHITECTURE s21 N2 (restart reconciliation)
+# SOURCE: (restart reconciliation)
 # EXPOSES: a restart that leaves a processless session active, or a hub that cannot recover
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
@@ -46,7 +46,7 @@ try:
     hub2.plugins = hub.plugins
     hub2.start()
     try:
-        # ARCHITECTURE §21 (N2): at boot no session process runs, so an `active`
+        # (N2): at boot no session process runs, so an `active`
         # session (its process is gone) is reconciled to `needs-repair` (an orphaned
         # tail). This is the SPECIFIC state; accepting `active` here would assert the
         # very lie the rule forbids.

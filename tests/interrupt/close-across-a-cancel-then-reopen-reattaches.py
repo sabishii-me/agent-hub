@@ -5,7 +5,7 @@
 # Real: a real adapter, no fake.
 #
 # FACT:    a close across an unconfirmed cancel frees the session, and reopen re-attaches on the stored ref
-# SOURCE:  contract/v1.json POST /v1/sessions/{id}/close, /v1/sessions/{id}/reopen; ARCHITECTURE s21
+# SOURCE: contract/v1.json POST /v1/sessions/{id}/close, /v1/sessions/{id}/reopen
 # EXPOSES: a close that leaves the session wedged, or a reopen that cannot re-attach after a cancel+close
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

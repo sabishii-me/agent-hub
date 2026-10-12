@@ -1,5 +1,5 @@
 //! The error master table (`contract/errors.json`): the single source of truth
-//! for every route failure (ARCHITECTURE §13.7).
+//! for every route failure.
 //!
 //! A domain returns a **code**, never an HTTP status. The transport looks the
 //! code up here and writes the status, so the mapping lives in one place and the

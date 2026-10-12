@@ -6,7 +6,7 @@
 #   3. NO provider/model: a turn must FAIL (`ended: failed`) - never a green success with no model.
 #   4. CONFIGURE the real provider: the provider applies (a normal OK), then a turn really runs.
 #   5. REMOVE: the code the system returns, asserted as-is (the contract wants 409 plugin_in_use
-#      while a session is open - pinned by the observation, see docs/issues/20261008-063000).
+# while a session is open - pinned by the observation, see).
 #
 # Nothing is faked: the plugin is installed through /v1, the runtime is materialised by the HUB, the
 # provider is the REAL one from ~/.pi/agent/models.json, and every code below is what the running

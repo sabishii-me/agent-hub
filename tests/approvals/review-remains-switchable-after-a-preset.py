@@ -1,6 +1,6 @@
 # TC-APPROVALS-003
 # The preset's `approve` is the session's STARTING review state, not a nail. After the fix for
-# 20261004-050000 (a preset reported APPLIED but not enforced), review must still be switchable
+# A preset can be reported APPLIED but not enforced; review must still be switchable
 # within the session: `/review off` (PATCH review:false) lets tools run without asking, and
 # `/review on` (PATCH review:true) asks again. This test goes RED if the fix froze review on, or
 # if a switched state does not survive (a later spawn must not silently re-enable the preset).
@@ -8,8 +8,8 @@
 # Real provider, real preset, real approval round-trip. No mock, no skip.
 #
 # FACT:    review is an in-session switch: a preset may start it on, and PATCH review:false/true toggles it for the NEXT tool
-# SOURCE:  ARCHITECTURE s23; contract/v1.json PATCH session policy review
-# EXPOSES: review frozen by a preset, or a switched state lost on a later spawn (20261004-070000)
+# SOURCE:; contract/v1.json PATCH session policy review
+# EXPOSES: review frozen by a preset, or a switched state lost on a later spawn
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os

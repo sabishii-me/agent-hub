@@ -5,7 +5,7 @@
 # authorization; it is never faked.
 #
 # FACT:    a CONFIRMED cancel ends the turn cancelled and the session accepts a new turn
-# SOURCE:  contract/v1.json turn.ended enum; ARCHITECTURE s21 N2 (interrupted is the UNCONFIRMED case)
+# SOURCE: contract/v1.json turn.ended enum (interrupted is the UNCONFIRMED case)
 # EXPOSES: a confirmed cancel reported as failed/interrupted, or a session left wedged
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
@@ -76,7 +76,7 @@ try:
         time.sleep(0.25)
     # A cancel the hub CONFIRMED settles `cancelled` (contract/v1.json turn.ended enum;
     # `interrupted` is the OTHER terminal - an unconfirmed cancel reconciled at restart,
-    # ARCHITECTURE §21 N2 - so it is NOT acceptable for a confirmed cancel here). Measured
+    # - so it is NOT acceptable for a confirmed cancel here). Measured
     # on pi: a confirmed cancel yields exactly `cancelled`. `in (...)` was a fake that hid
     # an adapter's `failed` mis-classification (test-findings F1).
     t.check(ended == "cancelled",

@@ -1,12 +1,12 @@
 # TC-CONCURRENCY-005
-# ADR-0009: the hub serves concurrent connections. This ATTEMPTS to MEASURE, against the real
+#: the hub serves concurrent connections. This ATTEMPTS to MEASURE, against the real
 # binary: (a) how many raw TCP sockets can be HELD OPEN AT ONCE, and (b) that a held SSE stream does
 # not block a short GET. If it cannot hold >=100 sockets open, that is a MEASUREMENT that did not
 # establish the fact (BLOCKED) - NOT a verdict that the hub cannot do it.
 #
 # FACT:    this run measures the largest number of simultaneously-open connections; and a held SSE
 #          (opened, first byte read, still open) does not block a short GET
-# SOURCE:  ADR-0009; ARCHITECTURE s12
+# SOURCE:
 # EXPOSES: request handling blocked by another request (a freeze); the >=100 figure is only claimed
 #          when actually measured
 # (A test that would pass whatever happens is not a test: this block names the fact it
@@ -76,11 +76,11 @@ try:
                 f"{held} connections held OPEN AT ONCE, and the hub still answers a new GET",
                 f"held={held} status={fast['status']} dt={dt:.2f}s")
     else:
-        # The target (ADR-0009) is >=100 CONCURRENTLY open connections. If the measurement cannot
+        # The target is >=100 CONCURRENTLY open connections. If the measurement cannot
         # hold 100, that is a REAL failure to reproduce the target - NOT a "block". A block is a T0;
         # there is nothing to wait for, so this must be red.
         t.check(False,
-                ">=100 connections held OPEN AT THE SAME TIME (ADR-0009 target)",
+                ">=100 connections held OPEN AT THE SAME TIME (the concurrency target)",
                 f"only {held}/{N} sockets were open at once (err={connected['err']})")
     t.check(fast["status"] == 200, "the hub answers a new GET while connections are held", f"status={fast['status']}")
 

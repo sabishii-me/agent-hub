@@ -6,7 +6,7 @@
 # FACT:    N concurrent installs of one id converge to exactly one ready plugin (no torn
 #          dir, no stuck op); a concurrent install + remove of another plugin both finish
 # SOURCE:  contract/v1.json POST/DELETE /v1/plugins (an id already installed is REPLACED,
-#          atomically: "the old copy is moved aside first"); ARCHITECTURE s12
+# atomically: "the old copy is moved aside first")
 # EXPOSES: a concurrent install that lands a half-tree or leaves the plugin stuck, or a
 #          remove/install pair that deadlocks the ops
 import concurrent.futures as cf

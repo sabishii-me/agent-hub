@@ -5,7 +5,7 @@
 # adapter child in the same instant.
 #
 # FACT:    an adapter killed while a cancel is in flight still settles the turn (interrupted) and does not wedge the session
-# SOURCE:  ARCHITECTURE s21 N2 (a turn open while cancelling -> interrupted)
+# SOURCE: (a turn open while cancelling -> interrupted)
 # EXPOSES: a turn left running with no process (a hang)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

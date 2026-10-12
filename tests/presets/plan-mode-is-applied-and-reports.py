@@ -11,7 +11,7 @@
 #
 # FACT:    PATCH plan sets `plan` (request) and the adapter reports `appliedPlan` (applied);
 #          runtime behavioural enforcement is NOT claimed
-# SOURCE:  ARCHITECTURE s23; contract/v1.json session `plan` vs `appliedPlan`
+# SOURCE:; contract/v1.json session `plan` vs `appliedPlan`
 # EXPOSES: a plan knob whose request is stored but never applied (A passes, B fails)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

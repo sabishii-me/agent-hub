@@ -1,4 +1,4 @@
-//! The agent-hub process (`ARCHITECTURE` §17).
+//! The agent-hub process.
 //!
 //! The executable shell: a non-blocking axum server over the shared
 //! [`Transport`], with the plugins domain mounted. As more domains are
@@ -52,14 +52,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transport = Transport::new(bus.clone(), Admission::new(64));
 
     // The error master table is the single source of truth for every failure
-    // code (ARCHITECTURE 13.7); the transport maps a code to its status.
+    // code; the transport maps a code to its status.
     let contract_dir: PathBuf = std::env::var("AGENT_HUB_CONTRACT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contract"));
     let error_table = agent_hub_contract::ErrorTable::load(&contract_dir.join("errors.json"))
         .map_err(|e| format!("load contract/errors.json: {e}"))?;
     // Every code a domain can return must be declared in the contract table
-    // (ARCHITECTURE 13.7); a domain inventing a code refuses to start.
+    //; a domain inventing a code refuses to start.
     let declared_codes = [
         // plugins
         "not_found", "plugin_remove_failed", "plugin_in_use", "plugin_dir_busy",
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     selfcheck::check_error_codes(&declared_codes, &error_table)
         .map_err(|e| format!("self-check failed: {e}"))?;
 
-    // The surface check (ARCHITECTURE 13.4): serving a route the contract does
+    // The surface check: serving a route the contract does
     // NOT declare is a refusal to start; a contract route not mounted yet is
     // unfinished work (reported by check_surface, not fatal).
     let contract_raw = std::fs::read_to_string(contract_dir.join("v1.json"))
@@ -154,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secrets = std::sync::Arc::new(agent_hub_secrets::SecretStore::for_instance(&instance));
     // The provider-TYPE authority: resolve a (type, version) to the descriptor an
     // installed plugin ships. ONE source for create validation, availability and
-    // grant admission (TASK-048 G3).
+    // grant admission.
     let type_root = plugins_root.clone();
     let type_providers = Providers::new(ProviderStore::new(providers_db), secrets.clone(), instance)
         .with_type_resolver(std::sync::Arc::new(move |type_id: &str, version: Option<u32>| {
@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Harnesses::new(adapters.clone()).with_managed_models(managed_for_harnesses),
         errors.clone(),
     );
-    // The DURABLE auth-operation store (ADR-0012): the operation survives a restart.
+    // The DURABLE auth-operation store: the operation survives a restart.
     // Its own Db handle (opening the same file is how every domain shares it here).
     let auth_store = std::sync::Arc::new(agent_hub_providers::auth::AuthStore::new(
         Db::open(data_dir.join("hub.sqlite"))?,
@@ -304,13 +304,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     );
     // Reconcile a session whose adapter exits on its own: an adapter that is gone
-    // must never leave a session `active` (ARCHITECTURE 21 N2, applied live).
+    // must never leave a session `active`.
     sessions.clone().spawn_death_watcher();
 
     // The reverse-request handler: the adapter asks the hub to decide. For
     // `approval_need`/`question_need`, raise the resource and AWAIT the /v1
     // decision, then return the reply the adapter's request is waiting for
-    // (TASK-048 G1). A method the hub does not answer returns `None` (the pump
+    //. A method the hub does not answer returns `None` (the pump
     // leaves it as an announcement).
     {
         let humans = humans.clone();

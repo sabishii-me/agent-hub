@@ -1,4 +1,4 @@
-//! The adapter domain (`ARCHITECTURE` §4): spawn out-of-process adapters, route
+//! The adapter domain: spawn out-of-process adapters, route
 //! capability calls, and map their notifications to events.
 //!
 //! A harness is a plugin that declares the adapter protocol. The hub registers
@@ -21,7 +21,7 @@ pub struct Harness {
     pub directory: std::path::PathBuf,
     pub manifest: AdapterManifest,
     pub status: HarnessStatus,
-    /// Why the hub does NOT activate this plugin (ADR-0008 min hub version), or
+    /// Why the hub does NOT activate this plugin, or
     /// `None` when it is acceptable. A refused harness is reported, never started.
     pub refused: Option<String>,
 }
@@ -98,7 +98,7 @@ pub struct Adapters {
     status_store: Option<agent_hub_db::Db>,
     /// One SYNC placement lock per harness: `harness_env` deletes and rebuilds the
     /// SHARED `<data>/agents/<id>/extensions` tree, so two concurrent starts of the
-    /// same harness must not interleave those moves (TASK-048 N4).
+    /// same harness must not interleave those moves.
     placement_locks: Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
 }
 
@@ -138,7 +138,7 @@ impl Adapters {
     /// adapter refuses to invent its own (the real ones do).
     ///
     /// A **declared** extension whose source directory is missing, or whose copy
-    /// fails, is an **error** that must stop the start (TASK-048 C3). Placement
+    /// fails, is an **error** that must stop the start. Placement
     /// has one implementation (the extensions crate's rule); a missing trust
     /// component is never a warning that still spawns.
     pub fn harness_env(
@@ -161,7 +161,7 @@ impl Adapters {
         std::fs::create_dir_all(&skills_dir)?;
         // The extensions pointer is REPLACED by install_for_harness (an atomic pointer
         // swap), so do NOT delete the shared dir here: a reader may be using it
-        // (TASK-048 N4).
+
 
         // A harness that declares `presets` reads definitions from its own
         // `<plugin>/presets/` dir; point the adapter there.
@@ -193,7 +193,7 @@ impl Adapters {
                 None => shipped.iter().map(|(id, _)| id.clone()).collect(),
             };
             // Hand the adapter the SNAPSHOT path this call produced: a complete,
-            // immutable set, so a start never sees a mixed/missing tree (TASK-048
+            // immutable set, so a start never sees a mixed/missing tree (
             // S5/N4).
             extensions_dir = agent_hub_extensions::install_for_harness(
                 &self.data_dir.join("agents"),
@@ -239,7 +239,7 @@ impl Adapters {
                         }
                         // The single ACTIVATION gate: a plugin that needs a newer hub
                         // is registered as refused (so a caller can report it), never
-                        // activated and never started (ADR-0008).
+                        // activated and never started.
                         let refused = crate::version::refusal(manifest.min_hub_version.as_deref());
                         if let Some(reason) = &refused {
                             tracing::warn!(plugin = %name, "plugin refused: {reason}");
@@ -285,7 +285,7 @@ impl Adapters {
         }
         // PRUNE: a harness whose directory no longer exists (its plugin was removed)
         // must not stay in the registry - a removed plugin is not usable until a
-        // restart (docs/issues/20261005-050000). Keep only what is on disk now.
+        // restart. Keep only what is on disk now.
         {
             let found_ids: std::collections::HashSet<&str> =
                 found.iter().map(|h| h.id.as_str()).collect();
@@ -385,7 +385,7 @@ impl Adapters {
         }
         let harness = self.get(id)?;
         if harness.status == HarnessStatus::Disabled {
-            // A plugin refused for a version requirement reports WHY (ADR-0008),
+            // A plugin refused for a version requirement reports WHY,
             // not a bare "disabled".
             let reason = harness
                 .refused
@@ -418,7 +418,7 @@ impl Adapters {
 
     /// Stop a harness's cached adapter process and CONFIRM it exited. Used before
     /// REMOVING a plugin: a live adapter holds the plugin's files, so the delete
-    /// fails until it is gone (docs/issues/20261005-060000). Idempotent.
+    /// fails until it is gone. Idempotent.
     pub async fn stop_harness(&self, id: &str) {
         let handle = self.running.lock().expect("running").remove(id);
         if let Some(handle) = handle {

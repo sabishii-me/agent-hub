@@ -6,7 +6,7 @@
 # FACT:    with no plugin installed, /v1/harnesses is empty and POST /v1/sessions is
 #          refused (harness_not_found), never silently served
 # SOURCE:  contract/v1.json POST /v1/sessions (a harness must exist); contract/errors.json
-#          harness_not_found; ARCHITECTURE (a plugin is installed, never baked in)
+# harness_not_found (a plugin is installed, never baked in)
 # EXPOSES: a hub that answers a session for a harness it does not have (a baked-in or
 #          fabricated harness) - or a test that installs nothing and still "passes"
 import os

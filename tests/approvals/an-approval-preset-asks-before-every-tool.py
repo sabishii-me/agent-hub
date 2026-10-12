@@ -6,8 +6,8 @@
 # EXISTS TO EXPOSE THE PROBLEM: if the preset does not actually gate, it goes red.
 #
 # FACT:    a session with an approve:true preset raises a REAL approval before the tool runs
-# SOURCE:  ARCHITECTURE s22; contract/v1.json PATCH session policy review; the heavy-review preset in <plugin>/presets/
-# EXPOSES: a preset that reports appliedPreset but does NOT gate the tool (20261004-050000 class)
+# SOURCE:; contract/v1.json PATCH session policy review; the heavy-review preset in <plugin>/presets/
+# EXPOSES: a preset that reports appliedPreset but does NOT gate the tool
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
 import os

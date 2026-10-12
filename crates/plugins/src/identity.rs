@@ -1,4 +1,4 @@
-//! Logical **command identity** (ARCHITECTURE §11, R1).
+//! Logical **command identity**.
 //!
 //! A resource identity (`{id}`) locates a plugin and serializes conflicting
 //! commands on it; it does **not** identify an intent. A retry of a lost `202`

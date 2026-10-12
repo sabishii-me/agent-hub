@@ -29,7 +29,7 @@ pub struct AdapterManifest {
     pub plan_mode: Option<String>,
     /// Whether the harness can repair an orphaned tail (reported, never guessed).
     pub repair: Option<bool>,
-    /// The minimum HUB version this plugin needs (ADR-0008). Below it the hub does
+    /// The minimum HUB version this plugin needs. Below it the hub does
     /// NOT activate the plugin and reports the reason.
     #[serde(rename = "minHubVersion")]
     pub min_hub_version: Option<String>,

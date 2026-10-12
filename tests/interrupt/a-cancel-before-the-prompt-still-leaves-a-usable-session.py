@@ -5,7 +5,7 @@
 # outcome (no 5xx, no hang). Real: a real adapter, no fake.
 #
 # FACT:    a cancel that precedes the prompt does not corrupt the session: the next turn has a defined outcome and reaches a terminal
-# SOURCE:  ARCHITECTURE s21 (cancel holds busy until a real stop); contract/v1.json POST /v1/sessions/{id}/cancel
+# SOURCE: (cancel holds busy until a real stop); contract/v1.json POST /v1/sessions/{id}/cancel
 # EXPOSES: a pre-prompt cancel that swallows the next turn, 5xxs, or leaves the session wedged
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

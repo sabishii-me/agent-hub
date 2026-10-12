@@ -8,7 +8,7 @@
 # closes its stdout while continuing to live.
 #
 # FACT:    an adapter that closes stdout but stays alive settles the in-flight turn honestly (never a clean completed); the hub survives
-# SOURCE:  ARCHITECTURE s21 (the bus drains pending requests with Closed when stdout ends); contract/v1.json turn.ended
+# SOURCE: (the bus drains pending requests with Closed when stdout ends); contract/v1.json turn.ended
 # EXPOSES: a turn stuck forever (or reported completed) when the adapter goes silent without exiting
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

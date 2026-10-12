@@ -71,7 +71,7 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
     assert_eq!(resp.status(), 200, "{}", resp.text().await.unwrap());
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["provider"]["tokenConfigured"], true);
-    // The TYPE assigns the id, never the caller (ARCHITECTURE 5; the built-in
+    // The TYPE assigns the id, never the caller ( the built-in
     // `custom-compatible` type names a user provider in the `_CUSTOM-` namespace).
     // So the id to address this provider by is the one the hub RETURNED, not the
     // one the request asked for - read it, never assume it.
@@ -114,7 +114,7 @@ async fn a_provider_token_goes_to_the_os_store_not_disk() {
 }
 
 /// Scan every file's BYTES (not UTF-8 text): a binary store such as SQLite must
-/// be searched too, so "no plaintext secret on disk" is a real claim (TASK-048).
+/// be searched too, so "no plaintext secret on disk" is a real claim.
 fn dir_contains(dir: &std::path::Path, needle: &str) -> bool {
     dir_contains_bytes(dir, needle.as_bytes())
 }

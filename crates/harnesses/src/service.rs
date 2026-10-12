@@ -1,4 +1,4 @@
-//! The harnesses domain (`ARCHITECTURE` §3): a thin top-level projection of the
+//! The harnesses domain: a thin top-level projection of the
 //! adapter registry, plus capability-gated runtime answers routed to the adapter.
 //!
 //! The rule the contract states twice: `known: false` when the harness declares
@@ -82,7 +82,7 @@ impl Harnesses {
             "capabilities": m.capabilities,
             "status": h.status.as_str(),
             // Why a DISABLED harness is not activated, when known (a plugin that
-            // needs a newer hub, ADR-0008). null when enabled or unknown.
+            // needs a newer hub). null when enabled or unknown.
             "disabledReason": h.refused.clone(),
             "presetId": null,
             "appliedPreset": null,
@@ -173,7 +173,7 @@ impl Harnesses {
 
     /// Forward a harness-private request to the adapter, capability-gated and
     /// verbatim: the hub owns the route and the pass-through, the ADAPTER owns the
-    /// harness's own connection/auth mechanism (ARCHITECTURE 6). A harness that does
+    /// harness's own connection/auth mechanism. A harness that does
     /// not declare the capability is `unsupported`, never a fabricated answer.
     pub async fn forward(
         &self,

@@ -1,4 +1,4 @@
-//! The skills domain: the hub's side (`ARCHITECTURE` §6).
+//! The skills domain: the hub's side.
 //!
 //! A skill is a **directory**, not a record: its id is the directory name. The
 //! hub stores the bytes; it does not interpret them. Before a harness's process
@@ -7,7 +7,7 @@
 //! `AGENT_HUB_INSTALLED_SKILLS_DIR` (`contract/adapter-v1.json`). The placement
 //! is the hub's; the harness is pointed at it with discovery off.
 //!
-//! Placement is **not** an authorization boundary (`ARCHITECTURE` §7): it keeps
+//! Placement is **not** an authorization boundary: it keeps
 //! the user's own skill directories out of a managed session; it does not
 //! confine a same-principal agent.
 

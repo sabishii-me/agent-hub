@@ -7,7 +7,7 @@
 #
 # FACT:    /v1/events delivers hub.plugins.changed for a real install and remove, in
 #          order, with ids; Last-Event-ID replays or resyncs, never silently loses
-# SOURCE:  contract/v1.json GET /v1/events (events: hub.plugins.changed); ARCHITECTURE s11
+# SOURCE: contract/v1.json GET /v1/events (events: hub.plugins.changed)
 # EXPOSES: an events stream that drops a change, sends no id, or silently loses frames on
 #          reconnect
 import os

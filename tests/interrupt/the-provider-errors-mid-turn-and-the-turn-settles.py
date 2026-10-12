@@ -6,7 +6,7 @@
 # settle HONESTLY (not hang, never `completed`), and the hub must keep answering.
 #
 # FACT:    a provider that fails after the first token settles the turn (failed), never a clean completed; the hub survives
-# SOURCE:  ARCHITECTURE s21 N2; contract/v1.json turn.ended
+# SOURCE:; contract/v1.json turn.ended
 # EXPOSES: a mid-turn provider error reported as a completed turn, or a frozen hub
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

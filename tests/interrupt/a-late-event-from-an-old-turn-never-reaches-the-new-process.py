@@ -5,7 +5,7 @@
 # unaffected - no event, no terminal, no id from the old turn reaches it. Real: real adapter.
 #
 # FACT:    after a stop/reopen a late event from the OLD turn never reaches the NEW process; the new turn is unaffected
-# SOURCE:  ARCHITECTURE s21 (process generation binds a delivery to a specific process, TASK-048 F4/S2)
+# SOURCE:
 # EXPOSES: an old turn's late terminal/event taken by a new turn, or an old turn left running on a new process
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

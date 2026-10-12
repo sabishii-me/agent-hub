@@ -62,8 +62,8 @@ impl AuthOperation {
     }
 }
 
-/// A DURABLE registry of hub-level authorization operations (ADR-0012): the operation
-/// outlives the starting request and SURVIVES a restart (ARCHITECTURE §438). Its state
+/// A DURABLE registry of hub-level authorization operations: the operation
+/// outlives the starting request and SURVIVES a restart. Its state
 /// is in the database; the in-process cancel signal is only a convenience for the
 /// poller that is running right now.
 pub struct AuthStore {
@@ -89,7 +89,7 @@ impl AuthStore {
     }
 
     /// Create a PENDING operation and its durable row. Called ONLY by a real flow
-    /// executor at the moment it begins work (TASK-048 G4): a route that cannot
+    /// executor at the moment it begins work: a route that cannot
     /// execute must not create one. `next` is the first step; `flow` is the hub's
     /// private poll state (the device_code), never part of the contract.
     pub fn create(&self, provider: &str, kind: &str, next: &serde_json::Value, flow: &str) -> Result<String, String> {
@@ -392,7 +392,7 @@ mod tests {
     }
 
     /// The executor path: create -> pending -> cancel is idempotent, and the row
-    /// SURVIVES (a fresh store over the same db reads the same state - ADR-0012).
+    /// SURVIVES.
     #[test]
     fn an_operation_is_pending_then_cancelled_idempotently_and_survives() {
         let path = db();

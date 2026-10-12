@@ -1,7 +1,7 @@
 # TC-PLUGINS-011
 # Does a RELEASE build honour AGENT_HUB_REGISTRY_URL? It MUST NOT: the registry address is
 # compiled in, so neither an API caller nor the environment can point the hub at a foreign
-# registry (the injection hole, docs/issues/20261005-130000).
+# registry.
 #
 # The discriminator is a fact about the SERVER, not about a catalog list: the test stands up a
 # canary registry on loopback and counts whether the hub CONTACTS it.
@@ -14,7 +14,7 @@
 # FACT:    with AGENT_HUB_REGISTRY_URL at a canary, a DEBUG hub CONTACTS the canary; a RELEASE hub
 #          does NOT (its override is compiled out). Measured by the server's own hit count.
 # SOURCE:  crates/plugins/src/registry.rs (env override #[cfg(debug_assertions)] only);
-#          docs/issues/20261005-130000.
+
 # EXPOSES: a release binary that reads the override -> anyone can redirect the hub's registry.
 import http.server
 import json

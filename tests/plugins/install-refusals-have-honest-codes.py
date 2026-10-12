@@ -11,7 +11,7 @@
 #          (B1) an id that lives in a deployment directory -> 409 conflict, naming it.
 # SOURCE:  crates/plugins/src/routes.rs:232-241; service.rs:49-56,17-18,336-430,484-500;
 #          source.rs:58-72; contract/errors.json; contract/openapi.json POST /v1/plugins;
-#          ARCHITECTURE s21 N3.
+
 # EXPOSES: a refusal that returns 500; a code that is not the contract's; a message that does
 #          not name what was wrong; a half-written tree after a refusal; or a HANG.
 import os

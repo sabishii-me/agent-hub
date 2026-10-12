@@ -8,7 +8,7 @@
 # FACT:    a plugin installed through /v1 serves a real session that runs a real tool,
 #          and the whole chain holds from an EMPTY plugins root
 # SOURCE:  contract/v1.json (/v1/plugins, /v1/sessions, .../turns, .../messages);
-#          ARCHITECTURE s17 (the order of work)
+# (the order of work)
 # EXPOSES: a hub whose parts pass in isolation but that cannot run the chain - an install
 #          that does not make the harness usable, or a session that cannot run on an
 #          installed plugin

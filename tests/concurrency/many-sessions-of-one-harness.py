@@ -5,7 +5,7 @@
 #
 # FACT:    one harness serves 100+ real sessions concurrently, each reaching active and
 #          running its own turn, with no session disturbing another
-# SOURCE:  ADR-0009 (>=100 concurrent); ARCHITECTURE s12; contract/v1.json
+# SOURCE: (>=100 concurrent); contract/v1.json
 #          /v1/sessions + /v1/sessions/{id}/turns
 # EXPOSES: a hub/harness that can only start ONE session at a time (a per-session lock, a
 #          second concurrent start failing, or a shared state file colliding)

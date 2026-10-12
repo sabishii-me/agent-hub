@@ -1,4 +1,4 @@
-//! The hub's **one verdict** on a plugin (`ARCHITECTURE`, the contract's `state`).
+//! The hub's **one verdict** on a plugin.
 //!
 //! The old hub kept a set of in-flight operations and ranked them, so a plugin
 //! could never be reported as `removing` and `preparing` at once: there is one

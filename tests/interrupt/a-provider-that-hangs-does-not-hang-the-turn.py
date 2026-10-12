@@ -6,7 +6,7 @@
 # route" case that a fake provider would hide.
 #
 # FACT:    a HANGING provider does not freeze the hub; the session reaches a defined, non-active state
-# SOURCE:  ADR-0009; ARCHITECTURE s12/13
+# SOURCE:/13
 # EXPOSES: a hub frozen by a provider that never answers
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)
@@ -37,7 +37,7 @@ try:
     sid = r["json"]["session"]["id"]
 
     # The hub MUST answer (not freeze) - poll the status with a bound. A hang in the
-    # provider must not freeze the hub's request handling (ADR-0009).
+    # provider must not freeze the hub's request handling.
     import time
     t0 = time.time()
     final = None
@@ -51,7 +51,7 @@ try:
             final = st
             break
         time.sleep(1.0)
-    # The hub kept answering on EVERY poll while the provider hung (ADR-0009: no freeze).
+    # The hub kept answering on EVERY poll while the provider hung.
     t.check(unanswered is None, "the hub answered on every poll while the provider hung (no freeze)",
             f"first non-200={unanswered}")
     t.check(final is not None, "the session reaches a defined state despite the hanging provider",

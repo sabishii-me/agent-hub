@@ -1,5 +1,5 @@
 //! Connection rows: the hub-managed connections as **relationship state in the
-//! database** (ARCHITECTURE 5, 8). A connection is `{id, name, scheme, endpoint,
+//! database**. A connection is `{id, name, scheme, endpoint,
 //! envName, state}`; its **credential** is NOT here - only a **secret reference**
 //! (a keychain key), never a value.
 

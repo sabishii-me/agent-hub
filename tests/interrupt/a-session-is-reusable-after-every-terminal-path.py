@@ -5,7 +5,7 @@
 # needs-repair after its adapter died. Real: real adapter, real provider, real kill.
 #
 # FACT:    a session is reusable (reads + accepts a defined turn) after a completed turn, a cancelled turn, and a needs-repair recovery
-# SOURCE:  ARCHITECTURE s21; contract/v1.json POST /v1/sessions/{id}/turns
+# SOURCE:; contract/v1.json POST /v1/sessions/{id}/turns
 # EXPOSES: a terminal path that leaves the session wedged (busy forever, or 5xx on the next turn)
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

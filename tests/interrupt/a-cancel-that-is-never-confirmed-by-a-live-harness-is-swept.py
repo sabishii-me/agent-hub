@@ -8,7 +8,7 @@
 # deliberately never confirms an abort; the sweep is the hub's own, on its real tick.
 #
 # FACT:    a cancel acknowledged but never confirmed by a LIVE harness is swept to `interrupted`, never `completed`
-# SOURCE:  ARCHITECTURE s21 (settle_unconfirmed_cancels, TASK-048 F4); contract/adapter-v1.json invariants (the abort ack is not a stop proof)
+# SOURCE:; contract/adapter-v1.json invariants (the abort ack is not a stop proof)
 # EXPOSES: a turn stuck `cancelling` forever when the harness answers the abort but never stops
 # (A test that would pass whatever happens is not a test: this block names the fact it
 #  proves and where that fact comes from; the assertions below are that exact fact.)

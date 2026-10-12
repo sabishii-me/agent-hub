@@ -1,4 +1,4 @@
-//! The providers domain (`ARCHITECTURE` §5): a model provider is **data**.
+//! The providers domain: a model provider is **data**.
 //!
 //! One provider is one JSON file in the hub's data dir. The hub owns the HTTP
 //! request, the auth, the catalog fetch and the field mapping; **no plugin runs

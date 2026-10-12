@@ -6,7 +6,7 @@
 #
 # FACT:    with no registry, POST /v1/plugins with a caller source answers 403 plugin_not_in_registry
 #          and no plugin directory lands
-# SOURCE:  docs/issues/20261005-130000; contract/errors.json plugin_not_in_registry
+# SOURCE:; contract/errors.json plugin_not_in_registry
 # EXPOSES: a hub that accepts an unlisted source (installs it), or refuses with an unrelated code
 #          (a download failure) so the refusal is not attributable to the authorization gate
 import os
