@@ -551,6 +551,19 @@ impl crate::Db {
         Ok(rows)
     }
 
+    /// Turns that are admitted, running, or being cancelled (not ended): what
+    /// `GET /v1/status.activeTurns` reports. One row per in-flight turn, so a
+    /// session in the middle of its turn counts once.
+    pub fn active_turn_count(&self) -> Result<i64, DbError> {
+        let conn = self.lock();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM turns WHERE ended IS NULL AND state IN ('admitted','running','cancelling')",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
 
 }
 #[cfg(test)]

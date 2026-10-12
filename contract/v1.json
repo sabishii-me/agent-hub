@@ -1625,6 +1625,10 @@
         "activeTurns": {
           "type": "integer",
           "description": "sessions with a turn admitted, running, awaiting an answer, or being cancelled"
+        },
+        "events": {
+          "type": "object",
+          "description": "{currentId} — the SSE event cursor the client can resume from; the idle signal on the stream."
         }
       },
       "description": "Core status: identity, what the hub is managing right now, and the contract it was built against. Identity first, because a client that spawned a hub must be able to prove it is talking to ITS child: compare `pid` with the process you spawned, and `buildId`/`startedAt`/`port` with what you launched. `providers` and `connections` are the same value-free shapes the list routes return — a provider shows whether a token is configured, never the token; a connection shows its materialization fields, never the credential."
