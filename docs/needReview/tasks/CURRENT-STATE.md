@@ -1,6 +1,6 @@
 # CURRENT STATE — read this first (durable handoff)
 
-## UPDATE 2026-10-11 (later) — P5 mid-turn + P8 DB-write-fail DONE; only A2/A4/P3 remain (deferred)
+## UPDATE 2026-10-12 — interrupt taxonomy COMPLETE (A2/A4/P3 via a misbehaving-harness fixture); a real hub defect found & fixed; harness acceptance is a MERGE GATE
 
 ### Verified last run (real harnesses, over /v1)
 - whole-chain: pi/jouzu/deepseek PASS (deepseek 15/15).
@@ -31,11 +31,11 @@ harnesses.
 - **Covered, green on pi/jouzu/deepseek:** A1, A3, A5, A6, A7, A8, A9*, A10, P1, P2, P4,
   P5(start-time), P6, P7, C1, C2, C3, C4*, C5, C6, C7*(*C7 deepseek cannot: no approval preset;
   *A9/C4 GREEN on pi+deepseek but RED on jouzu - the jouzu reopen hang below).
-- **Still MISSING:** ONLY A2, A4, P3 - each needs a deliberately misbehaving harness (a cancel
-  delivered but never answered; a stale snapshot after a cancel-while-running; an adapter that
-  closes stdout but stays alive). DEFERRED per owner until the real-harness cases are exhausted -
-  they now ARE, so these are the next candidates if a misbehaving harness is authorised. P5(mid-turn)
-  and P8 are DONE.
+- **COMPLETE.** A2/A4/P3 DONE via a REAL misbehaving-harness fixture
+  (`E:/AI/ideas/prts-harness-misbehaving`, `MISBEHAVE=abort-silent|abort-stale-completed|close-stdout`):
+  A2 10/10, A4 8/8, P3 7/7. **A4 EXPOSED A REAL HUB DEFECT** (`docs/issues/20261012-160953`): a
+  cancelled turn accepted a stale `completed`; FIXED (`terminal_of_event_state_for`). No interrupt
+  case remains.
 - `tests/interrupt/` now has 20 files, all env-driven (`PI_PLUGIN_DIR`/`PI_HARNESS_ID`/`PI_MODEL`;
   C7 also `PI_APPROVAL_PRESET`).
 

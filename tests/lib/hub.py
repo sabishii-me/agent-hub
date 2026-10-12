@@ -89,7 +89,7 @@ def environment_registry_env():
     from mock_registry import MockRegistry
     mock = MockRegistry()
     for d in (r"E:/AI/ideas/prts-harness-pi", r"E:/AI/ideas/prts-harness-jouzu",
-              r"E:/AI/ideas/prts-harness-deepseek"):
+              r"E:/AI/ideas/prts-harness-deepseek", r"E:/AI/ideas/prts-harness-misbehaving"):
         if _os.path.isdir(d):
             mock.add(d)
     mock.start()

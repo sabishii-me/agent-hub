@@ -1847,7 +1847,7 @@ impl Sessions {
                     _ => None,
                 };
                 let (ended, cause) = match raw.as_deref() {
-                    Some(state) => terminal_of_event_state(state),
+                    Some(state) => terminal_of_event_state_for(state, self.cancelled.lock().await.contains(&turn_id)),
                     None => {
                         // No terminal event seen (yet). The prompt returned, so the
                         // run is over; report the honest "unknown" as `interrupted`
@@ -2280,6 +2280,18 @@ fn terminal_of_event_state(state: &str) -> (&'static str, Option<String>) {
         "failed" => ("failed", Some("the adapter reported a failed turn".into())),
         _ => ("failed", Some("the adapter did not report a turn state".into())),
     }
+}
+
+/// The terminal for a turn, taking the hub's OWN cancel into account. If the hub asked this turn to
+/// stop (it is in `cancelled`), an `ok` from the harness is a STALE snapshot and must not become
+/// `completed`: the hub published a cancel and recorded `cancelling`, so a clean `completed` would
+/// contradict the stop it issued. A cancelled turn settles `cancelled` (the harness confirmed it
+/// stopped) or `interrupted` (it did not), never `completed`.
+fn terminal_of_event_state_for(state: &str, cancelled: bool) -> (&'static str, Option<String>) {
+    if cancelled && matches!(state, "ok" | "completed") {
+        return ("interrupted", Some("the turn was cancelled; the adapter's completed is stale".into()));
+    }
+    terminal_of_event_state(state)
 }
 
 fn turn_view(t: &agent_hub_db::TurnRow) -> TurnView {

@@ -99,10 +99,16 @@ Covered since: A9 (`a-session-is-reusable-after-every-terminal-path.py`: 13/13 p
 13/13 deepseek; RED on jouzu at the needs-repair reopen turn, the same 20261011-010000 hang).
 
 Still MISSING (with what each needs):
-- **A2** (a cancel delivered but never answered): needs a harness that ignores an abort.
-- **A4** (a cancel while the prompt runs, a stale snapshot says completed): same.
-- **P3** (the adapter closes stdout but stays alive): needs a harness that closes stdout and
-  keeps working.
+- ~~**A2**~~ DONE (`a-cancel-that-is-never-confirmed-by-a-live-harness-is-swept.py`): the `misbehaving`
+  fixture ACKs the abort and never confirms, and stays ALIVE; the hub's cancel timeout settles the
+  turn `interrupted`, never `completed` (10/10).
+- ~~**A4**~~ DONE (`a-stale-completed-from-an-aborted-turn-is-not-trusted.py`): the fixture answers an
+  abort with a stale `turn_end(state:ok)`; the hub must not trust it. **This EXPOSED A HUB DEFECT**
+  (`docs/issues/20261012-160953`): a cancelled turn accepted the stale `completed`. FIXED in
+  `terminal_of_event_state_for` (a cancelled turn's `ok` settles `interrupted`). 8/8.
+- ~~**P3**~~ DONE (`an-adapter-that-closes-stdout-but-stays-alive-settles-honestly.py`): the fixture
+  closes its own stdout and keeps working; the in-flight turn settles honestly (`failed`/`interrupted`),
+  never `completed` (7/7).
 - ~~**P5 mid-turn**~~ DONE (`the-provider-errors-mid-turn-and-the-turn-settles.py`, `tests/lib/httpfault.py`):
   a REAL HTTP proxy to the real provider cuts the `text/event-stream` after the first
   `content_block_delta` (sticky, so a retry cannot pass). pi 9/9, deepseek 9/9; jouzu 8/9 - its OLD
@@ -114,7 +120,9 @@ Still MISSING (with what each needs):
   terminal write fail. Proves the hub never announces a terminal the store does not hold (API and
   store agree, never a false `completed`), and a boot reconciles the open turn `failed`. pi/deepseek/
   jouzu 7/7 each.
-None is a known hub gap. A2/A4/P3 are the only ones that need a deliberately misbehaving harness;
-do NOT build that until the real-harness cases are exhausted (owner direction).
+The misbehaving harness is a REAL adapter fixture (`E:/AI/ideas/prts-harness-misbehaving`) that speaks
+the real protocol and violates it in ONE switchable way (`MISBEHAVE=abort-silent|abort-stale-completed|
+close-stdout`). It is fault injection, never a fake provider. A2/A4/P3 are the only cases that needed
+it, and they are now DONE. A4 exposed one real hub defect, fixed.
 Harness limits found while filling: deepseek ships no approval-gating preset, so C7 cannot run on it
 (`docs/issues/20261010-001000`).
