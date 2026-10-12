@@ -305,15 +305,29 @@ async fn install(
                             .await;
                             let (mut ok, mut detail) = prep.unwrap_or((false, Some("runtime install panicked".into())));
                             // VERIFY the declared command exists on disk - a fact, not a claim.
+                            // ONLY a plugin that DECLARES a command (a harness adapter) is verified:
+                            // a model-provider is pure DATA (a provider.json descriptor, no command,
+                            // no runtime), so it must not be failed for having no runtime to find.
                             if ok {
                                 if detail.is_none() {
-                                    let present = adapters
-                                        .get(&id_for_prep)
-                                        .map(|h| runtime_target_present(&h))
-                                        .unwrap_or(false);
-                                    if !present {
-                                        ok = false;
-                                        detail = Some("the declared runtime command is not on disk".to_string());
+                                    let declares_command = std::fs::read_to_string(
+                                        plugins.root.join(&id_for_prep).join("manifest.json"),
+                                    )
+                                    .ok()
+                                    .and_then(|raw| {
+                                        serde_json::from_str::<serde_json::Value>(&raw).ok()
+                                    })
+                                    .and_then(|m| m.get("command").cloned())
+                                    .is_some();
+                                    if declares_command {
+                                        let present = adapters
+                                            .get(&id_for_prep)
+                                            .map(|h| runtime_target_present(&h))
+                                            .unwrap_or(false);
+                                        if !present {
+                                            ok = false;
+                                            detail = Some("the declared runtime command is not on disk".to_string());
+                                        }
                                     }
                                 }
                             }
