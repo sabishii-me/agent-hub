@@ -88,13 +88,41 @@
       "id": "deepseek-provider",
       "pluginType": "model-provider",
       "name": "DeepSeek (provider type)",
-      "summary": "The DeepSeek model service as a provider type: the type owns the endpoint (https://api.deepseek.com, openai-completions); the person supplies only the API key.",
+      "summary": "The DeepSeek service as a provider type: the type owns https://api.deepseek.com (openai-completions); the person supplies only the API key.",
       "versions": [
         {
           "version": "1.0.1",
           "url": "https://github.com/sabishii-me/agent-hub-model-provider-deepseek/releases/download/v1.0.1/model-provider-deepseek-provider-1.0.1.zip",
           "sha256": "965b471f31741a86d23f71bdd51d6b3b498add35c7e5137a7e0f7e2fdbd9d6ed",
           "size": 3228
+        }
+      ]
+    },
+    {
+      "id": "shisa-provider",
+      "pluginType": "model-provider",
+      "name": "Shisa (provider type)",
+      "summary": "The Shisa service as a provider type: the type owns https://api.shisa.ai/openai/v1 (openai-completions) and the device-code sign-in.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "url": "https://github.com/sabishii-me/agent-hub-model-provider-shisa/releases/download/v1.0.0/model-provider-shisa-provider-1.0.0.zip",
+          "sha256": "f62bccae44b139c64807369e48829ff03a1197e20f0506e87746457e1e87ffd3",
+          "size": 1897
+        }
+      ]
+    },
+    {
+      "id": "compatible-provider",
+      "pluginType": "model-provider",
+      "name": "Custom compatible service",
+      "summary": "A caller-named compatible endpoint (the built-in custom-compatible type restated as a plugin): no fixed endpoint; the person supplies url + api + token.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "url": "https://github.com/sabishii-me/agent-hub-model-provider-compatible/releases/download/v1.0.0/model-provider-compatible-provider-1.0.0.zip",
+          "sha256": "dc5fcb94cf4dc1cc80eb935a73c5b4bc5958e7defeacb8bea7a45ba1545b3cfa",
+          "size": 2128
         }
       ]
     }
