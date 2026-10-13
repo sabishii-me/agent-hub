@@ -1,7 +1,12 @@
 # TC-TOOLS-001
-# The model must REALLY run a tool (not just answer): prompt it to read a file only the
-# filesystem can know, and require (a) a tool call on the message, and (b) the answer to
-# carry the file's content. A chat-only "pong" cannot pass this. Needs a REAL provider.
+# The model must REALLY run a tool (not just answer): prompt it to read a file whose content
+# only the filesystem can know, and require (a) a tool call on the message, and (b) the answer to
+# carry that content. A chat-only "pong" cannot pass this. Needs a REAL provider.
+#
+# The revealed fact is a NEUTRAL random token in a plainly-named file - NOT a secret-shaped value.
+# Asking a model to echo a "secret" invites a correct refusal ("I won't copy a secret out"), which
+# would make this test flaky for a reason that has nothing to do with whether the tool ran. The
+# fact must be something a well-behaved model is willing to repeat.
 #
 # FACT:    the model REALLY runs a tool: the transcript shows a real tool call and a fact only running it could reveal
 # SOURCE: contract/v1.json session messages/tools
@@ -27,8 +32,10 @@ if not t.require(os.path.isdir(PI) and prov is not None, "a real plugin and a re
     t.done()
     sys.exit(1)
 
-# A secret only the tool (a real shell/read) can reveal.
-SECRET = "ZQ7-VERIFY-3141"
+# A neutral fact only the tool (a real shell/read) can reveal: a random token in a plain file.
+# Not "secret"-shaped, so a well-behaved model repeats it rather than refusing.
+import uuid
+FACT = "toolcheck-" + uuid.uuid4().hex[:12]
 
 hub = Hub(plugins_src=PI)
 try:
@@ -43,9 +50,9 @@ try:
     # Make the secret readable by the harness's working directory (a real file).
     # The session cwd is the hub's data dir; write the file where a shell can read it.
     import pathlib
-    secret_path = pathlib.Path(hub.dir) / "verify-secret.txt"
-    secret_path.write_text(SECRET, encoding="utf-8")
-    prompt = (f"Use your bash/read tool to read the file at {secret_path.as_posix()} "
+    fact_path = pathlib.Path(hub.dir) / "toolcheck.txt"
+    fact_path.write_text(FACT, encoding="utf-8")
+    prompt = (f"Use your bash/read tool to read the file at {fact_path.as_posix()} "
               f"and reply with EXACTLY its contents, nothing else.")
 
     tr = hub.post(f"/v1/sessions/{sid}/turns", {"content": [{"type": "text", "text": prompt}], "idempotencyKey": "tl-t1"}, key="tl-t1")
@@ -73,7 +80,7 @@ try:
             "the tool is a real execution/read tool", f"names={names}")
 
     text = "".join("".join(c.get("text", "") for c in (m.get("content") or []) if c.get("type") == "text") for m in am)
-    t.check(SECRET in text, "the answer carries the SECRET only a real tool could reveal", f"reply={text[:200]!r}")
+    t.check(FACT in text, "the answer carries the fact only a real tool could reveal", f"reply={text[:200]!r}")
 
     hub.delete("/v1/model-providers/p")
 finally:

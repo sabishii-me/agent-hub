@@ -62,6 +62,26 @@ fn no_crash_installs_and_replaces() {
     assert_eq!(db.step("p").unwrap(), None);
 }
 
+/// A SUCCESSFUL replace must not leave the old copy behind. `install()` commits by
+/// `clear_step`, so recovery never runs for it - if `install()` does not sweep `outgoing`
+/// itself, every replace leaks a complete `.<id>.outgoing` tree (agent-hub#27).
+#[test]
+fn a_successful_replace_sweeps_outgoing() {
+    let root = tmp("sweep-forward");
+    let id = "p";
+    let layout = Layout::for_plugin(&root, id);
+    write_tree(&layout.target, "v1"); // an installed copy is replaced
+    let db = db_with_ready_plugin(id);
+    let src = root.join("new");
+    write_tree(&src, "v2");
+
+    let outcome = install(&db, id, &layout, &src, None).unwrap();
+    assert_eq!(outcome, RecoveryOutcome::FinishedCommit);
+    assert!(layout.target.join("manifest.json").exists());
+    assert!(!layout.outgoing.exists(), "a successful replace must not leak .outgoing");
+    assert!(!layout.staging.exists());
+}
+
 #[test]
 fn crash_after_staged_keeps_old_plugin() {
     let root = tmp("staged");
