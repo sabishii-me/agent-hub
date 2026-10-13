@@ -23,7 +23,7 @@ MODEL = os.environ.get("PI_MODEL", "deepseek-flash")
 t = Tally("model/identity")
 combo(hub_sha(), kind_of(PI))
 prov = real_provider()
-if not t.require(os.path.isdir(PI) and prov is not None, "a real plugin and a real provider are present", ("no real provider in ~/.pi/agent/models.json" if not prov else f"no plugin at {PI}")):
+if not t.require(os.path.isdir(PI) and prov is not None, "a real plugin and a real provider are present", ("no provider was given in AGENT_HUB_TEST_PROVIDER" if not prov else f"no plugin at {PI}")):
     t.done()
     sys.exit(1)
 
@@ -44,7 +44,7 @@ try:
     # appliedProvider/appliedModel are the contract's CONFIRMATION read-backs; they are CLAIMS.
     # They do NOT prove which model actually served the turn - a wrong model would report the same
     # fields and could also recall 4242. So identity is left UNVERIFIED; only the claims are read.
-    t.check(s.get("appliedProvider") == "p", "the hub REPORTS the applied provider (a claim)", f"appliedProvider={s.get('appliedProvider')}")
+    t.check(s.get("appliedProvider") == PROV, "the hub REPORTS the applied provider (a claim)", f"appliedProvider={s.get('appliedProvider')} PROV={PROV}")
     t.check(s.get("appliedModel") == MODEL, "the hub REPORTS the applied model (a claim, not proof)", f"appliedModel={s.get('appliedModel')}")
     # "the ACTUAL model identity is the selected one" is NOT asserted: there is no independent
     # evidence - a different model would report the same fields and could also recall the token.

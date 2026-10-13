@@ -23,7 +23,7 @@ MODEL = os.environ.get("PI_MODEL", "deepseek-flash")
 t = Tally("tools/real-call")
 combo(hub_sha(), kind_of(PI))
 prov = real_provider()
-if not t.require(os.path.isdir(PI) and prov is not None, "a real plugin and a real provider are present", ("no real provider in ~/.pi/agent/models.json" if not prov else f"no plugin at {PI}")):
+if not t.require(os.path.isdir(PI) and prov is not None, "a real plugin and a real provider are present", ("no provider was given in AGENT_HUB_TEST_PROVIDER" if not prov else f"no plugin at {PI}")):
     t.done()
     sys.exit(1)
 

@@ -6,10 +6,9 @@
 # for the other - not just the 202 that starts it. A 202 alone is NOT a result (the install is
 # detached); the states during and after are.
 #
-# The registry MOCK stalls each response (delay) so `installing` is a real, visible duration - the
-# same way a real network download is not instant. Nothing here is faked: the hub downloads real
-# zips over HTTP (the mock logs each GET), the states are read from the hub, and the terminal
-# states are waited for.
+# The hub installs from its OFFICIAL registry (real GitHub release assets): the download is a real
+# network hop, so `installing` is a real, visible duration - no mock, no injected delay. The states
+# are read from the hub and the terminal states are waited for.
 import os
 import sys
 import time
@@ -17,22 +16,10 @@ import concurrent.futures as cf
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(ROOT, "tests", "lib"))
-import mock_registry as _mr  # noqa: E402
 from hub import Hub  # noqa: E402
 from tally import Tally  # noqa: E402
 
 t = Tally("plugins/concurrent-mixed-different-ids")
-
-# A registry that takes ~0.6s per response, so `installing` lasts long enough to be sampled.
-_orig_env = _mr.MockRegistry
-_ORIG_INIT = _mr.MockRegistry.__init__
-
-
-def _slow_init(self, token=None, delay=0.6):
-    _ORIG_INIT(self, token=token, delay=delay)
-
-
-_mr.MockRegistry.__init__ = _slow_init
 
 hub = Hub()
 try:

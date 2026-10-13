@@ -63,40 +63,6 @@ def registry_published():
         return ("unreachable", f"the official registry could not be reached: {type(e).__name__}: {e}")
 
 
-def environment():
-    """The environment this run is in: 'dev' (default), 'prod', or 'staging'.
-
-    ONE test file runs in EVERY environment; only the CONFIGURATION differs. There is no per-test
-    skip and no BLOCK: a test either passes or fails, and a failure prints its reason.
-    """
-    import os as _os
-    return (_os.environ.get("AGENT_HUB_ENV") or "dev").strip().lower()
-
-
-def environment_registry_env():
-    """The registry configuration for the CURRENT environment, and the mock to stop (or None).
-
-    dev  -> start a MOCK registry (real zips, real sha256) and inject its address. This is the ONLY
-            reason dev differs from prod: in dev the hub CAN be given a registry.
-    prod -> inject NOTHING. The hub uses its compiled-in official address; if that is 404, an
-            install is refused and the test FAILS with the real reason (not a BLOCK).
-    staging -> reserved.
-    """
-    import os as _os
-    env = environment()
-    if env == "prod" or env == "staging":
-        return None, {}
-    from mock_registry import MockRegistry
-    mock = MockRegistry()
-    for d in (r"E:/AI/ideas/prts-harness-pi", r"E:/AI/ideas/prts-harness-jouzu",
-              r"E:/AI/ideas/prts-harness-deepseek", r"E:/AI/ideas/prts-harness-misbehaving",
-              r"E:/AI/ideas/prts-providers/deepseek", r"E:/AI/ideas/prts-providers/shisa"):
-        if _os.path.isdir(d):
-            mock.add(d)
-    mock.start()
-    return mock, {"AGENT_HUB_REGISTRY_URL": mock.url()}
-
-
 def hub_sha():
     try:
         return subprocess.check_output(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], text=True).strip()
@@ -142,7 +108,6 @@ class Hub:
         # host, not test scratch.
         self._providers = set()
         self._connections = set()
-        self._mock = None
         self._log = open(os.path.join(self.dir, "hub-stdout.log"), "a", encoding="utf-8")
 
     @staticmethod
@@ -162,15 +127,13 @@ class Hub:
             "AGENT_HUB_PLUGINS_DIR": self.plugins,
             "AGENT_HUB_ADDR": "127.0.0.1:0",
         })
-        # ONE test file runs in EVERY environment; only the CONFIGURATION differs. The harness
-        # applies the environment's registry setup: in dev it injects a MOCK registry (real zips,
-        # real sha256) so an install can really succeed; in prod it injects NOTHING, so the hub
-        # uses its compiled-in official address and an install is refused if that is absent.
+        # The test NEVER supplies a registry. The hub uses its OWN compiled-in OFFICIAL address
+        # (a dev build only honours an override; we must not set one). A mock/local registry here
+        # would make the TEST the source of truth and hide that the hub's real registry path is
+        # broken - which is exactly the defect that let "tests green" coexist with a dead third
+        # party. No override: point at nothing.
         env.pop("AGENT_HUB_REGISTRY_URL", None)
         env.pop("AGENT_HUB_REGISTRY_FILE", None)
-        mock, reg_env = environment_registry_env()
-        self._mock = mock
-        env.update(reg_env)
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
@@ -423,18 +386,9 @@ class Hub:
             self._log.close()
         except Exception:
             pass
-        if getattr(self, "_mock", None) is not None:
-            try: self._mock.stop()
-            except Exception: pass
         shutil.rmtree(self.dir, ignore_errors=True)
 
     # --- convenience ------------------------------------------------------
-    def registry_hits(self):
-        """The paths the dev MOCK registry was GETed for, in order (empty in prod). Proves the hub
-        fetched a url over HTTP - a test asserts the plugin zip it installed was really requested."""
-        m = getattr(self, "_mock", None)
-        return list(getattr(m, "hits", [])) if m is not None else []
-
     def create_session(self, harness, **extra):
         body = {"harnessId": harness}
         body.update(extra)
@@ -478,38 +432,62 @@ def wait_turn(hub, sid, tid, states, tries=240, interval=0.25):
 
 
 def register_provider(hub, pid=None):
-    """Register the REAL provider from ~/.pi/agent/models.json under a STABLE id, and return its
-    identity. The id is the provider's own name (`HOME-JP-prod`, from the file) unless the caller
-    names one - the hub does NOT generate an id. Returns None when the
-    host has no real provider (a missing real dependency FAILS, never skips)."""
+    """Create a provider through the HUB'S OWN surface (`POST /v1/model-providers`) from what the
+    run was GIVEN in the environment, and return its identity. NEVER read from a file on the
+    machine. Returns None when the environment names no provider (a missing real dependency FAILS,
+    never skips).
+
+    Two forms, decided by the env JSON:
+      - `providerType` set (e.g. "deepseek"): an INSTALLED type OWNS its endpoint - only the key is
+        needed; the hub uses the type's url/api and the type's id.
+      - otherwise `{url, api}`: the built-in `custom-compatible`, a user provider in `_CUSTOM-`.
+    In both cases the hub decides the id; the caller uses the id READ BACK from the response."""
     prov = real_provider()
     if not prov:
         return None
-    name = pid or prov.get("id") or "HOME-JP-prod"
-    r = hub.post("/v1/model-providers", {"id": name, "url": prov["url"], "api": prov["api"], "token": prov["token"]})
-    # The hub owns the final id (a user provider lives in the `_CUSTOM-` namespace): read it BACK
-    # from the response - the caller must use the id the hub actually assigned.
-    real_id = (((r.get("json") or {}).get("provider") or {}).get("id")) or name
-    # `prov` itself carries an `id` (the on-disk name); it must NOT clobber the hub-assigned id, so
-    # the real id is written LAST.
+    body = {"token": prov["token"]}
+    if prov.get("providerType"):
+        body["providerType"] = prov["providerType"]
+        body["providerTypeVersion"] = 1
+        if pid:
+            body["id"] = pid
+    else:
+        body["id"] = pid or prov.get("id") or "test-provider"
+        body["url"] = prov["url"]
+        body["api"] = prov["api"]
+    r = hub.post("/v1/model-providers", body)
+    # The hub owns the final id (a user provider lives in the `_CUSTOM-` namespace; an installed
+    # type owns its own): read it BACK from the response.
+    real_id = (((r.get("json") or {}).get("provider") or {}).get("id")) or body.get("id")
     return {**prov, "id": real_id}
 
 
-def real_provider(env_var="HOME_JP_PROD_JSON"):
-    """The REAL provider from ~/.pi/agent/models.json (HOME-JP-prod). None when absent."""
-    import pathlib
-    f = pathlib.Path(os.path.expanduser("~/.pi/agent/models.json"))
-    if not f.exists():
+def real_provider(env_var="AGENT_HUB_TEST_PROVIDER"):
+    """The provider the RUN was GIVEN, from the environment (JSON). None when absent.
+
+    NOT read from a file on the machine: a test must not secretly depend on the host it runs
+    on. The caller supplies the provider deliberately, e.g.
+
+        export AGENT_HUB_TEST_PROVIDER='{"url":"https://api.example/v1","api":"openai-completions","token":"sk-..."}'
+
+    (A provider TYPE that owns its endpoint can be named with `providerType` instead of a url -
+    see register_provider.) A missing provider is a MISSING REAL DEPENDENCY: the caller FAILS,
+    it does not skip."""
+    raw = os.environ.get(env_var) or os.environ.get("HOME_JP_PROD_JSON")
+    if not raw:
         return None
     try:
-        cfg = json.loads(f.read_text(encoding="utf-8"))
+        p = json.loads(raw)
     except Exception:
         return None
-    p = (cfg.get("providers") or {}).get("HOME-JP-prod")
-    if not p or not p.get("baseUrl") or not p.get("apiKey"):
+    if not p.get("url") or not p.get("token"):
         return None
-    # The provider's ID IS its name in the source (the `providers` key) - no generated value.
-    return {"id": "HOME-JP-prod", "url": p["baseUrl"], "api": p.get("api"), "token": p["apiKey"]}
+    return {"id": p.get("id") or "test-provider", "url": p["url"],
+            "api": p.get("api") or "openai-completions", "token": p["token"],
+            "providerType": p.get("providerType"),
+            # optional: the provider's declared models, as the run supplies them (the same
+            # thinkingLevelMap data a real provider config carries); [] when not given.
+            "models": p.get("models") or []}
 
 
 def child_processes(parent_pid):
