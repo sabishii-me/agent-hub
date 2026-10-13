@@ -58,6 +58,59 @@ impl Db {
         Ok(())
     }
 
+    /// Create a PENDING operation, minting its id from the EXISTING ROWS (never a
+    /// process counter): the next free `{provider}-auth-<n>` is chosen by asking
+    /// the table, and a lost race retries with the next `n`. A restart therefore
+    /// never re-issues a live id, and a collision is invisible to the caller.
+    /// Returns the id it created.
+    pub fn auth_op_create_next(
+        &self,
+        provider: &str,
+        kind: &str,
+        next: &str,
+        flow: &str,
+    ) -> Result<String, DbError> {
+        let prefix = format!("{provider}-auth-");
+        // The highest n in use for this provider, derived from the rows (read under
+        // the same lock as the insert, so two callers cannot pick the same n).
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let max_n: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(CAST(SUBSTR(id, ?1) AS INTEGER)), 0) \
+             FROM auth_ops WHERE id LIKE ?2 || '%' AND CAST(SUBSTR(id, ?1) AS INTEGER) > 0",
+            params![prefix.len() as i64 + 1, prefix],
+            |r| r.get(0),
+        )?;
+        let now = now_utc();
+        let mut n = max_n + 1;
+        loop {
+            let id = format!("{prefix}{n}");
+            let res = tx.execute(
+                "INSERT INTO auth_ops (id, provider, kind, status, next, error, account, flow, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, 'pending', ?4, NULL, NULL, ?5, ?6, ?6)",
+                params![id, provider, kind, next, flow, now],
+            );
+            match res {
+                Ok(_) => {
+                    tx.commit()?;
+                    return Ok(id);
+                }
+                Err(rusqlite::Error::SqliteFailure(e, _))
+                    if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    // The id is taken (a concurrent create); try the next n.
+                    n += 1;
+                    if n > max_n + 10_000 {
+                        return Err(DbError::Conflict(
+                            "could not allocate an authorization operation id".into(),
+                        ));
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
     pub fn auth_op_get(&self, id: &str) -> Result<Option<AuthOpRow>, DbError> {
         let conn = self.lock();
         let row = conn
