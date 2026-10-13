@@ -50,12 +50,26 @@ impl SecretStore {
         keyring::Entry::new(&self.service, key).map_err(|e| SecretError::Store(e.to_string()))
     }
 
-    /// Store a credential. Refused when the store is unavailable.
+    /// Store a credential. Refused when the store is unavailable. The write is
+    /// VERIFIED: after setting, the value is read back and compared, so a store
+    /// that ACCEPTS a write but does not persist it (e.g. a non-interactive OS
+    /// session) fails HERE instead of being reported as a success. A `set` that
+    /// returns `Ok` is therefore a real fact - the credential IS in the store.
     pub fn set(&self, key: &str, value: &str) -> Result<(), SecretError> {
         if !self.available {
             return Err(SecretError::Unavailable);
         }
-        self.entry(key)?.set_password(value).map_err(|e| SecretError::Store(e.to_string()))
+        let entry = self.entry(key)?;
+        entry.set_password(value).map_err(|e| SecretError::Store(e.to_string()))?;
+        match entry.get_password() {
+            Ok(read) if read == value => Ok(()),
+            Ok(_) => Err(SecretError::Store(
+                "the OS secret store did not retain the credential (a read-back differs); it was not stored".into(),
+            )),
+            Err(e) => Err(SecretError::Store(format!(
+                "the OS secret store reported a write but the credential could not be read back ({e}); it was not stored"
+            ))),
+        }
     }
 
     /// Read a credential; `None` when none is stored.

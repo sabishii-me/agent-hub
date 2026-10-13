@@ -69,7 +69,6 @@ impl AuthOperation {
 pub struct AuthStore {
     db: agent_hub_db::Db,
     cancels: std::sync::Mutex<HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
-    seq: std::sync::atomic::AtomicU64,
 }
 
 impl AuthStore {
@@ -77,7 +76,6 @@ impl AuthStore {
         AuthStore {
             db,
             cancels: std::sync::Mutex::new(HashMap::new()),
-            seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -93,10 +91,13 @@ impl AuthStore {
     /// execute must not create one. `next` is the first step; `flow` is the hub's
     /// private poll state (the device_code), never part of the contract.
     pub fn create(&self, provider: &str, kind: &str, next: &serde_json::Value, flow: &str) -> Result<String, String> {
-        let n = self.seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let id = format!("{provider}-auth-{n}");
-        self.db
-            .auth_op_create(&id, provider, kind, &next.to_string(), flow)
+        // The id is derived from the ROWS (the store mints the next free
+        // `{provider}-auth-<n>` inside the insert, retrying a lost race), NEVER from
+        // a process counter: a restart must not re-issue a live id, and a collision
+        // must never reach the caller as an internal error.
+        let id = self
+            .db
+            .auth_op_create_next(provider, kind, &next.to_string(), flow)
             .map_err(|e| format!("could not record the authorization operation: {e}"))?;
         self.cancels
             .lock()
@@ -422,5 +423,28 @@ mod tests {
         // The boot reconcile ends a pending op a restart cannot continue.
         assert_eq!(store2.reconcile_pending_at_boot(), 1);
         assert_eq!(store2.get(&id).unwrap()["status"], "failed");
+    }
+
+    /// The id is derived from the ROWS, so a pre-existing `{provider}-auth-1`
+    /// (a restart, or a leftover row) never re-issues it: the next create picks a
+    /// FREE id instead of colliding and failing forever.
+    #[test]
+    fn a_pre_existing_id_never_wedges_the_next_create() {
+        let path = db();
+        let step = serde_json::json!({ "kind": "device-code", "verifyUrl": "https://x" });
+        let db1 = agent_hub_db::Db::open(&path).unwrap();
+        // Simulate rows left by an earlier life: auth-1, auth-2 already exist.
+        db1.auth_op_create("p1-auth-1", "p1", "device-code", &step.to_string(), "f1").unwrap();
+        db1.auth_op_create("p1-auth-2", "p1", "device-code", &step.to_string(), "f2").unwrap();
+        // A NEW store over the same DB (a restart, counter back at 0) must NOT pick
+        // auth-1 or auth-2; it must succeed.
+        let store = AuthStore::new(agent_hub_db::Db::open(&path).unwrap());
+        let id = store.create("p1", "device-code", &step, "f3").unwrap();
+        assert_ne!(id, "p1-auth-1");
+        assert_ne!(id, "p1-auth-2");
+        assert_eq!(store.get(&id).unwrap()["status"], "pending");
+        // And again: a second create in the same process also succeeds.
+        let id2 = store.create("p1", "device-code", &step, "f4").unwrap();
+        assert_ne!(id2, id);
     }
 }
