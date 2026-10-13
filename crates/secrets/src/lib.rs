@@ -164,6 +164,33 @@ mod tests {
         s.delete("k").unwrap();
     }
 
+    /// The store must PERSIST across `Entry` objects - not merely hold a value in
+    /// the object that wrote it. keyring's MOCK store (used when no platform
+    /// feature is compiled in) keeps the secret "in the entry itself", so a write
+    /// through one Entry and a read through another returns `NoEntry`: a credential
+    /// that "succeeds" and is gone. This test FAILS on the mock and passes on any
+    /// real OS store - it is the regression guard for a silently-mock backend.
+    #[test]
+    fn a_credential_persists_across_entry_objects() {
+        let service = format!("agent-hub-persist-{}", random_hex());
+        let writer = SecretStore::probe(service.clone());
+        if !writer.is_available() {
+            eprintln!("SKIP: OS secret store unavailable on this host");
+            return;
+        }
+        writer.set("ref", "persisted-value").unwrap();
+        // A SEPARATE store over the SAME service (fresh Entry objects): the value
+        // must still be there. On the mock it is not (kept per-Entry) -> this fails.
+        let reader = SecretStore::probe(service.clone());
+        assert_eq!(
+            reader.get("ref").unwrap().as_deref(),
+            Some("persisted-value"),
+            "a written credential must be readable through a new Entry; if this fails the \
+             build is using keyring's in-process MOCK store, not a real OS store"
+        );
+        reader.delete("ref").unwrap();
+    }
+
     #[test]
     fn an_unavailable_store_refuses() {
         let s = SecretStore { service: "x".into(), available: false };
