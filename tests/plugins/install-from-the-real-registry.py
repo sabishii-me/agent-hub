@@ -6,9 +6,8 @@
 # environment override in a release build, so NOTHING here can be a mock: the hub fetches the
 # registry from GitHub and installs the release artifact from GitHub.
 #
-# It must run in the PROD configuration (AGENT_HUB_ENV=prod, AGENT_HUB_PROFILE=release). In dev the
-# harness injects a loopback mock registry, which is exactly what this test must NOT use - so it
-# FAILS in dev with a clear reason rather than passing against a mock.
+# The test harness NEVER injects a registry override (see tests/lib/hub.py): the hub always uses its
+# own compiled-in official address, so there is nothing to mock and no environment to check.
 import json
 import os
 import sys
@@ -16,19 +15,11 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tests", "lib"))
-from hub import Hub, environment  # noqa: E402
+from hub import Hub  # noqa: E402
 from tally import Tally  # noqa: E402
 
 t = Tally("plugins/real-registry")
 MUST = os.environ.get("AGENT_HUB_REAL_PLUGIN", "pi")
-
-# A RELEASE build has no registry override; a dev build does. If we are NOT in prod, the hub would
-# be handed a mock - so this test cannot be honest. Say so, do not pretend.
-if environment() != "prod":
-    t.check(False, "the real-registry test must run with AGENT_HUB_ENV=prod (no mock registry)",
-            f"environment={environment()} would inject a loopback mock; run: AGENT_HUB_ENV=prod python {os.path.basename(__file__)}")
-    ok = t.done()
-    sys.exit(0 if ok else 1)
 
 # Hub started with NOTHING injected: no AGENT_HUB_REGISTRY_URL, no plugins_src. The hub MUST use its
 # compiled-in official address.

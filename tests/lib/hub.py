@@ -73,29 +73,6 @@ def environment():
     return (_os.environ.get("AGENT_HUB_ENV") or "dev").strip().lower()
 
 
-def environment_registry_env():
-    """The registry configuration for the CURRENT environment, and the mock to stop (or None).
-
-    dev  -> start a MOCK registry (real zips, real sha256) and inject its address. This is the ONLY
-            reason dev differs from prod: in dev the hub CAN be given a registry.
-    prod -> inject NOTHING. The hub uses its compiled-in official address; if that is 404, an
-            install is refused and the test FAILS with the real reason (not a BLOCK).
-    staging -> reserved.
-    """
-    import os as _os
-    env = environment()
-    if env == "prod" or env == "staging":
-        return None, {}
-    from mock_registry import MockRegistry
-    mock = MockRegistry()
-    for d in (r"E:/AI/ideas/prts-harness-pi", r"E:/AI/ideas/prts-harness-jouzu",
-              r"E:/AI/ideas/prts-harness-deepseek", r"E:/AI/ideas/prts-harness-misbehaving",
-              r"E:/AI/ideas/prts-providers/deepseek", r"E:/AI/ideas/prts-providers/shisa"):
-        if _os.path.isdir(d):
-            mock.add(d)
-    mock.start()
-    return mock, {"AGENT_HUB_REGISTRY_URL": mock.url()}
-
 
 def hub_sha():
     try:
@@ -142,7 +119,6 @@ class Hub:
         # host, not test scratch.
         self._providers = set()
         self._connections = set()
-        self._mock = None
         self._log = open(os.path.join(self.dir, "hub-stdout.log"), "a", encoding="utf-8")
 
     @staticmethod
@@ -162,15 +138,13 @@ class Hub:
             "AGENT_HUB_PLUGINS_DIR": self.plugins,
             "AGENT_HUB_ADDR": "127.0.0.1:0",
         })
-        # ONE test file runs in EVERY environment; only the CONFIGURATION differs. The harness
-        # applies the environment's registry setup: in dev it injects a MOCK registry (real zips,
-        # real sha256) so an install can really succeed; in prod it injects NOTHING, so the hub
-        # uses its compiled-in official address and an install is refused if that is absent.
+        # The test NEVER supplies a registry. The hub uses its OWN compiled-in OFFICIAL address
+        # (a dev build only honours an override; we must not set one). A mock/local registry here
+        # would make the TEST the source of truth and hide that the hub's real registry path is
+        # broken - which is exactly the defect that let "tests green" coexist with a dead third
+        # party. No override: point at nothing.
         env.pop("AGENT_HUB_REGISTRY_URL", None)
         env.pop("AGENT_HUB_REGISTRY_FILE", None)
-        mock, reg_env = environment_registry_env()
-        self._mock = mock
-        env.update(reg_env)
         env.update(self.extra_env)
         self.child = subprocess.Popen([EXE], env=env, stdout=self._log, stderr=self._log, creationflags=(0x08000000 if os.name == "nt" else 0))
         self.ep = self._await_endpoint()
@@ -423,18 +397,9 @@ class Hub:
             self._log.close()
         except Exception:
             pass
-        if getattr(self, "_mock", None) is not None:
-            try: self._mock.stop()
-            except Exception: pass
         shutil.rmtree(self.dir, ignore_errors=True)
 
     # --- convenience ------------------------------------------------------
-    def registry_hits(self):
-        """The paths the dev MOCK registry was GETed for, in order (empty in prod). Proves the hub
-        fetched a url over HTTP - a test asserts the plugin zip it installed was really requested."""
-        m = getattr(self, "_mock", None)
-        return list(getattr(m, "hits", [])) if m is not None else []
-
     def create_session(self, harness, **extra):
         body = {"harnessId": harness}
         body.update(extra)
