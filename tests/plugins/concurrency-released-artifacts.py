@@ -21,7 +21,6 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tests", "lib"))
 from hub import Hub  # noqa: E402
-from mock_registry import MockRegistry  # noqa: E402
 from tally import Tally  # noqa: E402
 
 FIX = os.path.join(ROOT, "tests", "fixtures", "released")
@@ -41,29 +40,21 @@ def log(msg):
     print(f"  [{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-class ReleasedRegistry:
-    def __init__(self):
-        self.mock = MockRegistry()
-        self.art = {}
-        for pid, ver in RELEASED:
-            zp = os.path.join(FIX, f"harness-adapter-{pid}-{ver}.zip")
-            with zipfile.ZipFile(zp) as z:
-                manifest = json.loads(z.read("manifest.json"))
-            self.mock.add_released_artifact(zp, manifest)
-        self.mock.start()
-        for pid, _ in RELEASED:
-            e = self.mock.entries[pid]["versions"][0]
-            self.art[pid] = {"url": f"http://127.0.0.1:{self.mock._server.server_address[1]}/{e['_file']}",
-                             "sha256": e["sha256"], "id": pid, "pluginType": "harness-adapter",
-                             "version": e["version"], "size": e["size"]}
-
-    def stop(self):
-        self.mock.stop()
-
-
-reg = ReleasedRegistry()
-hub = Hub(env={"AGENT_HUB_REGISTRY_URL": reg.mock.url()})
+# The artifacts come from the hub's OWN catalog after it refreshes its OFFICIAL registry -
+# there is no local registry and nothing is fabricated. `RELEASED` names the versions the
+# official registry is expected to carry; the URL/sha256 are read from the hub, not invented.
+hub = Hub()
 _stop_sampler = threading.Event()
+_ART = {}   # pid -> artifact dict, filled from the hub's catalog after refresh
+
+
+def _load_artifacts():
+    for pid, ver in RELEASED:
+        art = hub.registry_artifact(pid)
+        _ART[pid] = art
+        if art.get("version") != ver:
+            log(f"NOTE: official registry has {pid} {art.get('version')}, expected {ver}")
+
 
 
 def state_of(pid):
@@ -96,7 +87,7 @@ def wait_all(pids, goals, timeout=1800):
 
 
 def install(pid):
-    return hub.post("/v1/plugins", {"source": {"artifact": reg.art[pid]}},
+    return hub.post("/v1/plugins", {"source": {"artifact": _ART[pid]}},
                     key=f"c-{pid}-{time.time()}", timeout=60)["status"]
 
 
@@ -113,7 +104,8 @@ try:
     log(f"registry refresh: HTTP {rr['status']}")
     if rr["status"] >= 300:
         raise SystemExit(f"the hub could not refresh its registry: {rr['status']} {rr['text'][:160]}")
-    log(f"hub up on the released artifacts (registry {reg.mock.url()})")
+    _load_artifacts()
+    log("hub up on the OFFICIAL registry artifacts")
     smp = threading.Thread(target=sampler, daemon=True)
     smp.start()
 
@@ -211,5 +203,4 @@ finally:
     _stop_sampler.set()
     ok = t.done()
     hub.cleanup()
-    reg.stop()
 sys.exit(0 if ok else 1)

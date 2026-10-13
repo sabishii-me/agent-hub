@@ -1,8 +1,8 @@
 # TC-PLUGINS-005
-# The plugin lifecycle against a REAL plugin, installed THROUGH /v1: install from a git
-# source (a local path), the resource reaches `ready`, list/get show it, preparing
-# materialises its runtime, disable/enable flip it, then REMOVE really removes it (GET
-# then reads `absent`/404). A deployment dir is separately refused (409) - both paths.
+# The plugin lifecycle against a REAL plugin, installed THROUGH /v1 from the OFFICIAL
+# registry: the resource reaches `ready`, list/get show it, preparing materialises its
+# runtime, disable/enable flip it, then REMOVE really removes it (GET then reads
+# `absent`/404). A deployment dir is separately refused (409).
 #
 # FACT:    a plugin is INSTALLED through POST /v1/plugins, reaches `ready`, and is really
 #          REMOVED through DELETE /v1/plugins/{id}; a deployment dir is refused (409)
@@ -17,12 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from hub import Hub, hub_sha          # noqa: E402
 from tally import Tally, combo        # noqa: E402
 
-PI = os.environ.get("PI_PLUGIN_DIR", r"E:/AI/ideas/prts-harness-pi")
-PI_REF = os.environ.get("PI_PLUGIN_REF", "fix/runtime-placement")
 t = Tally("plugins/lifecycle")
 combo(hub_sha())
-if not t.require(os.path.isdir(PI), "a real plugin source is present", f"no plugin at {PI}"):
-    t.done(); sys.exit(1)
 
 # A fresh hub with an EMPTY plugins root: nothing is pre-installed, so the install below
 # is the only reason the plugin exists.
@@ -35,7 +31,7 @@ try:
     t.check(l0["status"] == 200 and not (l0["json"] or {}).get("plugins"),
             "no plugin is present before the install", f"rows={(l0['json'] or {}).get('plugins')}")
 
-    # INSTALL through /v1, from a git source (a local path + ref).
+    # INSTALL through /v1 from the hub's OFFICIAL registry (the real user operation).
     ins = hub.post("/v1/plugins", {"source": {"artifact": hub.registry_artifact("pi")}}, key="install-1")
     t.check(ins["status"] == 202, "install is accepted (202 + Location)", f"status={ins['status']} {ins['text'][:160]}")
     t.check((ins["json"] or {}).get("pluginId"),
