@@ -89,7 +89,8 @@ def environment_registry_env():
     from mock_registry import MockRegistry
     mock = MockRegistry()
     for d in (r"E:/AI/ideas/prts-harness-pi", r"E:/AI/ideas/prts-harness-jouzu",
-              r"E:/AI/ideas/prts-harness-deepseek", r"E:/AI/ideas/prts-harness-misbehaving"):
+              r"E:/AI/ideas/prts-harness-deepseek", r"E:/AI/ideas/prts-harness-misbehaving",
+              r"E:/AI/ideas/prts-providers/deepseek", r"E:/AI/ideas/prts-providers/shisa"):
         if _os.path.isdir(d):
             mock.add(d)
     mock.start()
@@ -268,13 +269,18 @@ class Hub:
         raise RuntimeError(f"plugin {pid} did not reach {want}: {self.get(f'/v1/plugins/{pid}')['text'][:220]}")
 
     def _await_runtime(self, pid):
-        # `prepare` answers ready; confirm the manifest's command is on disk (the hub's
-        # own `runtimeReady` is a filesystem fact).
+        # A plugin that declares NO command is DATA only (a model-provider ships a descriptor,
+        # not a runtime): there is nothing to prepare, so do not wait for a runtime that will
+        # never exist. A plugin WITH a command (a harness adapter) must reach runtimeReady.
         for _ in range(1920):
             g = self.get(f"/v1/plugins/{pid}")
             pj = (g["json"] or {}).get("plugin", {})
             if pj.get("runtimeReady"):
                 return True
+            if pj.get("pluginType") != "harness-adapter":
+                # A model-provider is DATA (a descriptor), not a runtime: there is nothing to
+                # prepare, so never wait for a runtime that will not exist. Its readiness is its state.
+                return False
             if pj.get("state") == "failed":
                 raise RuntimeError(f"runtime for {pid} FAILED: {g['text'][:220]}")
             time.sleep(0.25)
