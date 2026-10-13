@@ -44,7 +44,7 @@ def _call(base, tok, method, path, body=None, timeout=120):
 def run(exe, env_extra, do_refresh=False, wait=False):
     dd = tempfile.mkdtemp(prefix="matrix-")
     env = {k: v for k, v in os.environ.items() if k not in ("AGENT_HUB_REGISTRY_FILE", "AGENT_HUB_REGISTRY_URL")}
-    env.update({"AGENT_HUB_DATA_DIR": dd, "AGENT_HUB_ADDR": "127.0.0.1:0",
+    env.update({"AGENT_HUB_DATA_DIR": dd, "AGENT_HUB_ADDR": "127.0.0.1:0"})
     env.update(env_extra)
     p = subprocess.Popen([exe], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     def ep():
