@@ -137,6 +137,16 @@ pub enum SecretError {
 mod tests {
     use super::*;
 
+    /// The REAL OS store must be compiled in for the target. `keyring` has NO
+    /// default features: with no platform feature it silently uses an IN-PROCESS
+    /// MOCK, so a credential write "succeeds" and vanishes. This ties the test to
+    /// the exact defect (a mock backend must never be what the hub ships).
+    #[test]
+    fn a_real_os_backend_is_compiled_in() {
+        let real = cfg!(target_os = "windows") || cfg!(target_os = "macos") || cfg!(target_os = "linux");
+        assert!(real, "an unhandled OS is built with the mock credential store - wire a real backend");
+    }
+
     #[test]
     fn set_get_delete_roundtrip() {
         // A fresh SERVICE per run: two test runs never share an entry.
