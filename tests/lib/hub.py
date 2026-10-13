@@ -443,38 +443,62 @@ def wait_turn(hub, sid, tid, states, tries=240, interval=0.25):
 
 
 def register_provider(hub, pid=None):
-    """Register the REAL provider from ~/.pi/agent/models.json under a STABLE id, and return its
-    identity. The id is the provider's own name (`HOME-JP-prod`, from the file) unless the caller
-    names one - the hub does NOT generate an id. Returns None when the
-    host has no real provider (a missing real dependency FAILS, never skips)."""
+    """Create a provider through the HUB'S OWN surface (`POST /v1/model-providers`) from what the
+    run was GIVEN in the environment, and return its identity. NEVER read from a file on the
+    machine. Returns None when the environment names no provider (a missing real dependency FAILS,
+    never skips).
+
+    Two forms, decided by the env JSON:
+      - `providerType` set (e.g. "deepseek"): an INSTALLED type OWNS its endpoint - only the key is
+        needed; the hub uses the type's url/api and the type's id.
+      - otherwise `{url, api}`: the built-in `custom-compatible`, a user provider in `_CUSTOM-`.
+    In both cases the hub decides the id; the caller uses the id READ BACK from the response."""
     prov = real_provider()
     if not prov:
         return None
-    name = pid or prov.get("id") or "HOME-JP-prod"
-    r = hub.post("/v1/model-providers", {"id": name, "url": prov["url"], "api": prov["api"], "token": prov["token"]})
-    # The hub owns the final id (a user provider lives in the `_CUSTOM-` namespace): read it BACK
-    # from the response - the caller must use the id the hub actually assigned.
-    real_id = (((r.get("json") or {}).get("provider") or {}).get("id")) or name
-    # `prov` itself carries an `id` (the on-disk name); it must NOT clobber the hub-assigned id, so
-    # the real id is written LAST.
+    body = {"token": prov["token"]}
+    if prov.get("providerType"):
+        body["providerType"] = prov["providerType"]
+        body["providerTypeVersion"] = 1
+        if pid:
+            body["id"] = pid
+    else:
+        body["id"] = pid or prov.get("id") or "test-provider"
+        body["url"] = prov["url"]
+        body["api"] = prov["api"]
+    r = hub.post("/v1/model-providers", body)
+    # The hub owns the final id (a user provider lives in the `_CUSTOM-` namespace; an installed
+    # type owns its own): read it BACK from the response.
+    real_id = (((r.get("json") or {}).get("provider") or {}).get("id")) or body.get("id")
     return {**prov, "id": real_id}
 
 
-def real_provider(env_var="HOME_JP_PROD_JSON"):
-    """The REAL provider from ~/.pi/agent/models.json (HOME-JP-prod). None when absent."""
-    import pathlib
-    f = pathlib.Path(os.path.expanduser("~/.pi/agent/models.json"))
-    if not f.exists():
+def real_provider(env_var="AGENT_HUB_TEST_PROVIDER"):
+    """The provider the RUN was GIVEN, from the environment (JSON). None when absent.
+
+    NOT read from a file on the machine: a test must not secretly depend on the host it runs
+    on. The caller supplies the provider deliberately, e.g.
+
+        export AGENT_HUB_TEST_PROVIDER='{"url":"https://api.example/v1","api":"openai-completions","token":"sk-..."}'
+
+    (A provider TYPE that owns its endpoint can be named with `providerType` instead of a url -
+    see register_provider.) A missing provider is a MISSING REAL DEPENDENCY: the caller FAILS,
+    it does not skip."""
+    raw = os.environ.get(env_var) or os.environ.get("HOME_JP_PROD_JSON")
+    if not raw:
         return None
     try:
-        cfg = json.loads(f.read_text(encoding="utf-8"))
+        p = json.loads(raw)
     except Exception:
         return None
-    p = (cfg.get("providers") or {}).get("HOME-JP-prod")
-    if not p or not p.get("baseUrl") or not p.get("apiKey"):
+    if not p.get("url") or not p.get("token"):
         return None
-    # The provider's ID IS its name in the source (the `providers` key) - no generated value.
-    return {"id": "HOME-JP-prod", "url": p["baseUrl"], "api": p.get("api"), "token": p["apiKey"]}
+    return {"id": p.get("id") or "test-provider", "url": p["url"],
+            "api": p.get("api") or "openai-completions", "token": p["token"],
+            "providerType": p.get("providerType"),
+            # optional: the provider's declared models, as the run supplies them (the same
+            # thinkingLevelMap data a real provider config carries); [] when not given.
+            "models": p.get("models") or []}
 
 
 def child_processes(parent_pid):

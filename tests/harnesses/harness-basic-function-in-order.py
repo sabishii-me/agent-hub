@@ -9,7 +9,7 @@
 # while a session is open - pinned by the observation, see).
 #
 # Nothing is faked: the plugin is installed through /v1, the runtime is materialised by the HUB, the
-# provider is the REAL one from ~/.pi/agent/models.json, and every code below is what the running
+# provider is the one the run was GIVEN (AGENT_HUB_TEST_PROVIDER), and every code below is what the running
 # system returned.
 import os
 import sys
@@ -72,7 +72,7 @@ try:
     # ---- 4. CONFIGURE the real provider: it applies, then a turn really runs. ------------------
     real = real_provider()
     t.require(real is not None,
-              "the REAL provider is present (~/.pi/agent/models.json HOME-JP-prod)",
+              "a provider was provided in the environment (AGENT_HUB_TEST_PROVIDER)",
               "no real provider on this host - a missing real dependency FAILS")
     pr = register_provider(hub)
     t.check(pr is not None, "the provider is registered", f"provider={pr}")

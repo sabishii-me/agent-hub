@@ -28,7 +28,7 @@ if not t.require(os.path.isdir(PI), "a real plugin is present", f"no real plugin
     t.done(); sys.exit(1)
 
 prov = real_provider()
-if not t.require(prov is not None, "a real provider is configured", "no real provider in ~/.pi/agent/models.json"):
+if not t.require(prov is not None, "a real provider is configured", "no provider was given in AGENT_HUB_TEST_PROVIDER"):
     t.done(); sys.exit(1)
 
 from urllib.parse import urlparse

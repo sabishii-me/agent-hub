@@ -1,7 +1,7 @@
 """A REAL HTTP proxy that forwards to a REAL provider and can fail MID-RESPONSE.
 
 NOT a fake provider: the upstream is the real provider the test was configured with
-(`HOME-JP-prod`); this is a real HTTP hop on loopback. It exists so an interrupt case can
+(the given provider); this is a real HTTP hop on loopback. It exists so an interrupt case can
 inject the ONE condition a plain TCP forwarder cannot: a provider that answers, lets the
 first tokens of a streaming turn through, and THEN dies mid-stream (an API error after the
 first token). A cut with no bytes forwarded is P7 (network drop); bytes-then-cut is P5

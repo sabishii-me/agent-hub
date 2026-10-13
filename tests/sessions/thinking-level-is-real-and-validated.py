@@ -8,7 +8,7 @@
 #
 # A provider's native model list carries NO thinking levels (the contract says so); the levels come
 # from the provider's `declarations`, which is how a real caller states what a model accepts. So the
-# provider is registered from the REAL ~/.pi/agent/models.json, WITH a declared thinking level on a
+# provider is the one the run was GIVEN (AGENT_HUB_TEST_PROVIDER), WITH a declared thinking level on a
 # real model the provider serves. Nothing is invented: the endpoint, token and model are real; the
 # declaration is the documented input, not a fabricated field.
 import os
@@ -40,7 +40,7 @@ try:
     t.check(state == "ready", f"the {HARNESS} plugin installs and reaches `ready`", f"state={state}")
 
     real = real_provider()
-    t.require(real is not None, "the REAL provider is present (~/.pi/agent/models.json)",
+    t.require(real is not None, "a provider was provided in the environment (AGENT_HUB_TEST_PROVIDER)",
               "no real provider on this host - a missing real dependency FAILS")
 
     # Register the REAL provider; fetch its REAL models first (so the id below is a real one).
@@ -52,8 +52,9 @@ try:
     t.check(len(cached) > 0, "the provider serves real models (fetched)", f"models={[m.get('id') for m in cached][:6]}")
     # Choose a model whose OWN configuration states thinking levels (thinkingLevelMap), so the levels
     # below are the real ones - not made up.
-    import json as _json
-    src = _json.load(open(os.path.expanduser("~/.pi/agent/models.json"), encoding="utf-8"))["providers"]["HOME-JP-prod"]["models"]
+    # The models (and their thinkingLevelMap) come from what the RUN supplied in the environment -
+    # never a file on this machine.
+    src = real.get("models") or []
     pick, LEVELS = None, []
     for m in src:
         tlm = m.get("thinkingLevelMap") or {}
@@ -62,7 +63,7 @@ try:
             pick, LEVELS = m["id"], lv
             break
     t.check(pick is not None, "a model in the provider states >=2 thinking levels (thinkingLevelMap)",
-            f"no model stated thinkingLevelMap in {os.path.expanduser('~/.pi/agent/models.json')}")
+            f"no model stated thinkingLevelMap in AGENT_HUB_TEST_PROVIDER.models")
     MODEL = pick
 
     # Declare the thinking levels for that model (the documented way a caller states them) and
