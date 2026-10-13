@@ -1284,6 +1284,10 @@
                     "activeTurns": {
                       "type": "integer",
                       "description": "sessions with a turn admitted, running, awaiting an answer, or being cancelled"
+                    },
+                    "events": {
+                      "type": "object",
+                      "description": "{currentId} — the SSE event cursor the client can resume from; the idle signal on the stream."
                     }
                   },
                   "required": [
@@ -1298,7 +1302,8 @@
                     "providers",
                     "connections",
                     "sessionCount",
-                    "activeTurns"
+                    "activeTurns",
+                    "events"
                   ]
                 }
               }
@@ -2631,7 +2636,7 @@
     },
     "/v1/model-providers/types": {
       "get": {
-        "description": "Installed model-provider types, as DATA: each entry is a descriptor a plugin ships (id, version, owner:'hub', display name, authMethods, configuration fields, catalog dialect). A type is data the hub reads and maps - the hub does NOT import or run plugin code in-process (ARCHITECTURE 5); the hub owns the HTTP request, the auth and the catalog fetch. A type no plugin ships stays absent, and a record naming one stays readable but unusable. There is no legacy compatibility and no plugin-provider module protocol.",
+        "description": "Installed model-provider types, as DATA: each entry is a descriptor a plugin ships (id, version, owner:'hub', display name, authMethods, configuration {endpoint?, fields, auth?}, catalog). A type is data the hub reads and maps - the hub does NOT import or run plugin code in-process (ARCHITECTURE 5); the hub owns the HTTP request, the auth and the catalog fetch. configuration.endpoint = {url,api} means the TYPE OWNS its endpoint (the person supplies only the credential; an override is refused); absent means the caller supplies url/api. For an interactive authMethod (device-code/browser) configuration.auth is the flow as data: {method:'device-code', gateway, clientId, clientVersion?, codePath?='/device/code', tokenPath?='/device/token', linkAckPath?}. The hub runs it (POST /v1/model-providers/{id}/auth) and reports the first step as the authStep def; the caller never fetches these fields itself. A type no plugin ships stays absent, and a record naming one stays readable but unusable. There is no legacy compatibility and no plugin-provider module protocol.",
         "responses": {
           "200": {
             "description": "success",
@@ -3016,11 +3021,19 @@
                       "type": "string"
                     },
                     "next": {
-                      "type": "object"
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/authStep"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
-                    "operationId"
+                    "operationId",
+                    "next"
                   ]
                 }
               }
@@ -3031,22 +3044,14 @@
     },
     "/v1/harnesses/{id}/auth/{op}": {
       "get": {
-        "description": "Current state of an authorization operation the harness started.",
+        "description": "Current state of a hub-level authorization operation (provider types) / the harness's own authorization operation. Once approved, the credential is in the hub secret store and the existing credentials/grant path reaches every compatible harness.",
         "responses": {
           "200": {
             "description": "success",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "status"
-                  ]
+                  "$ref": "#/defs/authOperation"
                 }
               }
             }
@@ -3094,7 +3099,7 @@
                       "type": "string"
                     },
                     "next": {
-                      "type": "object"
+                      "$ref": "#/defs/authStep"
                     }
                   },
                   "required": [
@@ -3110,22 +3115,14 @@
     },
     "/v1/model-providers/{id}/auth/{op}": {
       "get": {
-        "description": "Current state of a hub-level authorization operation: {status:pending|approved|failed|expired|cancelled,next?,error?,account?}. Once approved, the credential is in the hub secret store and the existing credentials/grant path reaches every compatible harness.",
+        "description": "Current state of a hub-level authorization operation (provider types) / the harness's own authorization operation. Once approved, the credential is in the hub secret store and the existing credentials/grant path reaches every compatible harness.",
         "responses": {
           "200": {
             "description": "success",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "status"
-                  ]
+                  "$ref": "#/defs/authOperation"
                 }
               }
             }
@@ -3405,6 +3402,13 @@
               "tombstone-only",
               "none"
             ]
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "why this harness is not ACTIVATED (status `disabled`), when the hub knows: e.g. a plugin that needs a newer hub (ADR-0008, \"needs hub >= X, this is Y\"). null when enabled or the reason is unknown. ADR-0002: say what is not known and what to do next."
           }
         }
       },
@@ -4354,6 +4358,92 @@
               "$ref": "#/$defs/catalogVersion"
             },
             "description": "newest first: the entry a client installs or updates to is versions[0]"
+          }
+        }
+      },
+      "authStep": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "description": "One declared step of a provider-type authorization (device-code, browser). The hub OWNS the flow and the operation; a provider TYPE declares the flow as DATA (auth block in its provider.json), and the hub reports the first step here. A device-code step carries what a human needs: the code to show and the URL to visit, plus the platform's own timing. Every field is what the platform returned; the hub invents none.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "device-code",
+              "browser"
+            ],
+            "description": "the step's shape; the caller renders it accordingly. 'device-code' shows userCode + verifyUrl; 'browser' opens verifyUrl"
+          },
+          "userCode": {
+            "type": "string",
+            "description": "the short code the human types at the verification page (device-code only)"
+          },
+          "verifyUrl": {
+            "type": "string",
+            "description": "the URL the human opens (device-code: the platform's verification_uri/_complete; browser: the authorization URL)"
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "description": "how long this step stays valid (the platform's expires_in); the operation ends 'expired' after it"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "description": "how often the hub polls the platform for completion (the platform's interval); the caller does not poll, the hub does"
+          }
+        }
+      },
+      "authOperation": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "description": "The state of a hub-level authorization operation. The hub owns it and it OUTLIVES the starting request; the credential lands in the hub secret store ONLY on 'approved', and the existing credentials/grant path then reaches every compatible harness.",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "failed",
+              "expired",
+              "cancelled"
+            ],
+            "description": "pending = waiting for the human; terminal states are final"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/authStep"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the step the caller shows while pending; absent/null once terminal"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "why it failed/expired, when it did"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the identity the platform reported on approval (email/org), for display"
           }
         }
       }
