@@ -63,17 +63,6 @@ def registry_published():
         return ("unreachable", f"the official registry could not be reached: {type(e).__name__}: {e}")
 
 
-def environment():
-    """The environment this run is in: 'dev' (default), 'prod', or 'staging'.
-
-    ONE test file runs in EVERY environment; only the CONFIGURATION differs. There is no per-test
-    skip and no BLOCK: a test either passes or fails, and a failure prints its reason.
-    """
-    import os as _os
-    return (_os.environ.get("AGENT_HUB_ENV") or "dev").strip().lower()
-
-
-
 def hub_sha():
     try:
         return subprocess.check_output(["git", "-C", REPO, "rev-parse", "--short", "HEAD"], text=True).strip()
