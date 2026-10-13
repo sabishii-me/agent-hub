@@ -151,3 +151,70 @@ fn projection_is_deterministic_and_complete() {
     }
     assert_eq!(ops, src, "one projected operation per source endpoint");
 }
+
+/// The COMMITTED `contract/openapi.json` must equal a FRESH projection of
+/// `contract/v1.json`. The served `/v1/openapi.json` is this committed file
+/// (`include_str!`), so a file that has drifted from the contract is the hub
+/// serving an OpenAPI that contradicts its own contract - the exact thing "the
+/// contract is the interface" forbids. The projection is deterministic, so this
+/// compares bytes (after a stable re-serialization) and NAMES the first drift.
+#[test]
+fn the_committed_openapi_matches_a_fresh_projection() {
+    let raw = std::fs::read_to_string(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../contract/openapi.json"),
+    )
+    .expect("contract/openapi.json");
+    let committed: Value = serde_json::from_str(&raw).expect("committed openapi parses");
+    let fresh = project_openapi(&contract()).expect("projection");
+
+    // Compare canonically (key order is not meaningful across serializers) and
+    // report the first differing JSON path so the fix is obvious.
+    let mut path = String::new();
+    let same = deep_eq(&committed, &fresh, &mut path);
+    assert!(
+        same,
+        "contract/openapi.json is STALE: it differs from a fresh projection of \
+         contract/v1.json at `{path}`. Regenerate it: \
+         `cargo run -p agent-hub-contract --bin emit-openapi -- . > contract/openapi.json`"
+    );
+}
+
+/// First JSON path where two values differ (or "" when equal).
+fn deep_eq(a: &Value, b: &Value, path: &mut String) -> bool {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            for k in x.keys().chain(y.keys()) {
+                let seg = format!("{path}/{k}");
+                match (x.get(k), y.get(k)) {
+                    (Some(xv), Some(yv)) => {
+                        let mut p = seg.clone();
+                        if !deep_eq(xv, yv, &mut p) {
+                            *path = p;
+                            return false;
+                        }
+                    }
+                    _ => {
+                        *path = seg;
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            if x.len() != y.len() {
+                *path = format!("{path} (len {} vs {})", x.len(), y.len());
+                return false;
+            }
+            for (i, (xv, yv)) in x.iter().zip(y.iter()).enumerate() {
+                let mut p = format!("{path}[{i}]");
+                if !deep_eq(xv, yv, &mut p) {
+                    *path = p;
+                    return false;
+                }
+            }
+            true
+        }
+        _ => a == b,
+    }
+}
