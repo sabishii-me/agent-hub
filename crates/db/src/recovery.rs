@@ -215,6 +215,11 @@ pub fn install(
     }
     set_state(db, id, PluginState::Ready, "installed")?;
     db.clear_step(id)?;
+    // The replace is committed; the old copy moved aside is no longer needed. Remove it NOW -
+    // otherwise every successful replace leaks `.<id>.outgoing` (a complete plugin tree that
+    // discovery would then re-scan). `clear_step` above means recovery will NOT run for this
+    // op, so this is the only chance to sweep it.
+    remove_dir(&layout.outgoing);
     Ok(RecoveryOutcome::FinishedCommit)
 }
 

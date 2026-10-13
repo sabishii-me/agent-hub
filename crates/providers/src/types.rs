@@ -53,6 +53,13 @@ impl TypeCatalog {
                 continue;
             }
             let plugin = entry.file_name().to_string_lossy().to_string();
+            // A dot-directory is hub SCRATCH, never an installed plugin: the replace path
+            // moves the previous copy to `.<id>.outgoing` (recovery's transient holding area).
+            // The adapter scan already skips these; the type catalog must too, or `.outgoing`
+            // re-registers the type and the two views disagree about what is installed.
+            if plugin.starts_with('.') {
+                continue;
+            }
             let manifest = match std::fs::read_to_string(dir.join("manifest.json")) {
                 Ok(m) => m,
                 Err(_) => continue, // not a plugin directory
@@ -211,6 +218,22 @@ mod tests {
         .unwrap();
         let c = TypeCatalog::scan(&root);
         assert!(c.types.is_empty() && c.broken.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A dot-directory is hub SCRATCH, never an installed plugin: the replace path moves the
+    /// previous copy to `.<id>.outgoing`. Scanning it re-registers the type and the type list
+    /// disagrees with the plugin list (agent-hub#27). The adapter scan already skips these.
+    #[test]
+    fn a_dot_outgoing_directory_is_not_scanned_as_a_plugin() {
+        let root = tmp("outgoing");
+        let descriptor = r#"{"id":"acme","version":1,"owner":"hub","name":{"en":"Acme"},
+            "authMethods":["api-key"],"configuration":{},"catalog":{}}"#;
+        write_provider(&root, "acme-provider", descriptor);
+        write_provider(&root, ".acme-provider.outgoing", descriptor);
+        let c = TypeCatalog::scan(&root);
+        assert_eq!(c.types.len(), 1, "the `.outgoing` copy must not be a second type");
+        assert_eq!(c.types[0].id, "acme");
         let _ = std::fs::remove_dir_all(&root);
     }
 
